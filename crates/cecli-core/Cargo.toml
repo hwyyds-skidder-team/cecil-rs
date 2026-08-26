@@ -1,0 +1,9 @@
+[package]
+name = "cecli-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core primitives for the cecli ECMA-335 library: binary IO, metadata tokens, tables, flags."
+
+[dependencies]
+bitflags.workspace = true

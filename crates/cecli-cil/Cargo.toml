@@ -1,0 +1,8 @@
+[package]
+name = "cecli-cil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cecli-core.workspace = true

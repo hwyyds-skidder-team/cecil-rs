@@ -1,0 +1,9 @@
+[package]
+name = "cecli-metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cecli-core.workspace = true
+cecli-pe.workspace = true

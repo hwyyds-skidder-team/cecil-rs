@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+cecli = { path = "crates/cecli" }
+bitflags = "2"
+cecli-core = { path = "crates/cecli-core" }
+cecli-pe = { path = "crates/cecli-pe" }
+cecli-metadata = { path = "crates/cecli-metadata" }
+cecli-cil = { path = "crates/cecli-cil" }
+cecli-pdb = { path = "crates/cecli-pdb" }
+cecli-mdb = { path = "crates/cecli-mdb" }
+cecli-rocks = { path = "crates/cecli-rocks" }
+
+[profile.release]
+debug = true

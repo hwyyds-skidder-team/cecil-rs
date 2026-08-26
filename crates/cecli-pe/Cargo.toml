@@ -1,0 +1,9 @@
+[package]
+name = "cecli-pe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+cecli-core.workspace = true
