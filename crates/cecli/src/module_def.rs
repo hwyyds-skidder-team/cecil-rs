@@ -1,6 +1,11 @@
 //! Module definition: arena-based ownership of every metadata entity.
 
+use std::collections::BTreeMap;
+
+use cecli_pdb::document::Document;
 use crate::model::types::*;
+
+use cecli_pdb::portable_reader::{LocalScope, SequencePoint};
 
 use cecli_core::flags::TypeAttributes;
 #[derive(Debug, Clone)]
@@ -39,6 +44,13 @@ pub struct Module {
 
     /// Entry point token recorded at read time (facade resolves to MethodId).
     pub entry_point_token: cecli_core::Token,
+    /// Debug symbol information attached by the facade reader
+    /// (`ReaderParameters::read_symbols`); `None` unless symbols were read.
+    pub debug: Option<ModuleDebugInfo>,
+    /// Raw `calli` (`StandAloneSig`) signature blobs captured at read time,
+    /// keyed by the original table rid; consumed by the IL writer to re-emit
+    /// `calli` operands through its own deduplicated signature rows.
+    pub sas_blobs: std::collections::BTreeMap<u32, Vec<u8>>,
 }
 
 impl Default for Module {
@@ -50,7 +62,10 @@ impl Default for Module {
             runtime: cecli_core::flags::TargetRuntime::Net40,
             architecture: cecli_core::flags::TargetArchitecture::I386,
             attributes: cecli_core::flags::ModuleAttributes::empty(),
-            characteristics: cecli_core::flags::ModuleCharacteristics::empty(),
+            characteristics: cecli_core::flags::ModuleCharacteristics::DYNAMIC_BASE
+                | cecli_core::flags::ModuleCharacteristics::NX_COMPAT
+                | cecli_core::flags::ModuleCharacteristics::TERMINAL_SERVER_AWARE
+                | cecli_core::flags::ModuleCharacteristics::HIGH_ENTROPY_VA,
             metadata_kind: cecli_core::flags::MetadataKind::Ecma335,
             runtime_version: String::new(),
             types: Vec::new(),
@@ -65,9 +80,29 @@ impl Default for Module {
             file_rows: Vec::new(),
             exported_types: Vec::new(),
             entry_point_token: cecli_core::Token::NIL,
+            debug: None,
+            sas_blobs: std::collections::BTreeMap::new(),
         }
     }
 }
+
+/// Debug information of one module, gathered from a portable PDB sidecar.
+///
+/// Port of the symbol state Mono.Cecil keeps on `ModuleDefinition` through its
+/// `ISymbolReader` (`Mono.Cecil.Cil/Symbols.cs`): source documents, per-method
+/// sequence points and local scopes, keyed by the owning method's 1-based
+/// `MethodDef` rid so they survive module roundtrips.
+#[derive(Debug, Clone, Default)]
+pub struct ModuleDebugInfo {
+    /// Every `Document` row in table order.
+    pub documents: Vec<Document>,
+    /// Sequence points per method rid. Each entry is a `(document index,
+    /// points)` pair where the document index is 0-based into [`Self::documents`].
+    pub points: BTreeMap<u32, Vec<(u32, Vec<SequencePoint>)>>,
+    /// Local scopes per method rid, in table order.
+    pub scopes: BTreeMap<u32, Vec<LocalScope>>,
+}
+
 
 /// A manifest resource.
 #[derive(Debug, Clone)]
@@ -279,9 +314,12 @@ impl Module {
         // namespace prefix ("Ns.Outer", tail segments are plain names).
         let mut parts = full.split(['/', '+']);
         let head = parts.next()?;
-        let dot = head.rfind('.')?;
-        let (ns, name) = head.split_at(dot);
-        let name = &name[1..];
+        // A head without a dot is a global-namespace type; `rfind` alone
+        // would short-circuit the whole lookup to None.
+        let (ns, name) = match head.rfind('.') {
+            Some(dot) => (&head[..dot], &head[dot + 1..]),
+            None => ("", head),
+        };
 
         let mut current =
             self.types

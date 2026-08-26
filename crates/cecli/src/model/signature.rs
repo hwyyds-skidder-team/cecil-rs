@@ -18,7 +18,6 @@ use cecli_core::{ElementType, Error, Result};
 
 use super::types::{
     ConstantValue, FieldSignature, LocalVariable, MethodSignature, PropertySignature, TypeDesc,
-    TypeId,
 };
 
 // ---------------------------------------------------------------------------
@@ -153,9 +152,9 @@ fn bad_element(code: u8) -> Error {
 
 /// Reads one type element at the reader's current position.
 ///
-/// `allow_void` is set only when parsing a method/property return slot where
-/// `ELEMENT_TYPE_VOID` is legal.
-fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, allow_void: bool) -> Result<TypeDesc> {
+/// `ELEMENT_TYPE_VOID` is tolerated anywhere (C++/CLI mixed images; Cecil does
+/// the same), so no return-slot flag is needed.
+fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> {
     let et = r.u8()?;
     match et {
         // ELEMENT_TYPE_VOID outside return slots appears in C++/CLI mixed
@@ -163,10 +162,10 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, allow_void: bool) ->
         ET_VOID => Ok(TypeDesc::Internal("void".into())),
         code if primitive_name(code).is_some() => Ok(TypeDesc::Internal(primitive_name(code).unwrap().into())),
         ET_VALUE_TYPE | ET_CLASS => ctx.tdor_type(et == ET_VALUE_TYPE, r.compressed_u32()?),
-        ET_PTR => Ok(TypeDesc::Ptr(Box::new(read_type_elem(r, ctx, false)?))),
-        ET_BYREF => Ok(TypeDesc::ByRef(Box::new(read_type_elem(r, ctx, false)?))),
-        ET_PINNED => Ok(TypeDesc::Pinned(Box::new(read_type_elem(r, ctx, false)?))),
-        ET_SZ_ARRAY => Ok(TypeDesc::SzArray(Box::new(read_type_elem(r, ctx, false)?))),
+        ET_PTR => Ok(TypeDesc::Ptr(Box::new(read_type_elem(r, ctx)?))),
+        ET_BYREF => Ok(TypeDesc::ByRef(Box::new(read_type_elem(r, ctx)?))),
+        ET_PINNED => Ok(TypeDesc::Pinned(Box::new(read_type_elem(r, ctx)?))),
+        ET_SZ_ARRAY => Ok(TypeDesc::SzArray(Box::new(read_type_elem(r, ctx)?))),
         ET_ARRAY => read_array_elem(r, ctx),
         ET_GENERIC_INST => {
             let marker = r.u8()?;
@@ -179,7 +178,7 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, allow_void: bool) ->
             let arity = r.compressed_u32()?;
             let mut arguments = Vec::new();
             for _ in 0..arity {
-                arguments.push(read_type_elem(r, ctx, false)?);
+                arguments.push(read_type_elem(r, ctx)?);
             }
             Ok(TypeDesc::GenericInstance { definition, arguments })
         }
@@ -191,7 +190,7 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, allow_void: bool) ->
         }
         ET_CMOD_REQD | ET_CMOD_OPT => {
             let modifier = Box::new(ctx.tdor_type(false, r.compressed_u32()?)?);
-            let unmodified = Box::new(read_type_elem(r, ctx, false)?);
+            let unmodified = Box::new(read_type_elem(r, ctx)?);
             Ok(TypeDesc::CMod {
                 required: et == ET_CMOD_REQD,
                 modifier,
@@ -218,7 +217,7 @@ fn compressed_index(r: &mut ByteReader) -> Result<u16> {
 
 /// Multi-dimensional array element: rank, sizes count + sizes, lower-bound count + bounds.
 fn read_array_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> {
-    let element = Box::new(read_type_elem(r, ctx, false)?);
+    let element = Box::new(read_type_elem(r, ctx)?);
     let rank = r.compressed_u32()?;
     let num_sizes = r.compressed_u32()?;
     let mut sizes = Vec::new();
@@ -254,6 +253,10 @@ fn get_method_signature(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<Meth
     let generic_flag = raw & 0x10 != 0;
     let convention = match raw & 0x0F {
         0x0 => SignatureCallingConvention::Default,
+        0x1 => SignatureCallingConvention::C,
+        0x2 => SignatureCallingConvention::StdCall,
+        0x3 => SignatureCallingConvention::ThisCall,
+        0x4 => SignatureCallingConvention::FastCall,
         0x5 => SignatureCallingConvention::VarArg,
         0x9 => SignatureCallingConvention::Unmanaged,
         low => {
@@ -271,7 +274,7 @@ fn get_method_signature(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<Meth
     };
 
     let param_count = r.compressed_u32()?;
-    let return_type = read_type_elem(r, ctx, true)?;
+    let return_type = read_type_elem(r, ctx)?;
 
     let mut parameters = Vec::new();
     let mut vararg: Option<usize> = None;
@@ -291,7 +294,7 @@ fn get_method_signature(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<Meth
             r.seek(pos + 1)?;
             vararg = Some(parameters.len());
         }
-        parameters.push(read_type_elem(r, ctx, false)?);
+        parameters.push(read_type_elem(r, ctx)?);
     }
 
     let vararg_start = vararg.unwrap_or(parameters.len());
@@ -467,7 +470,7 @@ pub fn parse_method_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<Metho
 pub fn parse_field_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<FieldSignature> {
     let mut r = ByteReader::new(blob);
     expect_prolog(&mut r, ET_FIELD, "field")?;
-    Ok(FieldSignature(read_type_elem(&mut r, ctx, false)?))
+    Ok(FieldSignature(read_type_elem(&mut r, ctx)?))
 }
 
 /// Parses a property signature (ECMA-335 II §23.2.5): `0x08 [| HAS_THIS]`,
@@ -482,10 +485,10 @@ pub fn parse_property_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<Pro
         )));
     }
     let param_count = r.compressed_u32()?;
-    let property_type = read_type_elem(&mut r, ctx, true)?;
+    let property_type = read_type_elem(&mut r, ctx)?;
     let mut parameters = Vec::new();
     for _ in 0..param_count {
-        parameters.push(read_type_elem(&mut r, ctx, false)?);
+        parameters.push(read_type_elem(&mut r, ctx)?);
     }
     Ok(PropertySignature {
         has_this,
@@ -514,7 +517,7 @@ pub fn parse_local_var_sig(blob: &[u8], ctx: &dyn SigContext) -> Result<Vec<Loca
         vars.push(LocalVariable {
             index: u16::try_from(index)
                 .map_err(|_| Error::bad_image(format!("local slot {index} exceeds u16")))?,
-            ty: read_type_elem(&mut r, ctx, false)?,
+            ty: read_type_elem(&mut r, ctx)?,
             pinned,
         });
     }
@@ -523,11 +526,14 @@ pub fn parse_local_var_sig(blob: &[u8], ctx: &dyn SigContext) -> Result<Vec<Loca
 
 /// Parses one type element starting at `pos`; returns the descriptor and the
 /// number of bytes consumed. Reused by constant/attribute decoding paths.
+///
+/// `allow_void` is accepted for call-site compatibility but is advisory only:
+/// `ELEMENT_TYPE_VOID` is tolerated in any position, matching Cecil.
 pub fn parse_type_element(
     blob: &[u8],
     pos: usize,
     ctx: &dyn SigContext,
-    allow_void: bool,
+    _allow_void: bool,
 ) -> Result<(TypeDesc, usize)> {
     if pos > blob.len() {
         return Err(Error::bad_image(format!(
@@ -536,7 +542,7 @@ pub fn parse_type_element(
         )));
     }
     let mut r = ByteReader::at(blob, pos);
-    let ty = read_type_elem(&mut r, ctx, allow_void)?;
+    let ty = read_type_elem(&mut r, ctx)?;
     Ok((ty, r.position() - pos))
 }
 
@@ -593,8 +599,9 @@ pub fn write_local_var_sig(vars: &[LocalVariable]) -> Result<Vec<u8>> {
 
 /// Decodes a `Constant` row payload according to its declared element type.
 ///
-/// String constants live in the user-string heap and are rejected here;
-/// `NullRef` accepts either an empty blob or the historical 4-byte zero blob.
+/// String constants are raw UTF-16LE payloads (Mono.Cecil `ReadConstantString`:
+/// an odd trailing byte is dropped before decoding); `NullRef` accepts either
+/// an empty blob or the historical 4-byte zero blob.
 pub fn parse_constant_blob(et: ElementType, blob: &[u8]) -> Result<ConstantValue> {
     let mut r = ByteReader::new(blob);
     Ok(match et {
@@ -629,9 +636,11 @@ pub fn parse_constant_blob(et: ElementType, blob: &[u8]) -> Result<ConstantValue
             }
         }
         ElementType::String => {
-            return Err(Error::unsupported(
-                "string constants reference the user-string heap, not this codec",
-            ))
+            let units: Vec<u16> = blob[..blob.len() & !1]
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            ConstantValue::String(String::from_utf16_lossy(&units))
         }
         other => {
             return Err(Error::unsupported(format!(
@@ -643,8 +652,9 @@ pub fn parse_constant_blob(et: ElementType, blob: &[u8]) -> Result<ConstantValue
 
 /// Encodes a constant value; returns the `ElementType` tag byte plus payload.
 ///
-/// String constants are rejected (they are stored as user-string heap indices by
-/// the writer layer); `NullRef` emits an empty payload tagged `CLASS`.
+/// String constants emit their UTF-16LE bytes under the `ELEMENT_TYPE_STRING`
+/// (0x0E) tag, mirroring `SignatureWriter.WriteConstantString`; `NullRef` emits
+/// an empty payload tagged `CLASS`.
 pub fn write_constant_blob(v: &ConstantValue) -> Result<(u8, Vec<u8>)> {
     let mut w = ByteWriter::new();
     let et = match v {
@@ -697,10 +707,11 @@ pub fn write_constant_blob(v: &ConstantValue) -> Result<(u8, Vec<u8>)> {
             w.f64(*f);
             ElementType::R8 as u8
         }
-        ConstantValue::String(_) => {
-            return Err(Error::unsupported(
-                "string constants reference the user-string heap, not this codec",
-            ))
+        ConstantValue::String(s) => {
+            for unit in s.encode_utf16() {
+                w.u16(unit);
+            }
+            ElementType::String as u8
         }
         ConstantValue::NullRef => ElementType::Class as u8,
     };
@@ -724,7 +735,7 @@ fn expect_prolog(r: &mut ByteReader, expected: u8, what: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::types::{AssemblyNameReference, ExternalType, ScopeRef};
+    use crate::model::types::{AssemblyNameReference, ExternalType, ScopeRef, TypeId};
     use std::collections::HashMap;
 
     const NS: &str = "System";
@@ -860,6 +871,34 @@ mod tests {
             return_type: voidt(),
             vararg_start: 1,
         });
+    }
+
+    #[test]
+    fn method_native_calling_conventions_roundtrip() {
+        // Mixed-mode images carry unmanaged native conventions in the low
+        // nibble (ECMA-335 II §23.2.1); each must survive a blob roundtrip.
+        for (conv, byte) in [
+            (SignatureCallingConvention::C, 0x21u8),
+            (SignatureCallingConvention::StdCall, 0x22),
+            (SignatureCallingConvention::ThisCall, 0x23),
+            (SignatureCallingConvention::FastCall, 0x24),
+        ] {
+            let sig = MethodSignature {
+                has_this: true,
+                explicit_this: false,
+                convention: conv,
+                generic_count: 0,
+                parameters: vec![i32t()],
+                return_type: voidt(),
+                vararg_start: 1,
+            };
+            roundtrip_method(sig.clone());
+            assert_eq!(
+                write_method_signature(&sig, &TestCtx::new()).unwrap()[0],
+                byte,
+                "convention {conv:?} lost its raw encoding"
+            );
+        }
     }
 
     #[test]
@@ -1032,9 +1071,35 @@ mod tests {
     }
 
     #[test]
-    fn string_constants_are_rejected_here() {
-        assert!(write_constant_blob(&ConstantValue::String("hi".into())).is_err());
-        assert!(parse_constant_blob(ElementType::String, &[1, 2]).is_err());
+    fn string_constants_roundtrip_utf16le() {
+        // ASCII, non-ASCII, emoji (surrogate pair), empty.
+        for s in ["hi", "héllo wörld", "日本語テキスト", "emoji: \u{1F600}", ""] {
+            let (tag, payload) = write_constant_blob(&ConstantValue::String(s.into())).unwrap();
+            assert_eq!(tag, ElementType::String as u8);
+            // Raw payload is UTF-16LE.
+            let expected: Vec<u8> = s
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            assert_eq!(payload, expected, "utf16le bytes for {s:?}");
+            let back = parse_constant_blob(ElementType::String, &payload).unwrap();
+            assert_eq!(back, ConstantValue::String(s.into()), "roundtrip {s:?}");
+        }
+
+        // Odd-length blob: Cecil's reader drops the trailing byte.
+        let (_, mut payload) =
+            write_constant_blob(&ConstantValue::String("abc".into())).unwrap();
+        payload.push(0xAA);
+        assert_eq!(
+            parse_constant_blob(ElementType::String, &payload).unwrap(),
+            ConstantValue::String("abc".into())
+        );
+
+        // Empty blob decodes to the empty string.
+        assert_eq!(
+            parse_constant_blob(ElementType::String, &[]).unwrap(),
+            ConstantValue::String(String::new())
+        );
     }
 
     #[test]

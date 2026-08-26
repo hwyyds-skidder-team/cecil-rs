@@ -60,7 +60,7 @@
 use cecli_core::io::{ByteReader, ByteWriter};
 use cecli_core::{Error, Result};
 
-use super::types::TypeDesc;
+use super::types::{CustomAttribute, TypeDesc};
 
 /// Prolog every custom attribute blob starts with (ECMA-335 II §23.3).
 const PROLOG: u16 = 0x0001;
@@ -453,10 +453,130 @@ fn enum_payload(value: &CArgument) -> Result<i32> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Mono.Cecil `CustomAttribute` ergonomic surface.
+//
+// Mono.Cecil eagerly populates `ConstructorArguments`, `Properties`, and
+// `Fields` while reading the attribute; this object model stores the raw blob,
+// so the accessors below decode it on demand. [`decode_attribute_args`]
+// discards each named argument's field/property kind byte (the
+// `(String, CArgument)` tuple cannot carry it), so the split views go through
+// the local [`decode_with_kinds`] instead.
+
+/// Fully decodes a custom attribute blob, retaining each named argument's
+/// kind byte (`0x53` field | `0x54` property). Validation mirrors
+/// [`decode_attribute_args`] exactly; only the kind retention differs.
+fn decode_with_kinds(
+    blob: &[u8],
+    r: &mut TdorResolver,
+) -> Result<(Vec<CArgument>, Vec<(u8, String, CArgument)>)> {
+    let mut rd = ByteReader::new(blob);
+    if rd.remaining() < 2 || rd.u16()? != PROLOG {
+        return Err(Error::bad_image(
+            "custom attribute blob must start with the 0x0001 prolog",
+        ));
+    }
+
+    let fixed_count = rd.u32()?;
+    let mut fixed = Vec::new();
+    for _ in 0..fixed_count {
+        fixed.push(read_element(&mut rd, r)?);
+    }
+
+    if rd.remaining() < 2 {
+        return Err(Error::bad_image(
+            "custom attribute blob truncated before named argument count",
+        ));
+    }
+    let named_count = rd.u16()?;
+    let mut named = Vec::new();
+    for _ in 0..named_count {
+        let kind = rd.u8()?;
+        if kind != NAMED_FIELD && kind != NAMED_PROPERTY {
+            return Err(Error::bad_image(format!(
+                "invalid named argument kind 0x{kind:02X}"
+            )));
+        }
+        let tag = read_element_tag(&mut rd)?;
+        let name = read_ser_string(&mut rd)?.ok_or_else(|| {
+            Error::bad_image("null marker where a named argument name was expected")
+        })?;
+        let value = read_typed_value(&mut rd, tag, r)?;
+        named.push((kind, name, value));
+    }
+
+    if !rd.is_empty() {
+        return Err(Error::bad_image(
+            "custom attribute blob has trailing bytes after the named arguments",
+        ));
+    }
+    Ok((fixed, named))
+}
+
+impl CustomAttribute {
+    /// Fixed (positional) constructor arguments. Port of
+    /// Mono.Cecil `CustomAttribute.ConstructorArguments`.
+    pub fn arguments(&self, r: &mut TdorResolver) -> Result<Vec<CArgument>> {
+        Ok(decode_with_kinds(&self.blob, r)?.0)
+    }
+
+    /// Named arguments targeting public properties (`0x54`). Port of
+    /// Mono.Cecil `CustomAttribute.Properties`.
+    ///
+    /// Note that [`encode_attribute_args`] serialises every named entry with
+    /// the field tag (`0x53`), so round-tripped blobs surface all named
+    /// arguments under [`Self::fields`] and none here.
+    pub fn properties(&self, r: &mut TdorResolver) -> Result<Vec<(String, CArgument)>> {
+        Ok(decode_with_kinds(&self.blob, r)?
+            .1
+            .into_iter()
+            .filter(|(kind, _, _)| *kind == NAMED_PROPERTY)
+            .map(|(_, name, value)| (name, value))
+            .collect())
+    }
+
+    /// Named arguments targeting public fields (`0x53`). Port of
+    /// Mono.Cecil `CustomAttribute.Fields`.
+    pub fn fields(&self, r: &mut TdorResolver) -> Result<Vec<(String, CArgument)>> {
+        Ok(decode_with_kinds(&self.blob, r)?
+            .1
+            .into_iter()
+            .filter(|(kind, _, _)| *kind == NAMED_FIELD)
+            .map(|(_, name, value)| (name, value))
+            .collect())
+    }
+
+    /// The property named `name`, or `None`. Port of
+    /// Mono.Cecil `CustomAttribute.Properties[name]`-style lookup.
+    pub fn get_property(&self, name: &str, r: &mut TdorResolver) -> Result<Option<CArgument>> {
+        Ok(self
+            .properties(r)?
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v))
+    }
+
+    /// The field named `name`, or `None`. Port of
+    /// Mono.Cecil `CustomAttribute.Fields[name]`-style lookup.
+    pub fn get_field(&self, name: &str, r: &mut TdorResolver) -> Result<Option<CArgument>> {
+        Ok(self
+            .fields(r)?
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v))
+    }
+
+    /// True when the attribute carries at least one fixed constructor
+    /// argument. Port of Mono.Cecil `CustomAttribute.HasConstructorArguments`.
+    pub fn has_constructor_arguments(&self, r: &mut TdorResolver) -> Result<bool> {
+        Ok(!self.arguments(r)?.is_empty())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::types::{ExternalType, ScopeRef};
+    use crate::model::types::{ExternalType, MethodId, MethodRef, ScopeRef};
 
     /// External `NS.<name>` used as the enum / `System.Type` stand-in.
     fn ext_ty(name: &str) -> TypeDesc {
@@ -672,4 +792,100 @@ mod tests {
         let mut enc = enc_cell();
         assert!(encode_attribute_args(&fixed, &[], &mut enc).is_err());
     }
+
+    fn attr(blob: Vec<u8>) -> CustomAttribute {
+        CustomAttribute {
+            constructor: MethodRef::Def(MethodId(0)),
+            blob,
+        }
+    }
+
+    #[test]
+    fn accessor_views_agree_with_encoded_blob() {
+        let fixed = vec![
+            CArgument::I32(42),
+            CArgument::String(Some("s".to_owned())),
+            CArgument::Type(Some(ext_ty("OtherTy"))),
+        ];
+        let named = vec![
+            ("F".to_owned(), CArgument::Bool(true)),
+            ("P".to_owned(), CArgument::U32(7)),
+        ];
+        let mut enc = enc_cell();
+        let blob = encode_attribute_args(&fixed, &named, &mut enc).unwrap();
+        let attribute = attr(blob);
+
+        let mut res = resolver();
+        assert!(attribute.has_constructor_arguments(&mut res).unwrap());
+
+        let args = attribute.arguments(&mut res).unwrap();
+        assert_eq!(args.len(), fixed.len());
+        for (a, b) in args.iter().zip(&fixed) {
+            assert!(args_eq(a, b), "{a:?} != {b:?}");
+        }
+
+        // encode_attribute_args writes every named entry with the field tag,
+        // so all of them surface under fields() and none under properties().
+        let fields = attribute.fields(&mut res).unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].0, "F");
+        assert!(args_eq(&fields[0].1, &CArgument::Bool(true)));
+        assert_eq!(fields[1].0, "P");
+        assert!(args_eq(&fields[1].1, &CArgument::U32(7)));
+        assert!(attribute.properties(&mut res).unwrap().is_empty());
+
+        assert!(
+            matches!(attribute.get_field("F", &mut res).unwrap(), Some(v) if args_eq(&v, &CArgument::Bool(true)))
+        );
+        assert!(attribute.get_field("nope", &mut res).unwrap().is_none());
+        // Missing property -> Ok(None), even though a same-named field exists.
+        assert!(attribute.get_property("F", &mut res).unwrap().is_none());
+        assert!(attribute.get_property("nope", &mut res).unwrap().is_none());
+    }
+
+    #[test]
+    fn property_tagged_named_args_surface_under_properties() {
+        // A hand-built blob mixing real property (0x54) and field (0x53)
+        // named entries, as found in actual images.
+        let mut enc = enc_cell();
+        let mut w = ByteWriter::new();
+        w.u16(PROLOG);
+        w.u32(0); // fixed_count = 0
+        w.u16(2); // named_count = 2
+        write_named_argument(&mut w, NAMED_PROPERTY, "P", &CArgument::I16(-3), &mut enc).unwrap();
+        write_named_argument(&mut w, NAMED_FIELD, "F", &CArgument::Bool(true), &mut enc).unwrap();
+        let attribute = attr(w.into_vec());
+
+        let mut res = resolver();
+        assert!(!attribute.has_constructor_arguments(&mut res).unwrap());
+        assert!(attribute.arguments(&mut res).unwrap().is_empty());
+
+        let props = attribute.properties(&mut res).unwrap();
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0].0, "P");
+        assert!(args_eq(&props[0].1, &CArgument::I16(-3)));
+
+        let fields = attribute.fields(&mut res).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, "F");
+        assert!(args_eq(&fields[0].1, &CArgument::Bool(true)));
+
+        assert!(
+            matches!(attribute.get_property("P", &mut res).unwrap(), Some(v) if args_eq(&v, &CArgument::I16(-3)))
+        );
+        // Kind-aware lookups do not cross the field/property boundary.
+        assert!(attribute.get_property("F", &mut res).unwrap().is_none());
+        assert!(attribute.get_field("P", &mut res).unwrap().is_none());
+    }
+
+    #[test]
+    fn accessor_rejects_malformed_blob() {
+        let attribute = attr(vec![0xaa, 0xbb]); // no prolog
+        let mut res = resolver();
+        assert!(attribute.arguments(&mut res).is_err());
+        assert!(attribute.properties(&mut res).is_err());
+        assert!(attribute.fields(&mut res).is_err());
+        assert!(attribute.has_constructor_arguments(&mut res).is_err());
+    }
+
 }

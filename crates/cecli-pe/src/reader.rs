@@ -135,10 +135,12 @@ fn read_pe_offset(raw: &[u8]) -> Result<usize> {
 fn resolve_rva_offset(rva: u64, sections: &[Section]) -> Result<usize> {
     let section = sections.iter().find(|s| {
         let rva = rva.min(u32::MAX as u64) as u32;
-        rva >= s.virtual_address && rva < s.virtual_address.saturating_add(s.size_of_raw_data)
-    });
-    let section =
-        section.ok_or_else(|| Error::bad_image(format!("rva {rva:#x} is not inside any section")))?;
+        let mapped_end = s
+            .virtual_address
+            .saturating_add(s.virtual_size.max(s.size_of_raw_data));
+        rva >= s.virtual_address && rva < mapped_end
+    })
+    .ok_or_else(|| Error::bad_image(format!("rva {rva:#x} is not inside any section")))?;
     Ok((rva - section.virtual_address as u64 + section.pointer_to_raw_data as u64) as usize)
 }
 
@@ -148,8 +150,7 @@ fn read_sections(r: &mut ByteReader<'_>, count: usize) -> Result<Vec<Section>> {
     let mut sections = Vec::with_capacity(count);
     for _ in 0..count {
         let name = read_zero_terminated_string(r, 8)?;
-        // VirtualSize (4)
-        r.seek(r.position() + 4)?;
+        let virtual_size = r.u32()?;
         let virtual_address = r.u32()?;
         let size_of_raw_data = r.u32()?;
         let pointer_to_raw_data = r.u32()?;
@@ -159,7 +160,7 @@ fn read_sections(r: &mut ByteReader<'_>, count: usize) -> Result<Vec<Section>> {
         sections.push(Section {
             name,
             virtual_address,
-            virtual_size: 0,
+            virtual_size,
             size_of_raw_data,
             pointer_to_raw_data,
         });

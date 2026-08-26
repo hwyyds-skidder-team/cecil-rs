@@ -4,31 +4,54 @@
 //! Port of Mono.Cecil `BaseAssemblyResolver` / `DefaultAssemblyResolver`
 //! (`Mono.Cecil/BaseAssemblyResolver.cs`, `Mono.Cecil/DefaultAssemblyResolver.cs`).
 //!
+//! # Candidate selection (Cecil parity)
+//!
+//! Every search directory is scanned for `<stem><ext>` candidates first.
+//! Each candidate is then probed by parsing its PE/CLI image and reading the
+//! version of its metadata `Assembly` row ([`probe_version`]). Selection:
+//!
+//! 1. Among candidates whose probed version is `>=` the requested
+//!    `(major, minor)` (build and revision of the reference are ignored,
+//!    mirroring .NET's major.minor binding floor), the highest full
+//!    four-part version wins.
+//! 2. When no candidate reaches that floor, the highest overall version
+//!    wins ("best effort", like Cecil's retargetable fallback).
+//! 3. Ties keep the earlier candidate (directory insertion order, then the
+//!    `.dll` > `.exe` > `.netmodule` > `.winmd` extension priority inside a
+//!    directory). Version comparison is field-wise lexicographic on
+//!    `(major, minor, build, revision)`, identical to Cecil's
+//!    `AssemblyNameReference` version ordering. A zero requested version
+//!    (e.g. a freshly built [`AssemblyNameReference::new`]) accepts every
+//!    candidate, so rule 1 degenerates to "highest overall".
+//!
+//! Candidates whose version cannot be probed (netmodules have no `Assembly`
+//! row; native or corrupt images fail to parse) rank below every probed
+//! candidate and serve as last-resort fallbacks so plain module references
+//! keep resolving like Cecil's `SearchDirectory` loop.
+//!
 //! # Deviations from Mono.Cecil (documented v1 limitations)
 //!
 //! * **No framework / GAC probing.** Cecil falls back to the running
 //!   framework directory, a hardcoded `mscorlib` version ladder, and the
-//!   GAC (`GetAssemblyInGac`). This port replaces all of that with
-//!   *explicit search directories* supplied by the caller
-//!   ([`DefaultAssemblyResolver::add_search_directory`]). A fresh resolver
-//!   still seeds `"."` and `"bin"` like Cecil's constructor.
-//! * **First directory wins.** When several search directories contain a
-//!   same-named candidate, Cecil reads each image and picks the highest
-//!   assembly `Version`. Reading PE images here would require the PE layer
-//!   inside the resolver; v1 instead resolves against the *first* search
-//!   directory that contains any matching candidate file, without comparing
-//!   versions. Callers control precedence by directory insertion order.
+//!   GAC (`GetAssemblyInGac`). This port resolves strictly via the explicit
+//!   search directories supplied to
+//!   [`DefaultAssemblyResolver::add_search_directory`]. The
+//!   [`DefaultAssemblyResolver::add_framework_directory`] hook exists only
+//!   to mirror Cecil's API shape; registered framework directories are
+//!   recorded but never consulted during resolution. A fresh resolver still
+//!   seeds `"."` and `"bin"` like Cecil's constructor.
+//! * **No resolution cache:** Cecil caches resolved `AssemblyDefinition`s
+//!   keyed by full name. Cache ownership belongs to the facade reader, so
+//!   this resolver stays stateless apart from its directory lists.
 //! * **Extension set.** Cecil probes `.dll` + `.exe` for managed references
 //!   and `.winmd` + `.dll` for Windows Runtime references. This port always
 //!   probes `.dll`, `.exe`, `.netmodule`, `.winmd` in that fixed order,
 //!   covering every module kind the facade can read.
-//! * No resolution cache: Cecil caches resolved `AssemblyDefinition`s keyed
-//!   by full name. Cache ownership belongs to the future facade reader, so
-//!   this resolver stays stateless apart from its directory list.
 
 use std::path::{Path, PathBuf};
 
-use crate::model::types::AssemblyNameReference;
+use crate::model::types::{AssemblyNameReference, Version};
+use cecli_core::token::TableIndex;
 use cecli_core::{Error, Result};
 
 /// Candidate file extensions probed per directory, in priority order.
@@ -44,16 +67,21 @@ pub trait AssemblyResolver {
     ///
     /// Returns [`Error::Unsupported`] with a message naming the assembly
     /// when it cannot be found (Cecil's `AssemblyResolutionException`).
-    fn resolve(&mut self, reference: &AssemblyNameReference) -> Result<PathBuf>;
+    fn resolve(&self, reference: &AssemblyNameReference) -> Result<PathBuf>;
 }
 
 /// Search-directory based resolver.
 ///
 /// Port of Mono.Cecil `DefaultAssemblyResolver` minus the definition cache
-/// and framework/GAC fallbacks (see [module docs](self)).
+/// and framework/GAC probing (see [module docs](self)).
 #[derive(Debug, Clone, Default)]
 pub struct DefaultAssemblyResolver {
     directories: Vec<PathBuf>,
+    /// Mirrors the implicit framework directory list Cecil builds from the
+    /// running runtime (`framework_dirs` in `BaseAssemblyResolver.Resolve`).
+    /// Carried for API parity only; resolution never consults it because the
+    /// Rust port has no host framework to discover.
+    framework_directories: Vec<PathBuf>,
 }
 
 impl DefaultAssemblyResolver {
@@ -62,13 +90,32 @@ impl DefaultAssemblyResolver {
     pub fn new() -> Self {
         DefaultAssemblyResolver {
             directories: vec![PathBuf::from("."), PathBuf::from("bin")],
+            framework_directories: Vec::new(),
         }
     }
 
     /// Appends `directory` to the search list (Cecil `AddSearchDirectory`).
-    /// Earlier directories take precedence during resolution.
+    /// Earlier directories take precedence when versions tie during
+    /// resolution.
     pub fn add_search_directory<P: AsRef<Path>>(&mut self, p: P) {
         self.directories.push(p.as_ref().to_path_buf());
+    }
+
+    /// Registers `directory` as a framework directory (Cecil
+    /// `AddFrameworkDirectory`-shaped hook).
+    ///
+    /// **No-op at resolution time:** the Rust port resolves strictly via the
+    /// explicit search directories; framework directories are recorded (and
+    /// visible through [`Self::get_framework_directories`]) purely to keep
+    /// Cecil's API surface available to callers.
+    pub fn add_framework_directory<P: AsRef<Path>>(&mut self, p: P) {
+        self.framework_directories.push(p.as_ref().to_path_buf());
+    }
+
+    /// Registered framework directories, in registration order. These are
+    /// never searched; see [`Self::add_framework_directory`].
+    pub fn get_framework_directories(&self) -> &[PathBuf] {
+        &self.framework_directories
     }
 
     /// Splits an environment variable into search directories.
@@ -104,16 +151,17 @@ impl DefaultAssemblyResolver {
 }
 
 impl AssemblyResolver for DefaultAssemblyResolver {
-    fn resolve(&mut self, reference: &AssemblyNameReference) -> Result<PathBuf> {
+    fn resolve(&self, reference: &AssemblyNameReference) -> Result<PathBuf> {
         resolve_in_dirs(reference, &self.directories)
     }
 }
 
 /// Resolves `reference` against an explicit directory list.
 ///
-/// Directories are probed in order; within a directory the extension order
-/// is `.dll`, `.exe`, `.netmodule`, `.winmd`. The first existing candidate
-/// file wins. On error, names the missing assembly.
+/// All stem-matching candidates across all directories are gathered, then
+/// ranked by their probed `Assembly` row version as described in the
+/// [module docs](self). On failure the error message names the missing
+/// assembly (Cecil `AssemblyResolutionException` wording).
 pub fn resolve_in_dirs(reference: &AssemblyNameReference, dirs: &[PathBuf]) -> Result<PathBuf> {
     // Cecil `Mixin.CheckName`: an empty reference name cannot be resolved.
     if reference.name.is_empty() {
@@ -122,16 +170,91 @@ pub fn resolve_in_dirs(reference: &AssemblyNameReference, dirs: &[PathBuf]) -> R
         ));
     }
 
+    // Gather every candidate across all directories before ranking, so a
+    // higher-versioned image in a later directory beats an earlier one.
+    let mut versioned: Vec<(PathBuf, Version)> = Vec::new();
+    let mut opaque: Vec<PathBuf> = Vec::new();
     for dir in dirs {
         if let Some(path) = probe_directory(dir, &reference.name) {
-            return Ok(path);
+            match probe_version(&path) {
+                Ok(version) => versioned.push((path, version)),
+                Err(_) => opaque.push(path),
+            }
         }
     }
 
+    if let Some(path) = pick_highest(&versioned, &reference.version) {
+        return Ok(path);
+    }
+    // No probed candidate: fall back to the first unprobed one (extension
+    // priority order), keeping netmodule-style references resolvable.
+    if let Some((path, _)) = opaque.split_first() {
+        return Ok(path.clone());
+    }
+
     Err(Error::Unsupported(format!(
-        "assembly '{}' not found",
-        reference.name
+        "Failed to resolve assembly: '{}'",
+        reference.full_name()
     )))
+}
+
+/// Picks the winning candidate among `(path, version)` pairs.
+///
+/// Eligible candidates are those with `version >= (major, minor)` of the
+/// request; the highest four-part version wins among them. When nothing is
+/// eligible, the highest overall version wins. The earliest candidate wins
+/// ties, preserving directory/extension priority.
+fn pick_highest(candidates: &[(PathBuf, Version)], requested: &Version) -> Option<PathBuf> {
+    let floor = Version::new(requested.major, requested.minor, 0, 0);
+
+    // (eligible?, path, version) of the current winner; `None` while empty.
+    let mut best: Option<(bool, &PathBuf, &Version)> = None;
+    for (path, version) in candidates {
+        let eligible = *version >= floor;
+        let takes_over = match best {
+            None => true,
+            Some((best_eligible, _, best_version)) => match (eligible, best_eligible) {
+                // Eligible beats ineligible outright; within a class the
+                // strictly higher version wins and ties keep the earlier
+                // candidate (directory/extension priority).
+                (true, false) => true,
+                (false, true) => false,
+                _ => *version > *best_version,
+            },
+        };
+        if takes_over {
+            best = Some((eligible, path, version));
+        }
+    }
+
+    best.map(|(_, path, _)| path.clone())
+}
+
+/// Reads `path` as a managed PE/CLI image and returns the version of its
+/// single `Assembly` metadata row.
+///
+/// Errors mirror the underlying layers: [`Error::Io`] when the file cannot
+/// be read, [`Error::BadImage`] when it is not a managed image or carries no
+/// `Assembly` row (netmodules), and metadata-layer errors for malformed
+/// roots. Callers treat any error as "candidate without a known version".
+pub fn probe_version(path: &Path) -> Result<Version> {
+    let data = std::fs::read(path)?;
+    let image = cecli_pe::Image::parse(&data)?;
+
+    let (md_rva, md_size) = image.metadata_rva()?;
+    let mapped = image.rva(md_rva)?;
+    let root = &mapped[..md_size.min(mapped.len())];
+    let md = cecli_metadata::MetadataReader::parse(root)?;
+
+    // The Assembly table holds at most one row (ECMA-335 II 22.2); rid 1.
+    if md.row_count(TableIndex::Assembly) == 0 {
+        return Err(Error::bad_image("image has no Assembly table"));
+    }
+    let major = md.column(TableIndex::Assembly, 1, 1)? as u16;
+    let minor = md.column(TableIndex::Assembly, 1, 2)? as u16;
+    let build = md.column(TableIndex::Assembly, 1, 3)? as u16;
+    let revision = md.column(TableIndex::Assembly, 1, 4)? as u16;
+    Ok(Version::new(major, minor, build, revision))
 }
 
 /// Searches one directory for `<name><ext>` candidates in extension-priority
@@ -173,6 +296,31 @@ fn probe_directory(dir: &Path, stem: &str) -> Option<PathBuf> {
     best.map(|(_, path)| path)
 }
 
+/// Port of Mono.Cecil `ReadingMode`.
+///
+/// Carried for API parity with Cecil's `ReaderParameters.ReadingMode`.
+/// This port always materializes the module eagerly, so [`ReadingMode::Lazy`]
+/// and [`ReadingMode::Deferred`] behave exactly like [`ReadingMode::Immediate`];
+/// the value is documented as advisory-only until lazy reading lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReadingMode {
+    /// Parse everything up front (the only behavior this port implements).
+    #[default]
+    Immediate,
+    /// Advisory: defer member bodies. Currently treated as [`ReadingMode::Immediate`].
+    Lazy,
+    /// Advisory: defer whole-module parsing. Currently treated as [`ReadingMode::Immediate`].
+    Deferred,
+}
+
+/// Hook mirroring Mono.Cecil `ISymbolReaderProvider`: given the resolved
+/// assembly image path, produce the raw bytes of its symbol store (portable
+/// or native `.pdb`, Mono `.mdb`) or `None` when none should be loaded.
+pub trait SymbolReaderProvider {
+    /// Locates the symbol data accompanying the image at `image_path`.
+    fn get_symbol_reader(&self, image_path: &Path) -> Result<Option<Vec<u8>>>;
+}
+
 /// Minimal reader configuration carrier, later consumed by the facade's
 /// `AssemblyDefinition::read*` entry points. Port of the fields Mono.Cecil's
 /// `ReaderParameters` carries that matter to this phase.
@@ -185,6 +333,13 @@ pub struct ReaderParameters {
     /// Whether to load debug symbols alongside the assembly
     /// (Cecil `ReaderParameters.ReadSymbols`).
     pub read_symbols: bool,
+    /// Cecil `ReaderParameters.ReadingMode`. Advisory only: this port reads
+    /// eagerly regardless of the value (see [`ReadingMode`]).
+    pub reading_mode: ReadingMode,
+    /// Symbol-store source used when [`Self::read_symbols`] is set
+    /// (Cecil `ReaderParameters.SymbolReaderProvider`). When `None`, the
+    /// facade falls back to its default same-stem lookup.
+    pub symbol_reader_provider: Option<Box<dyn SymbolReaderProvider>>,
 }
 
 impl ReaderParameters {
@@ -229,6 +384,16 @@ mod tests {
         AssemblyNameReference::new(name)
     }
 
+    /// Copies a fixture assembly into `dir` under `stem.dll` and returns the
+    /// destination path. Used to obtain genuinely parseable candidates with
+    /// distinct probed versions.
+    fn copy_fixture_as(dir: &Path, fixture: &str, stem: &str) -> PathBuf {
+        let dest = dir.join(format!("{stem}.dll"));
+        std::fs::copy(cecli_core::fixtures_dir().join(fixture), &dest)
+            .expect("copy fixture");
+        dest
+    }
+
     #[test]
     fn finds_assembly_in_temp_dir() {
         let dir = make_temp_dir(&next_unique_tag());
@@ -245,14 +410,15 @@ mod tests {
     }
 
     #[test]
-    fn first_directory_with_candidate_wins() {
+    fn first_directory_with_candidate_wins_for_unprobed_candidates() {
         let first = make_temp_dir(&next_unique_tag());
         let second = make_temp_dir(&next_unique_tag());
         std::fs::write(first.join("bar.dll"), b"first").expect("write first");
         std::fs::write(second.join("bar.dll"), b"second").expect("write second");
 
         let mut resolver = DefaultAssemblyResolver::new();
-        // Deliberately add the second dir first: insertion order rules.
+        // Neither file parses as a managed image, so both stay unprobed and
+        // insertion order decides.
         resolver.add_search_directory(&second);
         resolver.add_search_directory(&first);
 
@@ -402,9 +568,11 @@ mod tests {
         let params = ReaderParameters::default();
         assert!(!params.read_symbols);
         assert!(params.assembly_resolver.is_none());
+        assert_eq!(params.reading_mode, ReadingMode::Immediate);
+        assert!(params.symbol_reader_provider.is_none());
 
         // Trait object round-trip through ReaderParameters.
-        let mut boxed: Box<dyn AssemblyResolver> =
+        let boxed: Box<dyn AssemblyResolver> =
             Box::new(<DefaultAssemblyResolver as Default>::default());
         boxed
             .resolve(&reference("anything"))
@@ -412,6 +580,175 @@ mod tests {
         let mut params = ReaderParameters::new();
         params.read_symbols = true;
         params.assembly_resolver = Some(boxed);
+        params.reading_mode = ReadingMode::Deferred;
         assert!(params.read_symbols && params.assembly_resolver.is_some());
+        assert_eq!(params.reading_mode, ReadingMode::Deferred);
+    }
+
+    #[test]
+    fn probe_version_reads_fixture_assembly_row() {
+        // hello.exe ships with an all-zero assembly version (ilasm default).
+        let v = probe_version(&cecli_core::fixtures_dir().join("hello.exe")).expect("probe");
+        assert_eq!((v.major, v.minor, v.build), (0, 0, 0));
+
+        // cecil.dll ships as v2.0.24.* — a genuinely different version.
+        let v = probe_version(&cecli_core::fixtures_dir().join("cecil.dll")).expect("probe");
+        assert_eq!((v.major, v.minor, v.build), (0, 9, 6));
+    }
+
+    #[test]
+    fn probe_version_rejects_images_without_an_assembly_row() {
+        // Netmodules carry no Assembly table.
+        assert!(probe_version(&cecli_core::fixtures_dir().join("moda.netmodule")).is_err());
+
+        let dir = make_temp_dir(&next_unique_tag());
+        let garbage = dir.join("garbage.dll");
+        std::fs::write(&garbage, b"MZ fake").expect("write garbage");
+        assert!(probe_version(&garbage).is_err());
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn higher_version_wins_even_in_later_directory() {
+        let early = make_temp_dir(&next_unique_tag());
+        let late = make_temp_dir(&next_unique_tag());
+        // foo.dll probes as 1.0.0.*, cecil.dll as 2.0.24.*.
+        copy_fixture_as(&early, "foo.dll", "same");
+        copy_fixture_as(&late, "cecil.dll", "same");
+
+        let mut resolver = DefaultAssemblyResolver::new();
+        resolver.add_search_directory(&early);
+        resolver.add_search_directory(&late);
+
+        // A zero requested version accepts everything: highest overall wins,
+        // even though the winner lives in the later directory.
+        let path = resolver.resolve(&reference("same")).expect("resolved");
+        assert_eq!(path, late.join("same.dll"));
+
+        cleanup_dir(&early);
+        cleanup_dir(&late);
+    }
+
+    #[test]
+    fn requested_major_minor_floor_filters_candidates() {
+        let early = make_temp_dir(&next_unique_tag());
+        let late = make_temp_dir(&next_unique_tag());
+        copy_fixture_as(&early, "foo.dll", "same"); // v1.0.0.*
+        copy_fixture_as(&late, "cecil.dll", "same"); // v2.0.24.*
+
+        let mut resolver = DefaultAssemblyResolver::new();
+        resolver.add_search_directory(&early);
+        resolver.add_search_directory(&late);
+
+        // Requesting >= 2.0 excludes the earlier v1 candidate outright.
+        let mut want_two = reference("same");
+        want_two.version = Version::new(2, 0, 0, 0);
+        let path = resolver.resolve(&want_two).expect("resolved");
+        assert_eq!(path, late.join("same.dll"));
+
+        // Major mismatch: nothing satisfies 9.x, so the highest overall
+        // (still v2 over v1) wins as the best-effort fallback.
+        let mut unreachable = reference("same");
+        unreachable.version = Version::new(9, 9, 9, 9);
+        let path = resolver.resolve(&unreachable).expect("resolved");
+        assert_eq!(path, late.join("same.dll"));
+
+        cleanup_dir(&early);
+        cleanup_dir(&late);
+    }
+
+    #[test]
+    fn equal_versions_keep_earlier_directory() {
+        let early = make_temp_dir(&next_unique_tag());
+        let late = make_temp_dir(&next_unique_tag());
+        copy_fixture_as(&early, "hello.exe", "tied");
+        copy_fixture_as(&late, "hello.exe", "tied");
+
+        let mut resolver = DefaultAssemblyResolver::new();
+        resolver.add_search_directory(&early);
+        resolver.add_search_directory(&late);
+
+        let path = resolver.resolve(&reference("tied")).expect("resolved");
+        assert_eq!(path, early.join("tied.dll"));
+
+        cleanup_dir(&early);
+        cleanup_dir(&late);
+    }
+
+    #[test]
+    fn probed_candidate_beats_unprobed_one() {
+        let early = make_temp_dir(&next_unique_tag());
+        let late = make_temp_dir(&next_unique_tag());
+        std::fs::write(early.join("mix.dll"), b"not an image").expect("write opaque");
+        copy_fixture_as(&late, "hello.exe", "mix");
+
+        let mut resolver = DefaultAssemblyResolver::new();
+        resolver.add_search_directory(&early);
+        resolver.add_search_directory(&late);
+
+        let path = resolver.resolve(&reference("mix")).expect("resolved");
+        assert_eq!(path, late.join("mix.dll"));
+
+        cleanup_dir(&early);
+        cleanup_dir(&late);
+    }
+
+    #[test]
+    fn all_candidates_unprobed_still_resolves_first() {
+        let early = make_temp_dir(&next_unique_tag());
+        let late = make_temp_dir(&next_unique_tag());
+        std::fs::write(early.join("opaque.dll"), b"a").expect("write a");
+        std::fs::write(late.join("opaque.exe"), b"b").expect("write b");
+
+        let mut resolver = DefaultAssemblyResolver::new();
+        resolver.add_search_directory(&early);
+        resolver.add_search_directory(&late);
+
+        // Neither candidate parses; the first in probe order (.dll before
+        // .exe) is returned instead of failing.
+        let path = resolver.resolve(&reference("opaque")).expect("resolved");
+        assert_eq!(path, early.join("opaque.dll"));
+
+        cleanup_dir(&early);
+        cleanup_dir(&late);
+    }
+
+    #[test]
+    fn framework_directory_is_recorded_but_never_searched() {
+        let fw = make_temp_dir(&next_unique_tag());
+        let target = copy_fixture_as(&fw, "hello.exe", "fwonly");
+
+        let mut resolver = DefaultAssemblyResolver::new();
+        resolver.add_framework_directory(&fw);
+        assert_eq!(resolver.get_framework_directories(), &[fw.clone()]);
+
+        // Framework directories are not consulted during resolution...
+        assert!(resolver.resolve(&reference("fwonly")).is_err());
+
+        // ...but registering the same location as a search directory works.
+        assert_eq!(
+            probe_version(&target).expect("probed").major,
+            0, // hello.exe carries an all-zero assembly version
+            "fixture sanity"
+        );
+        resolver.add_search_directory(&fw);
+        assert!(resolver.resolve(&reference("fwonly")).is_ok());
+
+        cleanup_dir(&fw);
+    }
+
+    #[test]
+    fn symbol_reader_provider_hook_accepts_custom_implementations() {
+        struct NullProvider;
+        impl SymbolReaderProvider for NullProvider {
+            fn get_symbol_reader(&self, _image_path: &Path) -> Result<Option<Vec<u8>>> {
+                Ok(None)
+            }
+        }
+
+        let mut params = ReaderParameters::new();
+        params.read_symbols = true;
+        params.symbol_reader_provider = Some(Box::new(NullProvider));
+        assert!(params.read_symbols && params.symbol_reader_provider.is_some());
     }
 }

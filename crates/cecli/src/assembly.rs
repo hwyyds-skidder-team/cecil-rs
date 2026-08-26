@@ -3,6 +3,7 @@
 
 use crate::model::types::*;
 use crate::module_def::Module;
+use crate::resolver::AssemblyResolver;
 use cecli_core::flags::{AssemblyAttributes, AssemblyHashAlgorithm};
 // Assembly-level identity (`Assembly` row equivalent).
 /// Assembly-level identity (`Assembly` row equivalent).
@@ -67,27 +68,49 @@ impl AssemblyDefinition {
     ///
     /// Port of `AssemblyDefinition.ReadAssembly(byte[])`.
     pub fn read(bytes: &[u8]) -> Result<Self> {
-        Self::read_with(bytes, &crate::resolver::ReaderParameters::new())
+        Self::read_impl(bytes, None, &crate::resolver::ReaderParameters::new())
     }
+
 
     /// Reads an assembly from a file path.
     ///
-    /// Port of `AssemblyDefinition.ReadAssembly(string)`.
+    /// Port of `AssemblyDefinition.ReadAssembly(string)`. Symbols are not
+    /// loaded; use [`Self::read_file_with`] with
+    /// [`crate::resolver::ReaderParameters::read_symbols`].
     pub fn read_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        let bytes = std::fs::read(path.as_ref()).map_err(Error::Io)?;
-        Self::read(&bytes)
+        Self::read_file_with(path, &crate::resolver::ReaderParameters::new())
     }
 
-    /// Reads an assembly honoring reader parameters.
+    /// Reads an assembly from a file path honoring reader parameters.
     ///
-    /// v1 notes:
-    /// * `ReaderParameters::read_symbols` is a forward-compatibility hook;
-    ///   portable/native PDB attachment through the cecli-pdb / cecli-mdb
-    ///   readers is not wired yet, so no symbols are loaded.
-    /// * `ReaderParameters::assembly_resolver` matters only for eager
-    ///   netmodule loading; v1 preserves satellite modules as raw `File`
-    ///   rows on the main module instead.
-    pub fn read_with(bytes: &[u8], _opts: &crate::resolver::ReaderParameters) -> Result<Self> {
+    /// The path doubles as the symbol origin: with `read_symbols` set, a
+    /// portable PDB sidecar is looked up next to the image (`<file>.pdb`
+    /// first, then the extension-swapped stem) and attached to
+    /// [`Module::debug`]. Missing sidecars error, mirroring Cecil's
+    /// `DefaultSymbolReaderProvider` throwing `FileNotFoundException`.
+    pub fn read_file_with<P: AsRef<std::path::Path>>(
+        path: P,
+        opts: &crate::resolver::ReaderParameters,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        let bytes = std::fs::read(path).map_err(Error::Io)?;
+        Self::read_impl(&bytes, Some(path.to_path_buf()), opts)
+    }
+
+    /// Reads an assembly from raw bytes honoring reader parameters.
+    ///
+    /// Byte origins carry no location, so no symbols are attached and no
+    /// sibling netmodules are probed on disk (Cecil behaves the same for
+    /// `ReadAssembly(byte[])` without a symbol provider).
+    pub fn read_with(bytes: &[u8], opts: &crate::resolver::ReaderParameters) -> Result<Self> {
+        Self::read_impl(bytes, None, opts)
+    }
+
+    fn read_impl(
+        bytes: &[u8],
+        origin: Option<std::path::PathBuf>,
+        opts: &crate::resolver::ReaderParameters,
+    ) -> Result<Self> {
         let image = cecli_pe::Image::parse(bytes)?;
         let read_opts = crate::read::context::ReadOptions::default();
         let (mut module, mut ctx) =
@@ -96,7 +119,7 @@ impl AssemblyDefinition {
         // Decode IL bodies against the parsed metadata root.
         let (md_rva, _) = image.metadata_rva()?;
         let md_slice = image.rva(md_rva)?;
-        let md = cecli_metadata::MetadataReader::parse(md_slice)?;
+        let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref())?;
         crate::read::instructions::resolve_bodies_opts(
             &mut module,
             &mut ctx,
@@ -117,8 +140,8 @@ impl AssemblyDefinition {
                 hash: Vec::new(),
                 hash_algorithm: row.hash_alg,
                 attributes: cecli_core::flags::AssemblyAttributes::from_bits_truncate(row.flags),
-                custom_attributes: Vec::new(),
-                security_declarations: Vec::new(),
+                custom_attributes: row.custom_attributes,
+                security_declarations: row.security_declarations,
             },
             None => AssemblyNameDefinition {
                 name: "unnamed".to_string(),
@@ -126,16 +149,56 @@ impl AssemblyDefinition {
             },
         };
 
+        // Symbols (portable PDB sidecar next to the origin file).
+        if opts.read_symbols {
+            let Some(origin_path) = origin.as_deref() else {
+                return Err(Error::Unsupported(
+                    "reading symbols requires a file-path origin; use AssemblyDefinition::read_file_with"
+                        .to_string(),
+                ));
+            };
+            match load_portable_pdb_bytes(origin_path) {
+                Some(pdb_bytes) => attach_portable_symbols(&mut module, &pdb_bytes)?,
+                None => {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!(
+                            "no portable PDB found next to '{}'",
+                            origin_path.display()
+                        ),
+                    )));
+                }
+            }
+        }
+
+        // Eager satellite-module loading: every `File` row flagged
+        // ContainsMetaData names a netmodule sitting next to the manifest
+        // image (Cecil `ModuleDefinition.ReadModules`). Resolution failures
+        // are non-fatal here; the row stays preserved on the main module.
+        let mut modules = Vec::new();
+        for row in &module.file_rows {
+            if row.attributes.contains(cecli_core::flags::FileRowAttributes::CONTAINS_NO_METADATA)
+            {
+                continue;
+            }
+            if let Some(satellite_bytes) = locate_netmodule_bytes(origin.as_deref(), &row.name, opts)
+            {
+                if let Ok(satellite) = read_standalone_module(&satellite_bytes) {
+                    modules.push(satellite);
+                }
+            }
+        }
+
         let entry_point = method_of_token(&ctx, module.entry_point_token);
 
         Ok(AssemblyDefinition {
             name,
             main: module,
-            // v1 reads the manifest module eagerly; netmodules stay as File rows.
-            modules: Vec::new(),
+            modules,
             entry_point,
         })
     }
+
 
     /// The manifest module.
     pub fn main_module(&self) -> &Module {
@@ -181,7 +244,123 @@ impl AssemblyDefinition {
     }
 }
 
-/// Resolves a MethodDef token through the read-context handle map.
+// ---------------------------------------------------------------------------
+// Symbol + satellite-module plumbing (facade-integration parity phase)
+// ---------------------------------------------------------------------------
+
+/// Locates and reads a portable PDB sidecar for `origin`.
+///
+/// Mirrors `DefaultSymbolReaderProvider.GetSymbolReaderFile`: `<file>.pdb`
+/// (`line.exe.pdb`) is preferred, then the extension-swapped stem
+/// (`line.pdb`). Returns `None` when neither candidate exists.
+fn load_portable_pdb_bytes(origin: &std::path::Path) -> Option<Vec<u8>> {
+    let mut candidates = Vec::with_capacity(2);
+    if let Some(file_name) = origin.file_name() {
+        let appended = origin.with_file_name(format!("{}.pdb", file_name.to_string_lossy()));
+        candidates.push(appended);
+    }
+    candidates.push(origin.with_extension("pdb"));
+    for candidate in candidates {
+        if candidate.is_file() {
+            return std::fs::read(&candidate).ok();
+        }
+    }
+    None
+}
+
+/// Parses a portable PDB and attaches its tables to `module.debug`.
+///
+/// Sequence points land keyed by 1-based `MethodDef` rid with the stream's
+/// starting document converted to a 0-based index into
+/// [`ModuleDebugInfo::documents`]; methods without points are omitted.
+fn attach_portable_symbols(module: &mut Module, pdb_bytes: &[u8]) -> Result<()> {
+    let reader = cecli_pdb::portable_reader::PortablePdbReader::parse(pdb_bytes)?;
+
+    let documents = reader.documents()?;
+    let mut points = std::collections::BTreeMap::new();
+    let mut scopes = std::collections::BTreeMap::new();
+
+    // MethodDebugInformation rows are rid-aligned with the module's MethodDef
+    // table, so the row count bounds both lookups.
+    let mdi_count = reader.metadata().row_count(cecli_core::TableIndex::MethodDebugInformation);
+    for rid in 1..=mdi_count {
+        if let Some((doc_rid, method_points)) = reader.sequence_points(rid)? {
+            if !method_points.is_empty() && doc_rid > 0 {
+                points.insert(rid, vec![(doc_rid - 1, method_points)]);
+            }
+        }
+        let method_scopes = reader.local_scopes(rid)?;
+        if !method_scopes.is_empty() {
+            scopes.insert(rid, method_scopes);
+        }
+    }
+
+    module.debug = Some(crate::module_def::ModuleDebugInfo {
+        documents,
+        points,
+        scopes,
+    });
+    Ok(())
+}
+
+/// Loads a satellite netmodule's image bytes.
+///
+/// Primary probe: the file named by the `File` row inside the manifest
+/// module's directory. Fallback: the configured assembly resolver (or a
+/// default search-path resolver) asked for the row's file stem. `None` means
+/// nothing resolvable was found; callers skip the row instead of failing.
+fn locate_netmodule_bytes(
+    origin: Option<&std::path::Path>,
+    name: &str,
+    opts: &crate::resolver::ReaderParameters,
+) -> Option<Vec<u8>> {
+    if let Some(origin) = origin {
+        if let Some(dir) = origin.parent() {
+            let sibling = dir.join(name);
+            if sibling.is_file() {
+                return std::fs::read(&sibling).ok();
+            }
+        }
+    }
+
+    let stem = std::path::Path::new(name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string());
+    let reference = crate::model::types::AssemblyNameReference::new(&stem);
+    match opts.assembly_resolver.as_ref() {
+        Some(resolver) => {
+            let path = resolver.resolve(&reference).ok()?;
+            std::fs::read(path).ok()
+        }
+        None => {
+            let resolver = crate::resolver::DefaultAssemblyResolver::new();
+            let path = resolver.resolve(&reference).ok()?;
+            std::fs::read(path).ok()
+        }
+    }
+}
+
+/// Runs the main-module read pipeline over one standalone image
+/// (netmodules carry no `Assembly` row), returning its object model.
+pub(crate) fn read_standalone_module(bytes: &[u8]) -> Result<Module> {
+    let image = cecli_pe::Image::parse(bytes)?;
+    let read_opts = crate::read::context::ReadOptions::default();
+    let (mut module, mut ctx) = crate::read::module_reader::read_module(&image, &read_opts)?;
+    let (md_rva, _) = image.metadata_rva()?;
+    let md_slice = image.rva(md_rva)?;
+    let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref())?;
+    crate::read::instructions::resolve_bodies_opts(
+        &mut module,
+        &mut ctx,
+        &md,
+        &image,
+        read_opts.load_bodies,
+    )?;
+    Ok(module)
+}
+
+ /// Resolves a MethodDef token through the read-context handle map.
 fn method_of_token(ctx: &crate::read::context::ReadContext, token: cecli_core::Token) -> Option<crate::model::types::MethodId> {
     if token.is_nil() || token.table_byte() != cecli_core::TableIndex::MethodDef as u8 {
         return None;
@@ -211,16 +390,39 @@ const CLI_HEADER_CB: usize = 0x48;
 /// duplicated here because cecli-pe does not re-export the constant).
 const TEXT_RVA: u32 = 0x2000;
 
+/// Writer configuration carrier. Port of the fields Mono.Cecil's
+/// `WriterParameters` carries that matter here.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WriteParameters {
+    /// Emit debug symbols for a module carrying
+    /// [`crate::module_def::ModuleDebugInfo`] (Cecil
+    /// `WriterParameters.WriteSymbols`).
+    pub write_symbols: bool,
+}
+
+impl WriteParameters {
+    /// Creates parameters with symbol writing off.
+    pub fn new() -> Self {
+        WriteParameters::default()
+    }
+}
+
 impl AssemblyDefinition {
     /// Serializes the assembly back into a complete PE32/PE32+ image.
-    ///
-    /// Port of `AssemblyDefinition.Write()` / `AssemblyWriter.WriteModule`.
-    /// The pipeline is deterministic: resources blob -> IL bodies (through a
-    /// shared token map so user strings register before table serialization)
-    /// -> metadata tables with final RVAs -> canonical `.text` rebuild that
-    /// preserves the module's identity fields (machine, characteristics,
-    /// subsystem kind, CLI flags).
     pub fn write(&self) -> Result<Vec<u8>> {
+        self.write_with(&WriteParameters::default())
+    }
+
+    /// Serializes the assembly honoring write parameters.
+    ///
+    /// Port of `AssemblyDefinition.Write(WriterParameters)`. The pipeline is
+    /// deterministic: resources blob -> IL bodies (through a shared token map
+    /// so user strings register before table serialization) -> metadata
+    /// tables with final RVAs -> canonical `.text` rebuild that preserves the
+    /// module's identity fields (machine, characteristics, subsystem kind,
+    /// CLI flags). Symbol emission happens in [`Self::write_file_with`],
+    /// which knows the output path of the sidecar `.pdb`.
+    pub fn write_with(&self, _opts: &WriteParameters) -> Result<Vec<u8>> {
         let module = &self.main;
 
         // 1. Managed resources blob. Offsets become ManifestResource.Offset
@@ -262,7 +464,13 @@ impl AssemblyDefinition {
                 };
                 code.align(4);
                 let start = code.position();
-                crate::write::emit_il::encode_body(body, &mut tmap, module, &mut code)?;
+                crate::write::emit_il::encode_body(
+                    body,
+                    &mut tmap,
+                    module,
+                    &mut code,
+                    &module.sas_blobs,
+                )?;
                 method_rvas.push((id, code_segment_rva + start as u64));
             }
 
@@ -301,17 +509,104 @@ impl AssemblyDefinition {
             strongname_size: 0, // strong-name signing is skipped per contract
             win32_resources: None,
             debug_entries: Vec::new(),
-            entry_point_token: module.entry_point_token,
+            // A7-F2: take the token from the metadata emission (resolved via
+            // `entry`), not the stale read-time `module.entry_point_token`.
+            entry_point_token: emitted.entry_point_token,
         };
         let carrier = carrier_image(module)?;
         cecli_pe::ImageWriter::rebuild(&carrier, parts).emit()
     }
 
-    /// Writes the serialized image to `path`.
-    pub fn write_file<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
-        let bytes = self.write()?;
-        std::fs::write(path.as_ref(), bytes).map_err(Error::Io)
+    /// Writes the serialized image to `path`, optionally emitting a portable
+    /// PDB sidecar next to it.
+    ///
+    /// With `opts.write_symbols` set and the manifest module carrying debug
+    /// information ([`Module::debug`]), a `<output-stem>.pdb` file is written
+    /// alongside the image via [`build_portable_pdb`]. Modules without debug
+    /// information silently skip the sidecar.
+    pub fn write_file_with<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+        opts: &WriteParameters,
+    ) -> Result<()> {
+        let path = path.as_ref();
+        std::fs::write(path, self.write_with(opts)?).map_err(Error::Io)?;
+        if opts.write_symbols && self.main.debug.is_some() {
+            let pdb_bytes = build_portable_pdb(&self.main)?;
+            let sidecar = path.with_extension("pdb");
+            std::fs::write(sidecar, pdb_bytes).map_err(Error::Io)?;
+        }
+        Ok(())
     }
+
+    /// Writes the serialized image to `path` with default write parameters.
+    ///
+    /// Ergonomic alias for [`Self::write_file_with`] with
+    /// [`WriteParameters::default()`] (Cecil's parameterless
+    /// `AssemblyDefinition.Write(string)`).
+    pub fn write_file<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
+        self.write_file_with(path, &WriteParameters::default())
+    }
+}
+
+/// Serializes a module's debug information into standalone portable PDB bytes.
+///
+/// Port of the emission half of `Mono.Cecil.Cil/PortablePdb.cs`
+/// (`PortablePdbWriter`): documents, per-method sequence points, and local
+/// scopes rebuild into the debug metadata tables plus the `#Pdb` heap. The
+/// module's MVID and entry-point token travel through unchanged so readers
+/// can match the PDB against its assembly.
+///
+/// Deviation: local scopes are emitted with their IL ranges and import-scope
+/// rids but without variable/constant detail — the frozen facade model keeps
+/// only [`cecli_pdb::portable_reader::LocalScope`] rows, which reference
+/// variable/constant rows by rid rather than owning their data.
+pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
+    const FALLBACK_VERSION: &str = "v4.0.30319";
+    let version = if module.runtime_version.is_empty() {
+        FALLBACK_VERSION
+    } else {
+        &module.runtime_version
+    };
+    let mut builder = cecli_pdb::portable_writer::PortablePdbBuilder::with_version(version);
+    builder.set_module_guid(module.guid);
+    builder.set_entry_point(module.entry_point_token);
+
+    let Some(debug) = module.debug.as_ref() else {
+        return builder.finalize();
+    };
+
+    // Documents first: every sequence-point entry references one by index.
+    let mut handles = Vec::with_capacity(debug.documents.len());
+    for doc in &debug.documents {
+        let handle = builder.add_document(&doc.name, doc.hash_algorithm, &doc.hash, doc.language);
+        handles.push(cecli_pdb::portable_writer::DocumentHandle(handle.0));
+    }
+
+    for (&method_rid, entries) in &debug.points {
+        let method = cecli_core::Token::new(cecli_core::TableIndex::MethodDef, method_rid);
+        for &(doc_index, ref points) in entries.iter() {
+            let handle = handles.get(doc_index as usize).copied().unwrap_or(cecli_pdb::portable_writer::DocumentHandle(0));
+            builder.set_method_sequence_points(method, handle, points)?;
+        }
+    }
+
+    for (&method_rid, scopes) in &debug.scopes {
+        let method = cecli_core::Token::new(cecli_core::TableIndex::MethodDef, method_rid);
+        for scope in scopes {
+            builder.add_local_scope(
+                method,
+                scope.import_scope,
+                &[],
+                &[],
+                scope.kind,
+                scope.try_start,
+                scope.try_length,
+            );
+        }
+    }
+
+    builder.finalize()
 }
 
 
@@ -554,5 +849,122 @@ mod tests {
             "entry point name survives roundtrip"
         );
         assert_eq!(entry_name, "Main");
+    }
+
+    fn unique_test_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("cecli_facade_tests")
+            .join(format!("{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp test dir created");
+        dir
+    }
+
+    /// line.exe + line.pdb pairing: read_symbols attaches documents, points
+    /// and scopes; writing with symbols emits a parseable sidecar PDB.
+    #[test]
+    fn symbols_attach_and_sidecar_roundtrip() {
+        let fixtures = cecli_core::fixtures_dir();
+        let exe = fixtures.join("line.exe");
+        if !exe.exists() || !fixtures.join("line.pdb").exists() {
+            return; // fixture pair not provisioned on this checkout
+        }
+
+        // Default reads leave debug empty.
+        let plain = AssemblyDefinition::read_file(&exe).expect("line.exe parses");
+        assert!(plain.main.debug.is_none(), "no symbols without read_symbols");
+
+        let mut opts = crate::resolver::ReaderParameters::new();
+        opts.read_symbols = true;
+        let ad = AssemblyDefinition::read_file_with(&exe, &opts).expect("reads with symbols");
+        let debug = ad.main.debug.as_ref().expect("symbols attached");
+        assert!(!debug.documents.is_empty(), "documents present");
+        assert!(
+            debug.points.values().any(|entries| entries.iter().any(|(_, pts)| !pts.is_empty())),
+            "sequence points non-empty"
+        );
+
+        let out_dir = unique_test_dir("sidecar");
+        let out = out_dir.join("line_out.exe");
+        ad.write_file_with(&out, &WriteParameters { write_symbols: true })
+            .expect("write with symbols");
+        assert!(out.exists(), "image written");
+        let sidecar = out_dir.join("line_out.pdb");
+        assert!(sidecar.exists(), "sidecar pdb emitted");
+
+        let pdb_bytes = std::fs::read(&sidecar).expect("sidecar readable");
+        let reader =
+            cecli_pdb::portable_reader::PortablePdbReader::parse(&pdb_bytes).expect("emitted pdb parses");
+        assert_eq!(reader.documents().unwrap().len(), debug.documents.len());
+
+        // write_symbols=false emits no sidecar.
+        let quiet = out_dir.join("quiet.exe");
+        ad.write_file_with(&quiet, &WriteParameters::default()).expect("write without symbols");
+        assert!(!out_dir.join("quiet.pdb").exists(), "no sidecar when write_symbols off");
+
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    /// Synthetic multi-module assembly: manifest + ContainsMetaData File row
+    /// whose netmodule sits in the same directory -> both modules load.
+    #[test]
+    fn multi_module_synthetic_loads_two_modules() {
+        use cecli_core::flags::ModuleKind;
+
+        let netmodule = cecli_core::fixtures_dir().join("moda.netmodule");
+        if !netmodule.exists() {
+            return; // fixture not provisioned on this checkout
+        }
+        let out_dir = unique_test_dir("multimodule");
+        std::fs::copy(&netmodule, out_dir.join("moda.netmodule")).expect("satellite copied");
+
+        let mut module = Module::default();
+        module.name = "multi".into();
+        module.kind = ModuleKind::Dll;
+        module.runtime_version = "v4.0.30319".into();
+        module.file_rows.push(crate::module_def::FileRow {
+            name: "moda.netmodule".into(),
+            attributes: cecli_core::flags::FileRowAttributes::empty(),
+            hash: Vec::new(),
+        });
+        let ad = AssemblyDefinition {
+            name: AssemblyNameDefinition {
+                name: "multi".into(),
+                version: Version::new(1, 0, 0, 0),
+                ..AssemblyNameDefinition::default()
+            },
+            main: module,
+            modules: Vec::new(),
+            entry_point: None,
+        };
+        let main_path = out_dir.join("multi.dll");
+        ad.write_file(&main_path).expect("manifest written");
+
+        let re = AssemblyDefinition::read_file_with(
+            &main_path,
+            &crate::resolver::ReaderParameters::new(),
+        )
+        .expect("re-reads");
+        assert_eq!(re.main.file_rows.len(), 1, "File row preserved");
+        assert_eq!(re.modules.len() + 1, 2, "main plus one satellite module loaded");
+        assert!(re.modules[0].name.to_lowercase().contains("moda"), "satellite is moda");
+
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    /// Fresh modules default to Cecil's ImageWriter DLL characteristics.
+    #[test]
+    fn fresh_module_default_characteristics() {
+        use cecli_core::flags::{ModuleCharacteristics, ModuleKind};
+        let m = Module::default();
+        assert_ne!(m.kind, ModuleKind::NetModule);
+        assert_eq!(
+            m.characteristics,
+            ModuleCharacteristics::DYNAMIC_BASE
+                | ModuleCharacteristics::NX_COMPAT
+                | ModuleCharacteristics::TERMINAL_SERVER_AWARE
+                | ModuleCharacteristics::HIGH_ENTROPY_VA
+        );
+        assert!(m.debug.is_none());
     }
 }

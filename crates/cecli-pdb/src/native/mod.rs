@@ -14,4 +14,4 @@
 pub mod msf;
 pub mod symbols;
 
-pub use symbols::NativePdbReader;
+pub use symbols::{FunctionKey, NativePdbReader};

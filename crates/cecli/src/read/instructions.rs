@@ -88,9 +88,13 @@ pub fn resolve_bodies_opts(
             continue;
         }
         let code = image.rva(rva)?;
-        let body = decode_resolved_body(code, ctx, md)?;
+        let body = decode_resolved_body(&code, ctx, md)?;
+        capture_sas_blobs(&body, ctx);
         module.methods[index].body = Some(body);
     }
+    // Hand the captured `calli` signature blobs to the object model so the
+    // writer can reach them after the read context is gone.
+    module.sas_blobs = std::mem::take(&mut ctx.sas_blobs);
     Ok(())
 }
 
@@ -134,7 +138,8 @@ fn decode_resolved_body(
             | cecli_cil::OperandType::InlineType
             | cecli_cil::OperandType::InlineMethod
             | cecli_cil::OperandType::InlineField => resolve_token(ctx, md, token_of(&ins.operand)),
-            // `calli`: the StandAloneSig token stays raw.
+            // `calli`: the StandAloneSig token stays raw; its blob bytes are
+            // captured by [`capture_sas_blobs`] for write-side remapping.
             cecli_cil::OperandType::InlineSig => ROperand::Token(token_of(&ins.operand)),
             cecli_cil::OperandType::InlineString => resolve_user_string(ctx, md, &ins.operand),
             _ => plain_operand(ins.operand),
@@ -324,6 +329,33 @@ fn decode_locals(
 /// aligned relative to the beginning of the method body).
 fn align4(value: usize) -> usize {
     (value + 3) & !3
+}
+
+/// Captures the raw `StandAloneSig` blobs referenced by `calli` operands
+/// ([`ROperand::Token`] over the `StandAloneSig` table) into
+/// [`ReadContext::sas_blobs`], keyed by the original rid. The writer later
+/// re-emits these through its own deduplicated `StandAloneSig` rows; rids
+/// missing from [`ReadContext::stand_alone_sigs`] are skipped per the
+/// module-level deferred-resolution policy.
+fn capture_sas_blobs(body: &ResolvedBody, ctx: &mut ReadContext) {
+    for ins in &body.instructions {
+        if ins.opcode.operand_type != cecli_cil::OperandType::InlineSig {
+            continue;
+        }
+        let ROperand::Token(token) = &ins.operand else {
+            continue;
+        };
+        let rid = token.rid();
+        if token.table() != TableIndex::StandAloneSig
+            || rid == 0
+            || ctx.sas_blobs.contains_key(&rid)
+        {
+            continue;
+        }
+        if let Some(blob) = ctx.stand_alone_sigs.get((rid - 1) as usize) {
+            ctx.sas_blobs.insert(rid, blob.clone());
+        }
+    }
 }
 
 #[cfg(test)]

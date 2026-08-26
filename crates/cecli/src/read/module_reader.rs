@@ -33,6 +33,11 @@ use cecli_metadata::{decode_coded, MetadataReader};
 /// [`ReadContext::assembly_row`](crate::read::context::ReadContext) so the
 /// facade can build its `AssemblyNameDefinition`. `None` for netmodules
 /// (images without an `Assembly` row).
+///
+/// Assembly-scoped `CustomAttribute` (parent tag `Assembly` in
+/// `HasCustomAttribute`) and `DeclSecurity` rows are collected here — the
+/// frozen `Module` model has no assembly-level slots, so the facade consumes
+/// these when building its `AssemblyDefinition`.
 #[derive(Debug, Clone)]
 pub struct AssemblyRowData {
     pub name: String,
@@ -45,6 +50,12 @@ pub struct AssemblyRowData {
     /// Raw `Assembly.Flags` value (kept untruncated for round-tripping).
     pub flags: u32,
     pub entry_point_token: Token,
+    /// `HasCustomAttribute` rows whose parent is the `Assembly` table
+    /// (Mono.Cecil `AssemblyDefinition.CustomAttributes`).
+    pub custom_attributes: Vec<CustomAttribute>,
+    /// `DeclSecurity` rows whose parent is the `Assembly` table
+    /// (Mono.Cecil `AssemblyDefinition.SecurityDeclarations`).
+    pub security_declarations: Vec<SecurityDeclaration>,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,10 +159,9 @@ pub fn read_module(
     read_marshal_specs(&mut module, &ctx, &md, &param_owners)?;
     read_impl_maps(&mut module, &md)?;
     read_method_impls(&mut module, &ctx, &md)?;
-    read_decl_security(&mut module, &md)?;
-    read_custom_attributes(&mut module, &mut ctx, &md, &param_owners)?;
-
-    // ---- Assembly-scope data -------------------------------------------
+    // Assembly-scope data is read before the DeclSecurity / CustomAttribute
+    // passes so rows parented to the `Assembly` table can be attached to
+    // [`ReadContext::assembly_row`].
     let has_assembly_row = md.row_count(T::Assembly) > 0;
     if has_assembly_row {
         ctx.assembly_row = Some(read_assembly_row(image, &md)?);
@@ -159,6 +169,8 @@ pub fn read_module(
         // No Assembly row => netmodule (Mono.Cecil ReadModuleManifest).
         module.kind = ModuleKind::NetModule;
     }
+    read_decl_security(&mut module, &mut ctx, &md)?;
+    read_custom_attributes(&mut module, &mut ctx, &md, &param_owners)?;
     module.assembly_refs = ctx.asm_refs.clone();
     module.module_refs = ctx.mod_refs.clone();
     read_files_exported_types_resources(&mut module, &ctx, image, &md)?;
@@ -247,8 +259,10 @@ fn read_type_defs(
     let mut rows = Vec::with_capacity(count as usize);
     for rid in 1..=count {
         let attributes = TypeAttributes::from_bits_truncate(cell_u32(md, T::TypeDef, rid, 0)?);
-        let namespace = cell_str(md, T::TypeDef, rid, 1)?;
-        let name = cell_str(md, T::TypeDef, rid, 2)?;
+        // ECMA-335 II §22.37: TypeDef rows are [Flags(0), Name(1),
+        // Namespace(2), Extends, FieldList, MethodList].
+        let name = cell_str(md, T::TypeDef, rid, 1)?;
+        let namespace = cell_str(md, T::TypeDef, rid, 2)?;
         module.types.push(TypeDefinition {
             namespace,
             name,
@@ -904,7 +918,7 @@ fn security_action(value: u16) -> Result<SecurityAction> {
     })
 }
 
-fn read_decl_security(module: &mut Module, md: &MetadataReader) -> Result<()> {
+fn read_decl_security(module: &mut Module, ctx: &mut ReadContext, md: &MetadataReader) -> Result<()> {
     for rid in 1..=md.row_count(T::DeclSecurity) {
         let action = security_action(cell_u16(md, T::DeclSecurity, rid, 0)?)?;
         let parent_cell = md.column(T::DeclSecurity, rid, 1)?;
@@ -929,11 +943,14 @@ fn read_decl_security(module: &mut Module, md: &MetadataReader) -> Result<()> {
                     .security_declarations
                     .push(declaration);
             }
-            T::Assembly => {
-                // Assembly-level declarations have no slot in the frozen
-                // AssemblyRowData contract; preserved nowhere (matches the
-                // facade's minimal AssemblyNameDefinition surface).
-            }
+            T::Assembly => match ctx.assembly_row.as_mut() {
+                Some(row) => row.security_declarations.push(declaration),
+                None => {
+                    return Err(bad(format!(
+                        "DeclSecurity row {rid}: Assembly parent without an Assembly row"
+                    )))
+                }
+            },
             _ => return Err(bad("HasDeclSecurity cell with unexpected tag".into())),
         }
     }
@@ -967,9 +984,10 @@ fn attribute_ctor(ctx: &ReadContext, _md: &MetadataReader, ctor_cell: u64) -> Re
 }
 
 /// Groups `CustomAttribute` rows by their `HasCustomAttribute` parent and
-/// pushes each instance into the owning entity. Parents without a slot in
-/// the frozen model (TypeRef, InterfaceImpl, MemberRef, Module, DeclSecurity,
-/// StandAloneSig, ModuleRef, TypeSpec, Assembly, File, ExportedType,
+/// pushes each instance into the owning entity. Assembly-parented rows are
+/// collected on [`AssemblyRowData::custom_attributes`]. Parents without a
+/// slot in the frozen model (TypeRef, InterfaceImpl, MemberRef, Module,
+/// DeclSecurity, StandAloneSig, ModuleRef, TypeSpec, File, ExportedType,
 /// ManifestResource, GenericParamConstraint, MethodSpec) are skipped.
 fn read_custom_attributes(
     module: &mut Module,
@@ -1042,13 +1060,28 @@ fn read_custom_attributes(
                 let i = idx(ctx.asm_refs.len())?;
                 ctx.asm_refs[i].custom_attributes.push(attribute);
             }
+            T::Assembly => {
+                // The Assembly table holds at most one row; anything else is
+                // a malformed parent cell.
+                if target != 1 {
+                    return Err(bad(format!(
+                        "CustomAttribute row {rid}: invalid Assembly parent"
+                    )));
+                }
+                match ctx.assembly_row.as_mut() {
+                    Some(row) => row.custom_attributes.push(attribute),
+                    None => {
+                        return Err(bad(format!(
+                            "CustomAttribute row {rid}: Assembly parent without an Assembly row"
+                        )))
+                    }
+                }
+            }
+            // Parents without a slot in the object model are dropped, mirroring
+            // the documented read-path behavior for unmodeled rows.
             _ => {}
         }
     }
-
-    // Assembly-level custom attributes have no home in the frozen Module /
-    // AssemblyRowData contract and are dropped, like Cecil-side consumers
-    // that never request them.
     Ok(())
 }
 
@@ -1083,6 +1116,9 @@ fn read_assembly_row(image: &cecli_pe::Image, md: &MetadataReader) -> Result<Ass
         hash_alg,
         flags,
         entry_point_token: image.entry_point_token(),
+        // Populated later by read_custom_attributes / read_decl_security.
+        custom_attributes: Vec::new(),
+        security_declarations: Vec::new(),
     })
 }
 
@@ -1332,5 +1368,92 @@ mod tests {
         let asm = ctx.assembly_row.as_ref().expect("Assembly row present");
         assert_eq!(asm.entry_point_token, module.entry_point_token);
         assert!(!asm.name.is_empty());
+    }
+
+    /// BLOCKER A6/P1 regression guard: ECMA-335 II §22.37 orders TypeDef
+    /// rows as [Flags(0), Name(1), Namespace(2), ...]; an earlier revision
+    /// read column 1 as the namespace and column 2 as the name, turning
+    /// `Program` into namespace `Program` with name `exe`.
+    #[test]
+    fn hello_fixture_type_def_columns() {
+        let path = cecli_core::fixtures_dir().join("hello.exe");
+        if !path.exists() {
+            return;
+        }
+        let bytes = std::fs::read(&path).expect("reading fixtures/hello.exe");
+        let image = cecli_pe::Image::parse(&bytes).expect("parsing PE image");
+        let opts = ReadOptions { load_bodies: false };
+        let (module, _ctx) = read_module(&image, &opts).expect("read_module");
+
+        // Ground truth (raw table dump of fixtures/hello.exe): two TypeDef
+        // rows - `<Module>` and top-level `Program` with an empty namespace.
+        let program = module.find_type_full("Program").expect("Program resolves");
+        assert_eq!(module.get_type_id("", "Program"), Some(program));
+        let ty = module.type_def(program);
+        assert_eq!(ty.name, "Program");
+        assert_eq!(ty.namespace, "");
+        assert!(module.find_type_full("<Module>").is_some());
+
+        // hello.exe declares no nested types: no nested spelling may resolve.
+        assert!(
+            module.types.iter().all(|t| t.declaring_type.is_none()),
+            "hello.exe declares only top-level types"
+        );
+        assert!(module.find_type_full("Program+Nested").is_none());
+    }
+
+    /// Nested types resolve through both the `+` and the `/` spelling of
+    /// [`crate::module_def::Module::find_type_full`]. iterator.exe nests a
+    /// single compiler-generated state-machine type under `Program`.
+    #[test]
+    fn nested_types_resolve_via_find_type_full_spellings() {
+        let path = cecli_core::fixtures_dir().join("iterator.exe");
+        if !path.exists() {
+            return;
+        }
+        let bytes = std::fs::read(&path).expect("reading fixtures/iterator.exe");
+        let image = cecli_pe::Image::parse(&bytes).expect("parsing PE image");
+        let opts = ReadOptions { load_bodies: false };
+        let (module, _ctx) = read_module(&image, &opts).expect("read_module");
+
+        let program = module.find_type_full("Program").expect("Program resolves");
+        let nested_plus = module
+            .find_type_full("Program+<GetLittleArgs>d__0")
+            .expect("+ spelling resolves");
+        let nested_slash = module
+            .find_type_full("Program/<GetLittleArgs>d__0")
+            .expect("/ spelling resolves");
+        assert_eq!(nested_plus, nested_slash);
+        assert_eq!(
+            module.type_def(nested_plus).declaring_type,
+            Some(program),
+            "nested type is wired to Program"
+        );
+        assert_ne!(nested_plus, program);
+    }
+
+    /// Assembly-parented `CustomAttribute` rows land on
+    /// [`AssemblyRowData::custom_attributes`] instead of being dropped.
+    /// Ground truth (raw CustomAttribute table dumps): xattr.dll carries
+    /// exactly three assembly-level attributes (Debuggable,
+    /// CompilationRelaxations, RuntimeCompatibility); hello.exe exactly two.
+    #[test]
+    fn assembly_level_custom_attributes_are_kept() {
+        for (file, expected) in [("xattr.dll", 3usize), ("hello.exe", 2)] {
+            let path = cecli_core::fixtures_dir().join(file);
+            if !path.exists() {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("reading fixture");
+            let image = cecli_pe::Image::parse(&bytes).expect("parsing PE image");
+            let opts = ReadOptions { load_bodies: false };
+            let (_module, ctx) = read_module(&image, &opts).expect("read_module");
+            let asm = ctx.assembly_row.as_ref().expect("Assembly row present");
+            assert_eq!(asm.custom_attributes.len(), expected, "{file}");
+            assert!(
+                asm.security_declarations.is_empty(),
+                "{file} has no assembly-level security declarations"
+            );
+        }
     }
 }

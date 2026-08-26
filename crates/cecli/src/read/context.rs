@@ -97,6 +97,12 @@ pub struct ReadContext {
     pub mod_refs: Vec<String>,
     /// Raw `StandAloneSig` blobs (rid-1 indexed).
     pub stand_alone_sigs: Vec<Vec<u8>>,
+    /// Raw `calli` signature blobs captured during body decode:
+    /// original `StandAloneSig` rid -> blob bytes. Mirrored into
+    /// [`crate::module_def::Module::sas_blobs`] once body resolution finishes
+    /// so the writer can re-emit the signatures through its own deduplicated
+    /// `StandAloneSig` rows instead of passing stale read-side rids through.
+    pub sas_blobs: std::collections::BTreeMap<u32, Vec<u8>>,
     /// Decoded `#US` heap contents in heap order (for `ldstr` operands).
     pub us_strings: Vec<String>,
     /// Entrypoint token from the CLI header (`Token::NIL` until set).
@@ -122,6 +128,7 @@ impl fmt::Debug for ReadContext {
             .field("field_defs", &self.field_defs.len())
             .field("prop_defs", &self.prop_defs.len())
             .field("event_defs", &self.event_defs.len())
+            .field("sas_blobs", &self.sas_blobs.len())
             .field("gen_params", &self.gen_params.len())
             .field("type_specs", &self.type_specs.len())
             .field("member_refs", &self.member_refs.len())

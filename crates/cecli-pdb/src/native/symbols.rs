@@ -10,15 +10,18 @@
 //! * the **DBI stream** (stream 3): [`DbiHeader`], per-module [`DbiModuleInfo`]
 //!   records (with their [`DbiSecCon`] section contributions) and the optional
 //!   [`DbiDbgHdr`](DbiDbgHdr) debug header,
-//! * per-module **debug streams**: CodeView symbol records
-//!   (`S_GPROC32`/`S_LPROC32`/`S_GMANPROC`/`S_LMANPROC`) and C13 line
+//! * per-module **debug streams**: CodeView symbol records (managed procs
+//!   `S_GMANPROC`/`S_LMANPROC` only — native `S_GPROC32`/`S_LPROC32`,
+//!   incl. `_ST`, are parsed-and-skipped so unmanaged symbols on mixed
+//!   images never pollute the token map) and C13 line
 //!   subsections (`DEBUG_S_LINES`, `DEBUG_S_FILECHKSMS`),
 //! * the DBI **global symbol stream** (`S_PUB32`) for public symbols.
 //!
 //! # Ported CvInfo items
 //!
-//! `SYM` subset (S_END, S_OEM, S_PUB32(_ST), S_GPROC32/S_LPROC32,
-//! S_GMANPROC/S_LMANPROC), `ProcSym32`, `ManProcSym`, `PubSym32`,
+//! `SYM` subset (S_END, S_OEM, S_PUB32(_ST), S_GPROC32/S_LPROC32
+//! (parsed-and-skipped), S_GMANPROC/S_LMANPROC), `ProcSym32`, `ManProcSym`,
+//! `PubSym32`,
 //! `CV_PUBSYMFLAGS`, `CV_LineSection`, `CV_SourceFile`, `CV_Line`,
 //! `CV_Line_Flags`, `CV_Column` (parsed-and-skipped, see below),
 //! `CV_FileCheckSum`, `DEBUG_S_SUBSECTION`, `CV_LINES_HAVE_COLUMNS`.
@@ -69,7 +72,9 @@
 //! region, an undersized (`< 2`) record length, or truncated fixed-size
 //! structures produce [`Error::BadImage`]. A procedure whose segment differs
 //! from 1 or that carries a non-zero parent/next link errors out exactly like
-//! Cecil's `PdbDebugException`.
+//! Cecil's `PdbDebugException`; a managed proc record not followed by an
+//! `S_END` record inside its module symbol region (truncated region) is a
+//! [`Error::BadImage`] as well (Cecil `PdbFunction` ctor behavior).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -85,28 +90,29 @@ use crate::native::msf::MsfImage;
 /// CodeView symbol record kinds actually consumed by this reader
 /// (subset of `Microsoft.Cci.Pdb.SYM`).
 mod sym {
-    #[allow(dead_code)]
     pub const S_END: u16 = 0x0006;
     pub const S_PUB32_ST: u16 = 0x1009;
+    /// Native (unmanaged) proc kinds: walked past by length during function
+    /// extraction — accepting them would pollute the managed token map on
+    /// mixed images (Cecil parity). Kept for format documentation and the
+    /// mixed-image test below.
+    #[allow(dead_code)]
     pub const S_LPROC32_ST: u16 = 0x100a;
+    #[allow(dead_code)]
     pub const S_GPROC32_ST: u16 = 0x100b;
     pub const S_PUB32: u16 = 0x110e;
+    #[allow(dead_code)]
     pub const S_LPROC32: u16 = 0x110f;
+    #[allow(dead_code)]
     pub const S_GPROC32: u16 = 0x1110;
     pub const S_GMANPROC: u16 = 0x112a;
     pub const S_LMANPROC: u16 = 0x112b;
 
     /// True for managed-proc records which carry the extra `retReg: u16`
     /// field between `flags` and the name (`ManProcSym` vs `ProcSym32`).
+    /// These are the ONLY proc kinds accepted for function extraction.
     pub fn is_manproc(kind: u16) -> bool {
         matches!(kind, S_GMANPROC | S_LMANPROC)
-    }
-
-    pub fn is_proc(kind: u16) -> bool {
-        matches!(
-            kind,
-            S_GPROC32 | S_LPROC32 | S_GPROC32_ST | S_LPROC32_ST | S_GMANPROC | S_LMANPROC
-        )
     }
 
     pub fn is_pub32(kind: u16) -> bool {
@@ -478,6 +484,15 @@ pub struct FunctionLines {
     pub lines: Vec<LineEntry>,
 }
 
+/// Selector for [`NativePdbReader::lines_for_function`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionKey {
+    /// Look the function up by its metadata method token.
+    Token(Token),
+    /// Look the function up by an RVA inside one of its address ranges.
+    Rva(u64),
+}
+
 // ---------------------------------------------------------------------------
 // Internal parse models
 // ---------------------------------------------------------------------------
@@ -639,10 +654,11 @@ fn walk_records(
 
 /// Reader for native (Windows) PDB symbol information.
 ///
-/// All streams are parsed eagerly in [`NativePdbReader::open`]; accessors
-/// return cached results. The `'a` lifetime borrows the backing MSF image.
+/// Everything is parsed eagerly in [`NativePdbReader::open`]; accessors
+/// return cached results. Nothing borrows the input bytes: every retained
+/// structure is owned, so the reader is valid for `'static` once opened.
 #[derive(Clone)]
-pub struct NativePdbReader<'a> {
+pub struct NativePdbReader {
     guid: [u8; 16],
     id: PdbId,
     /// `/names` heap names in bucket order (fallback for `source_files`).
@@ -653,10 +669,9 @@ pub struct NativePdbReader<'a> {
     publics: Vec<(String, u64)>,
     modules: Vec<DbiModuleInfo>,
     source_files: Vec<String>,
-    _marker: std::marker::PhantomData<&'a MsfImage<'a>>,
 }
 
-impl<'a> fmt::Debug for NativePdbReader<'a> {
+impl fmt::Debug for NativePdbReader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NativePdbReader")
             .field("id", &self.id)
@@ -669,11 +684,18 @@ impl<'a> fmt::Debug for NativePdbReader<'a> {
     }
 }
 
-impl<'a> NativePdbReader<'a> {
-    /// Opens a native PDB from a parsed MSF image, parsing the info stream,
-    /// `/names` heap, DBI stream, all module symbol/line regions and the
-    /// global-symbol stream.
-    pub fn open(image: &MsfImage<'a>) -> Result<Self> {
+impl NativePdbReader {
+    /// Opens a native PDB from its raw MSF image bytes, parsing the info
+    /// stream, `/names` heap, DBI stream, all module symbol/line regions and
+    /// the global-symbol stream. The returned reader owns every parsed
+    /// structure; `pdb_bytes` is only borrowed for the duration of the call.
+    pub fn open(pdb_bytes: &[u8]) -> Result<Self> {
+        let image = MsfImage::parse(pdb_bytes)?;
+        Self::from_image(&image)
+    }
+
+    /// Runs the full parse pipeline over an already-parsed MSF image.
+    fn from_image(image: &MsfImage<'_>) -> Result<Self> {
         // --- Info stream (stream 1): name index + identity -----------------
         let info_bytes = image
             .stream(1)
@@ -795,7 +817,6 @@ impl<'a> NativePdbReader<'a> {
             functions,
             publics,
             source_files,
-            _marker: std::marker::PhantomData,
         })
     }
 
@@ -831,6 +852,37 @@ impl<'a> NativePdbReader<'a> {
     /// Finds a function by its metadata method token.
     pub fn find_by_token(&self, tok: Token) -> Option<FunctionLines> {
         self.functions.iter().find(|f| f.token == tok).cloned()
+    }
+    /// Resolves a function by token or covered RVA and returns its mapped
+    /// source lines as absolute `(rva, line, file)` triples.
+    ///
+    /// Every matched `DEBUG_S_LINES` section starts at the function's own
+    /// address ([`assign_lines`] matches on exact `(segment, offset)`), so a
+    /// single base RVA converts each stored `rva_delta`. Unresolvable keys
+    /// yield an empty list.
+    pub fn lines_for_function(&self, key: FunctionKey) -> Result<Vec<(u64, u32, String)>> {
+        let func = match key {
+            FunctionKey::Token(token) => self.find_by_token(token),
+            FunctionKey::Rva(rva) => self
+                .functions
+                .iter()
+                .find(|f| {
+                    f.ranges
+                        .iter()
+                        .any(|&(start, len)| rva >= start && rva - start < len as u64)
+                })
+                .cloned(),
+        };
+        let Some(func) = func else {
+            return Ok(Vec::new());
+        };
+        let base = func.ranges.first().map_or(0, |&(start, _)| start);
+        Ok(func
+            .lines
+            .into_iter()
+            .map(|entry| (base + entry.rva_delta as u64, entry.line, entry.file))
+            .collect())
+
     }
 
     /// Public symbols as `(name, rva)` pairs, walked best-effort from the DBI
@@ -878,8 +930,6 @@ fn load_dbi_stream(
             bits.position()
         )));
     }
-
-    // Skip Section Contribution / Section Map / File Info / TSM / EC.
     for size in [
         dh.seccon_size,
         dh.secmap_size,
@@ -913,10 +963,12 @@ fn positive_size(v: i32, what: &str) -> Result<usize> {
 }
 
 /// Port of `PdbFunction.LoadManagedFunctions` + the proc-record branch of
-/// `PdbFunction`'s constructor: walks `[4, cb_syms)` collecting
-/// `S_GPROC32`/`S_LPROC32` (and managed `S_GMANPROC`/`S_LMANPROC`) records.
-/// Unknown kinds are skipped by length; nested scope contents are never
-/// descended into because scanning simply continues at the next record.
+/// `PdbFunction`'s constructor: walks `[4, cb_syms)` collecting managed
+/// `S_GMANPROC`/`S_LMANPROC` records only — native `S_GPROC32`/`S_LPROC32`
+/// (incl. `_ST`) records are skipped by length so unmanaged symbols on mixed
+/// images never enter the token map. Unknown kinds are skipped by length;
+/// nested scope contents are never descended into because scanning simply
+/// continues at the next record.
 fn load_managed_functions(data: &[u8], cb_syms: i32) -> Result<Vec<RawFunction>> {
     if cb_syms < 4 {
         return Ok(Vec::new());
@@ -941,8 +993,19 @@ fn load_managed_functions(data: &[u8], cb_syms: i32) -> Result<Vec<RawFunction>>
     bits.set_position(4)?;
 
     let mut funcs = Vec::new();
+    // Port of the PdbFunction-constructor requirement that every proc record
+    // is closed by an S_END record: the record right after a proc must be its
+    // terminator, and a region that ends right after a proc is truncated.
+    let mut expect_end: Option<String> = None;
     walk_records(&mut bits, limit, |bits, rec, stop| {
-        if !sym::is_proc(rec) {
+        if let Some(name) = expect_end.take() {
+            if rec != sym::S_END {
+                return Err(Error::bad_image(format!(
+                    "native pdb: function '{name}' is not terminated by S_END"
+                )));
+            }
+        }
+        if !sym::is_manproc(rec) {
             return Ok(()); // skip-by-len (Cecil default branch)
         }
         let parent = bits.read_u32()?;
@@ -972,6 +1035,7 @@ fn load_managed_functions(data: &[u8], cb_syms: i32) -> Result<Vec<RawFunction>>
                 "native pdb: function '{name}' parent={parent}, next={next}"
             )));
         }
+        expect_end = Some(name.clone());
         funcs.push(RawFunction {
             token,
             name,
@@ -982,6 +1046,11 @@ fn load_managed_functions(data: &[u8], cb_syms: i32) -> Result<Vec<RawFunction>>
         });
         Ok(())
     })?;
+    if let Some(name) = expect_end.take() {
+        return Err(Error::bad_image(format!(
+            "native pdb: truncated module symbol region: function '{name}' has no S_END"
+        )));
+    }
     Ok(funcs)
 }
 
@@ -1440,9 +1509,11 @@ mod tests {
         out
     }
 
-    fn proc_record(name: &str, token: u32, off: u32, seg: u16) -> Vec<u8> {
+    /// Builds a proc record of the given kind. Managed procs carry the extra
+    /// `retReg: u16` field between `flags` and the name.
+    fn proc_record(kind: u16, name: &str, token: u32, off: u32, seg: u16) -> Vec<u8> {
         let mut rec = Vec::new();
-        w16(&mut rec, sym::S_GPROC32);
+        w16(&mut rec, kind);
         w32(&mut rec, 0); // parent
         w32(&mut rec, 0xffff); // end (absolute pointer; unused here)
         w32(&mut rec, 0); // next
@@ -1453,6 +1524,9 @@ mod tests {
         w32(&mut rec, off);
         w16(&mut rec, seg);
         rec.push(0); // CV_PROCFLAGS
+        if sym::is_manproc(kind) {
+            w16(&mut rec, 0); // retReg (ManProcSym only)
+        }
         cstr(&mut rec, name);
         // CodeView records are padded so the *total* record length (including
         // the leading size field) is a multiple of 4.
@@ -1487,7 +1561,7 @@ mod tests {
         if with_unknown {
             out.extend_from_slice(&unknown_record());
         }
-        out.extend_from_slice(&proc_record("Foo", 0x0600_0001, 0x1000, 1));
+        out.extend_from_slice(&proc_record(sym::S_GMANPROC, "Foo", 0x0600_0001, 0x1000, 1));
         out.extend_from_slice(&end_record());
         out
     }
@@ -1660,17 +1734,12 @@ mod tests {
         build_msf(&streams)
     }
 
-    fn open(bytes: &[u8]) -> Result<NativePdbReader<'_>> {
-        let image = crate::native::msf::MsfImage::parse(bytes)?;
-        NativePdbReader::open(&image)
-    }
-
     // -- acceptance tests --------------------------------------------------
 
     #[test]
     fn functions_lines_and_pdb_id_roundtrip() {
         let pdb = assemble_pdb(&[build_module_stream(true, false)], &globals_stream());
-        let reader = open(&pdb).expect("open should succeed");
+        let reader = NativePdbReader::open(&pdb).expect("open should succeed");
 
         let (guid, ver, sig, age) = reader.pdb_id();
         assert_eq!(guid, GUID);
@@ -1694,10 +1763,9 @@ mod tests {
     #[test]
     fn find_by_token_hits_and_misses() {
         let pdb = assemble_pdb(&[build_module_stream(true, false)], &globals_stream());
-        let reader = open(&pdb).expect("open should succeed");
+        let reader = NativePdbReader::open(&pdb).expect("open should succeed");
 
         let hit = reader.find_by_token(Token(0x0600_0001)).expect("token hit");
-        assert_eq!(hit.name, "Foo");
         assert_eq!(hit.lines.len(), 2);
 
         assert!(reader.find_by_token(Token(0x0600_0002)).is_none());
@@ -1706,21 +1774,19 @@ mod tests {
     #[test]
     fn publics_walked_from_global_stream() {
         let pdb = assemble_pdb(&[build_module_stream(true, false)], &globals_stream());
-        let reader = open(&pdb).expect("open should succeed");
+        let reader = NativePdbReader::open(&pdb).expect("open should succeed");
         assert_eq!(reader.publics(), vec![("pubFoo".to_string(), 0x2000u64)]);
     }
-
     #[test]
     fn source_files_from_checksum_subsections() {
         let pdb = assemble_pdb(&[build_module_stream(true, false)], &globals_stream());
-        let reader = open(&pdb).expect("open should succeed");
+        let reader = NativePdbReader::open(&pdb).expect("open should succeed");
         assert_eq!(reader.source_files(), vec!["Foo.cs", "Bar.cs"]);
     }
-
     #[test]
     fn source_files_falls_back_to_names_heap_without_checksums() {
         let pdb = assemble_pdb(&[build_module_stream(false, false)], &globals_stream());
-        let reader = open(&pdb).expect("open should succeed");
+        let reader = NativePdbReader::open(&pdb).expect("open should succeed");
 
         // No FILECHKSMS subsection: every function still parses but has no
         // lines, and source files fall back to the /names heap.
@@ -1734,7 +1800,7 @@ mod tests {
     #[test]
     fn unknown_symbol_kinds_are_skipped_by_length() {
         let pdb = assemble_pdb(&[build_module_stream(true, true)], &globals_stream());
-        let reader = open(&pdb).expect("unknown record must be skipped cleanly");
+        let reader = NativePdbReader::open(&pdb).expect("unknown record must be skipped cleanly");
         let funcs = reader.functions().expect("functions");
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].lines.len(), 2);
@@ -1748,7 +1814,7 @@ mod tests {
         m.bytes[4..6].copy_from_slice(&0xffffu16.to_le_bytes());
 
         let pdb = assemble_pdb(&[m], &globals_stream());
-        let err = open(&pdb).expect_err("overrunning record length must fail");
+        let err = NativePdbReader::open(&pdb).expect_err("overrunning record length must fail");
         assert!(
             matches!(err, cecli_core::Error::BadImage(_)),
             "expected BadImage, got {err:?}"
@@ -1761,22 +1827,20 @@ mod tests {
         // siz == 1 (< 2) is structurally impossible.
         m.bytes[4..6].copy_from_slice(&1u16.to_le_bytes());
         let pdb = assemble_pdb(&[m], &globals_stream());
-        let err = open(&pdb).expect_err("undersized record length must fail");
+        let err = NativePdbReader::open(&pdb).expect_err("undersized record length must fail");
         assert!(matches!(err, cecli_core::Error::BadImage(_)));
     }
-
     #[test]
     fn wrong_module_signature_is_a_hard_error() {
         let mut m = build_module_stream(true, false);
         m.bytes[0..4].copy_from_slice(&7u32.to_le_bytes()); // sig must be 4
         let pdb = assemble_pdb(&[m], &globals_stream());
-        let err = open(&pdb).expect_err("bad module signature must fail");
+        let err = NativePdbReader::open(&pdb).expect_err("bad module signature must fail");
         assert!(matches!(err, cecli_core::Error::BadImage(_)));
     }
-
     #[test]
     fn non_primary_segment_is_rejected_like_cecil() {
-        let mut rec = proc_record("Foo", 0x0600_0001, 0x1000, 2);
+        let mut rec = proc_record(sym::S_GMANPROC, "Foo", 0x0600_0001, 0x1000, 2);
         let mut syms = Vec::new();
         syms.append(&mut rec);
         syms.extend_from_slice(&end_record());
@@ -1790,28 +1854,29 @@ mod tests {
         m.cb_syms = (4 + syms.len()) as i32;
 
         let pdb = assemble_pdb(&[m], &globals_stream());
-        let err = open(&pdb).expect_err("segment != 1 must fail like PdbDebugException");
+        let err =
+            NativePdbReader::open(&pdb).expect_err("segment != 1 must fail like PdbDebugException");
         assert!(matches!(err, cecli_core::Error::BadImage(_)));
     }
-
     #[test]
     fn multiple_functions_sorted_by_address_share_the_reader() {
         let mut m = build_module_stream(true, false);
         // Append a second function at a lower address directly into the
         // symbols region and grow cbSyms accordingly.
-        let second = proc_record("Bar", 0x0600_0002, 0x0800, 1);
+        let second = proc_record(sym::S_GMANPROC, "Bar", 0x0600_0002, 0x0800, 1);
         let insert_at = 4usize;
         let old_syms_end = 4 + (m.cb_syms as usize - 4);
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&m.bytes[..insert_at]);
         bytes.extend_from_slice(&second);
+        bytes.extend_from_slice(&end_record());
         bytes.extend_from_slice(&m.bytes[insert_at..old_syms_end]);
         bytes.extend_from_slice(&m.bytes[old_syms_end..]);
         m.bytes = bytes;
-        m.cb_syms += second.len() as i32;
+        m.cb_syms += (second.len() + end_record().len()) as i32;
 
         let pdb = assemble_pdb(&[m], &globals_stream());
-        let reader = open(&pdb).expect("open should succeed");
+        let reader = NativePdbReader::open(&pdb).expect("open should succeed");
         let funcs = reader.functions().expect("functions");
 
         assert_eq!(funcs.len(), 2);
@@ -1820,5 +1885,124 @@ mod tests {
         assert!(funcs[0].lines.is_empty());
         assert_eq!(funcs[1].name, "Foo");
         assert_eq!(funcs[1].lines.len(), 2);
+    }
+    #[test]
+    fn mixed_native_and_managed_procs_extract_managed_only() {
+        // A native S_GPROC32 record sharing the managed proc's address: it
+        // must be skipped by length (no token-map pollution) while the
+        // managed record is extracted and receives its line program.
+        let mut syms = Vec::new();
+        syms.extend_from_slice(&proc_record(
+            sym::S_GPROC32,
+            "NativeFoo",
+            0x1100_0001,
+            0x1000,
+            1,
+        ));
+        syms.extend_from_slice(&end_record());
+        syms.extend_from_slice(&proc_record(
+            sym::S_GMANPROC,
+            "Foo",
+            0x0600_0001,
+            0x1000,
+            1,
+        ));
+        syms.extend_from_slice(&end_record());
+
+        let mut m = build_module_stream(false, false);
+        let mut bytes = Vec::new();
+        w32(&mut bytes, 4);
+        bytes.extend_from_slice(&syms);
+        for sub in [file_checksum_subsection(), lines_subsection()] {
+            bytes.extend_from_slice(&sub);
+            m.cb_lines += sub.len() as i32;
+        }
+        m.bytes = bytes;
+        m.cb_syms = (4 + syms.len()) as i32;
+
+        let pdb = assemble_pdb(&[m], &globals_stream());
+        let reader = NativePdbReader::open(&pdb).expect("mixed image should open");
+        let funcs = reader.functions().expect("functions");
+        assert_eq!(funcs.len(), 1, "native proc must not be extracted");
+        assert_eq!(funcs[0].token, Token(0x0600_0001));
+        assert_eq!(funcs[0].name, "Foo");
+        assert_eq!(funcs[0].lines.len(), 2);
+        assert!(reader.find_by_token(Token(0x1100_0001)).is_none());
+    }
+
+    #[test]
+    fn truncated_proc_region_is_a_hard_error() {
+        // No S_END after the proc record: the symbol region ends right there.
+        let syms = proc_record(sym::S_GMANPROC, "Foo", 0x0600_0001, 0x1000, 1);
+
+        let mut m = build_module_stream(false, false);
+        let mut bytes = Vec::new();
+        w32(&mut bytes, 4);
+        bytes.extend_from_slice(&syms);
+        m.bytes = bytes;
+        m.cb_syms = (4 + syms.len()) as i32;
+
+        let pdb = assemble_pdb(&[m], &globals_stream());
+        let err = NativePdbReader::open(&pdb).expect_err("missing S_END must fail");
+        assert!(
+            matches!(err, cecli_core::Error::BadImage(_)),
+            "expected BadImage, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn proc_without_s_end_before_next_record_is_a_hard_error() {
+        // Two procs back to back: the first one is never terminated.
+        let mut syms = proc_record(sym::S_GMANPROC, "Foo", 0x0600_0001, 0x1000, 1);
+        syms.extend_from_slice(&proc_record(
+            sym::S_GMANPROC,
+            "Bar",
+            0x0600_0002,
+            0x2000,
+            1,
+        ));
+        syms.extend_from_slice(&end_record());
+
+        let mut m = build_module_stream(false, false);
+        let mut bytes = Vec::new();
+        w32(&mut bytes, 4);
+        bytes.extend_from_slice(&syms);
+        m.bytes = bytes;
+        m.cb_syms = (4 + syms.len()) as i32;
+
+        let pdb = assemble_pdb(&[m], &globals_stream());
+        let err = NativePdbReader::open(&pdb).expect_err("missing S_END must fail");
+        assert!(matches!(err, cecli_core::Error::BadImage(_)));
+    }
+
+    #[test]
+    fn lines_for_function_resolves_by_token_and_rva() {
+        let pdb = assemble_pdb(&[build_module_stream(true, false)], &globals_stream());
+        let reader = NativePdbReader::open(&pdb).expect("open should succeed");
+
+        let expected = vec![
+            (0x1000u64, 5u32, "Foo.cs".to_string()),
+            (0x1008u64, 10u32, "Foo.cs".to_string()),
+        ];
+        let by_token = reader
+            .lines_for_function(FunctionKey::Token(Token(0x0600_0001)))
+            .expect("token lookup");
+        assert_eq!(by_token, expected);
+
+        // Inside [0x1000, 0x1020): resolves to the same function.
+        let by_rva = reader
+            .lines_for_function(FunctionKey::Rva(0x1010))
+            .expect("rva lookup");
+        assert_eq!(by_rva, expected);
+
+        // Outside any range / unknown token: empty result.
+        assert!(reader
+            .lines_for_function(FunctionKey::Rva(0x9000))
+            .expect("rva miss")
+            .is_empty());
+        assert!(reader
+            .lines_for_function(FunctionKey::Token(Token(0x0600_00ff)))
+            .expect("token miss")
+            .is_empty());
     }
 }

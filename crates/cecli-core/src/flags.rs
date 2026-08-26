@@ -2,6 +2,7 @@
 //! Values ported verbatim from Mono.Cecil's attribute enums.
 
 use bitflags::bitflags;
+use std::fmt;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -383,6 +384,40 @@ pub enum SecurityAction {
     RequestMinimum = 8,
     RequestOptional = 9,
     RequestRefuse = 10,
+    PreJitGrant = 11,
+    PreJitDeny = 12,
+    NonCasDemand = 13,
+    NonCasLinkDemand = 14,
+    NonCasInheritance = 15,
+}
+
+impl SecurityAction {
+    pub fn from_u16(v: u16) -> Option<Self> {
+        Some(match v {
+            1 => SecurityAction::Request,
+            2 => SecurityAction::Demand,
+            3 => SecurityAction::Assert,
+            4 => SecurityAction::Deny,
+            5 => SecurityAction::PermitOnly,
+            6 => SecurityAction::LinkDemand,
+            7 => SecurityAction::InheritanceDemand,
+            8 => SecurityAction::RequestMinimum,
+            9 => SecurityAction::RequestOptional,
+            10 => SecurityAction::RequestRefuse,
+            11 => SecurityAction::PreJitGrant,
+            12 => SecurityAction::PreJitDeny,
+            13 => SecurityAction::NonCasDemand,
+            14 => SecurityAction::NonCasLinkDemand,
+            15 => SecurityAction::NonCasInheritance,
+            _ => return None,
+        })
+    }
+}
+
+impl fmt::Display for SecurityAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 /// First bytes of a method signature: calling convention (ECMA-335 II §23.2).
@@ -390,6 +425,14 @@ pub enum SecurityAction {
 #[repr(u8)]
 pub enum SignatureCallingConvention {
     Default = 0x0,
+    /// Native C declaration (`CALLCONV_C`), unmanaged mixed-mode images.
+    C = 0x1,
+    /// Native stdcall (`CALLCONV_STDCALL`).
+    StdCall = 0x2,
+    /// Native thiscall (`CALLCONV_THISCALL`).
+    ThisCall = 0x3,
+    /// Native fastcall (`CALLCONV_FASTCALL`).
+    FastCall = 0x4,
     VarArg = 0x5,
     Field = 0x6,
     LocalSig = 0x7,
@@ -400,3 +443,39 @@ pub enum SignatureCallingConvention {
 
 pub const CALL_CONVENTION_HAS_THIS: u8 = 0x20;
 pub const CALL_CONVENTION_EXPLICIT_THIS: u8 = 0x40;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The DeclSecurity action codes 11–15 (PreJit/NonCas family) are
+    /// constructible, display under their Cecil names, and round-trip
+    /// through the reader-side [`SecurityAction::from_u16`] helper.
+    #[test]
+    fn prejit_and_noncas_actions_construct_and_display() {
+        let actions = [
+            (11u16, SecurityAction::PreJitGrant, "PreJitGrant"),
+            (12, SecurityAction::PreJitDeny, "PreJitDeny"),
+            (13, SecurityAction::NonCasDemand, "NonCasDemand"),
+            (14, SecurityAction::NonCasLinkDemand, "NonCasLinkDemand"),
+            (
+                15,
+                SecurityAction::NonCasInheritance,
+                "NonCasInheritance",
+            ),
+        ];
+        for (code, action, name) in actions {
+            assert_eq!(action as u16, code);
+            assert_eq!(SecurityAction::from_u16(code), Some(action));
+            assert_eq!(action.to_string(), name);
+        }
+    }
+
+    #[test]
+    fn security_action_from_u16_rejects_unknown() {
+        assert_eq!(SecurityAction::from_u16(0), None);
+        assert_eq!(SecurityAction::from_u16(16), None);
+        // Known low codes still resolve.
+        assert_eq!(SecurityAction::from_u16(2), Some(SecurityAction::Demand));
+    }
+}

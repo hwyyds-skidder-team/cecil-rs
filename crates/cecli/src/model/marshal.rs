@@ -14,9 +14,10 @@
 //!   when the variant is absent), optionally followed by a `TypeDefOrRef`
 //!   cell describing the element type. The cell is a cecli extension — the
 //!   frozen object model carries it; Mono.Cecil stops after the variant
-//!   byte. Wire bytes decode OLE-first: `0x09` reads as `Dispatch`, not the
-//!   colliding plain `U4` code (matches Cecil's `marshal.dll` fixture,
-//!   whose `SAFEARRAY` byte 0x09 asserts `VariantType.Dispatch`).
+//!   byte. The raw byte decodes with the **flat** OLE VARENUM numbering of
+//!   Cecil's `ReadVariantType` (`0x09` reads as `Dispatch`, matching
+//!   Cecil's `marshal.dll` fixture, whose `SAFEARRAY` byte 0x09 asserts
+//!   `VariantType.Dispatch`); see [`variant_from_wire`].
 //! * `NATIVEARRAY` (0x2a): an optional nested element spec comes FIRST (no
 //!   payload at all is the bare parameterless `Array` form), then up to
 //!   three compressed counts in Cecil's positional order: ParamNum,
@@ -212,6 +213,8 @@ fn parse_native_type(rd: &mut ByteReader, r: &mut TdorResolver) -> Result<Native
             }
         }
         0x2d => NativeTypeSpec::Error,
+        // NativeType.Max - nested array element sentinel (see native_code).
+        0x50 => NativeTypeSpec::Max,
         other => {
             return Err(Error::bad_image(format!(
                 "unknown native type 0x{other:02X}"
@@ -327,30 +330,128 @@ fn opt_tdor(rd: &mut ByteReader, r: &mut TdorResolver) -> Result<Option<Box<Type
     }
 }
 
-/// Decodes a wire VARENUM byte into a [`VariantType`]. The OLE families
-/// (VT_CY…VT_CLSID, stored shifted in the enum) win over the colliding
-/// low codes, so `0x09` is `Dispatch` — matching Cecil's VariantType.
+/// Decodes a wire VARENUM byte into a [`VariantType`].
+///
+/// Mono.Cecil's `ReadVariantType` casts the raw byte onto its **flat** OLE
+/// `VARENUM` numbering (`Mono.Cecil/VariantType.cs`), so the wire table here
+/// is flat too. Our [`VariantType`] stores the VT_CY…VT_CLSID families
+/// shifted by 8 bits (they share their low byte with other members), so the
+/// decode translates:
+///
+/// | wire        | [`VariantType`]                                     |
+/// |-------------|-----------------------------------------------------|
+/// | 0x00 / 0x01 | `None` / `Null`                                     |
+/// | 0x02–0x05   | `I2` / `I4` / `R4` / `R8`                           |
+/// | 0x06–0x0E   | `Currency` `Date` `BStr` `Dispatch` `Error` `Bool` `Variant` `Unknown` `Decimal` |
+/// | 0x10–0x15   | `I1` / `U1` / `U2` / `U4` / `I8` / `U8`             |
+/// | 0x16 / 0x17 | `Int` / `UInt`                                      |
+/// | 0x18–0x1D   | `Void` `HResult` `Ptr` `SafeArray` `CArray` `UserDefined` |
+/// | 0x24        | `Record`                                            |
+/// | 0x40–0x46   | `FileTime` `Blob` `Stream` `Storage` `StreamedObject` `StoredObject` `BlobObject` |
+/// | 0x48        | `Clsid`                                             |
+///
+/// Deviations from [`VariantType::from_u32`] (whose low codes are
+/// ELEMENT-style): wire 0x02/0x03/0x04/0x05 are `I2`/`I4`/`R4`/`R8`, never
+/// the colliding `Boolean`/`Char`/`I1`/`U1`; wire 0x14 is `I8`, never
+/// `String`. Unknown bytes return `Err`.
 fn variant_from_wire(raw: u8) -> Result<VariantType> {
-    VariantType::from_u32(u32::from(raw) << 8)
-        .or_else(|| VariantType::from_u32(u32::from(raw)))
-        .ok_or_else(|| Error::bad_image(format!("unknown VARIANT type {raw:#x}")))
+    Ok(match raw {
+        0x00 => VariantType::None,
+        0x01 => VariantType::Null,
+        0x02 => VariantType::I2,
+        0x03 => VariantType::I4,
+        0x04 => VariantType::R4,
+        0x05 => VariantType::R8,
+        0x06 => VariantType::Currency,
+        0x07 => VariantType::Date,
+        0x08 => VariantType::BStr,
+        0x09 => VariantType::Dispatch,
+        0x0A => VariantType::Error,
+        0x0B => VariantType::Bool,
+        0x0C => VariantType::Variant,
+        0x0D => VariantType::Unknown,
+        0x0E => VariantType::Decimal,
+        0x10 => VariantType::I1,
+        0x11 => VariantType::U1,
+        0x12 => VariantType::U2,
+        0x13 => VariantType::U4,
+        0x14 => VariantType::I8,
+        0x15 => VariantType::U8,
+        0x16 => VariantType::Int,
+        0x17 => VariantType::UInt,
+        0x18 => VariantType::Void,
+        0x19 => VariantType::HResult,
+        0x1A => VariantType::Ptr,
+        0x1B => VariantType::SafeArray,
+        0x1C => VariantType::CArray,
+        0x1D => VariantType::UserDefined,
+        0x24 => VariantType::Record,
+        0x40 => VariantType::FileTime,
+        0x41 => VariantType::Blob,
+        0x42 => VariantType::Stream,
+        0x43 => VariantType::Storage,
+        0x44 => VariantType::StreamedObject,
+        0x45 => VariantType::StoredObject,
+        0x46 => VariantType::BlobObject,
+        0x48 => VariantType::Clsid,
+        _ => return Err(Error::bad_image(format!("unknown VARIANT type {raw:#x}"))),
+    })
 }
 
-/// Encodes a [`VariantType`] as its wire VARENUM byte (inverse of
-/// [`variant_from_wire`] for every unambiguous member).
+/// Encodes a [`VariantType`] as its wire VARENUM byte — the exact inverse
+/// of [`variant_from_wire`]: every member emitted here decodes back under
+/// the same name.
 ///
-/// Note: the eight plain codes 0x06–0x0D (`I2`…`R8`) collide on the wire
-/// with the OLE families `Currency`…`R8`; they are emitted as their plain
-/// code, which reads back under its OLE name.
+/// Members without a distinct flat VARENUM byte fail with `Err`: `Boolean`
+/// shares `VT_BOOL` (0x0B) with `Bool`, and `Char` / `String` have no
+/// single-byte VARENUM at all (their ELEMENT-style codes collide with
+/// `I2` / `I8` on this wire). Use `Bool` / `I1` / `I2` instead.
 fn variant_to_wire(v: VariantType) -> Result<u8> {
-    let raw = v as u32;
-    if raw > 0xff {
-        let vt = u8::try_from(raw >> 8)
-            .map_err(|_| Error::argument(format!("VARIANT type {v:?} out of wire range")))?;
-        Ok(vt)
-    } else {
-        u8::try_from(raw).map_err(|_| Error::argument(format!("VARIANT type {v:?} out of range")))
-    }
+    Ok(match v {
+        VariantType::None => 0x00,
+        VariantType::Null => 0x01,
+        VariantType::I2 => 0x02,
+        VariantType::I4 => 0x03,
+        VariantType::R4 => 0x04,
+        VariantType::R8 => 0x05,
+        VariantType::Currency => 0x06,
+        VariantType::Date => 0x07,
+        VariantType::BStr => 0x08,
+        VariantType::Dispatch => 0x09,
+        VariantType::Error => 0x0A,
+        VariantType::Bool => 0x0B,
+        VariantType::Variant => 0x0C,
+        VariantType::Unknown => 0x0D,
+        VariantType::Decimal => 0x0E,
+        VariantType::I1 => 0x10,
+        VariantType::U1 => 0x11,
+        VariantType::U2 => 0x12,
+        VariantType::U4 => 0x13,
+        VariantType::I8 => 0x14,
+        VariantType::U8 => 0x15,
+        VariantType::Int => 0x16,
+        VariantType::UInt => 0x17,
+        VariantType::Void => 0x18,
+        VariantType::HResult => 0x19,
+        VariantType::Ptr => 0x1A,
+        VariantType::SafeArray => 0x1B,
+        VariantType::CArray => 0x1C,
+        VariantType::UserDefined => 0x1D,
+        VariantType::Record => 0x24,
+        VariantType::FileTime => 0x40,
+        VariantType::Blob => 0x41,
+        VariantType::Stream => 0x42,
+        VariantType::Storage => 0x43,
+        VariantType::StreamedObject => 0x44,
+        VariantType::StoredObject => 0x45,
+        VariantType::BlobObject => 0x46,
+        VariantType::Clsid => 0x48,
+        _ => {
+            return Err(Error::argument(format!(
+                "VARIANT type {v:?} has no single-byte VARENUM encoding"
+            )))
+        }
+    })
 }
 
 /// Formats a GUID in .NET's canonical lowercase hyphenated form (mixed
@@ -631,6 +732,75 @@ mod tests {
         assert_eq!(parse_ok(&[0x07]).spec, NativeTypeSpec::I4);
         // Bare 0x2a is the parameterless Array form.
         assert_eq!(parse_ok(&[0x2a]).spec, NativeTypeSpec::Array);
+    }
+
+    /// Cecil's flat OLE VARENUM wire table (`ReadVariantType` casts the
+    /// raw byte onto its flat enum): each byte decodes to the listed
+    /// variant and encodes back to the same byte.
+    #[test]
+    fn flat_variant_wire_roundtrips() {
+        let flat = [
+            (0x02u8, VariantType::I2),
+            (0x03, VariantType::I4),
+            (0x04, VariantType::R4),
+            (0x05, VariantType::R8),
+            (0x10, VariantType::I1),
+            (0x11, VariantType::U1),
+            (0x12, VariantType::U2),
+            (0x13, VariantType::U4),
+            (0x14, VariantType::I8),
+            (0x15, VariantType::U8),
+            (0x16, VariantType::Int),
+            (0x17, VariantType::UInt),
+        ];
+        for (raw, vt) in flat {
+            assert_eq!(
+                parse_ok(&[0x1d, raw]).spec,
+                NativeTypeSpec::SafeArray {
+                    element_variant: Some(vt),
+                    element_desc: None,
+                },
+                "wire {raw:#04x} must decode to {vt:?}"
+            );
+            assert_eq!(
+                write_ok(NativeTypeSpec::SafeArray {
+                    element_variant: Some(vt),
+                    element_desc: None,
+                }),
+                vec![0x1d, raw],
+                "{vt:?} must encode to {raw:#04x}"
+            );
+        }
+        // The ELEMENT-style low codes never leak through: 0x02 is I2,
+        // not the colliding `Boolean`, and 0x14 is I8, not `String`.
+        assert_ne!(
+            parse_ok(&[0x1d, 0x02]).spec,
+            NativeTypeSpec::SafeArray {
+                element_variant: Some(VariantType::Boolean),
+                element_desc: None,
+            }
+        );
+    }
+
+    /// Members without a distinct flat VARENUM byte are rejected on both
+    /// directions: unknown wire bytes fail to decode, and the ELEMENT-style
+    /// colliding members fail to encode.
+    #[test]
+    fn ambiguous_variant_encodings_fail() {
+        assert!(parse_marshal_spec(&[0x1d, 0x1f], &mut resolver()).is_err());
+        assert!(parse_marshal_spec(&[0x1d, 0xff], &mut resolver()).is_err());
+        for v in [VariantType::Boolean, VariantType::Char, VariantType::String] {
+            assert!(write_marshal_spec(
+                &MarshalInfo {
+                    spec: NativeTypeSpec::SafeArray {
+                        element_variant: Some(v),
+                        element_desc: None,
+                    },
+                },
+                &mut enc_cell()
+            )
+            .is_err());
+        }
     }
 
     /// Blobs lifted verbatim from the Mono.Cecil `marshal.dll` fixture

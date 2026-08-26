@@ -276,18 +276,20 @@ impl<'b> TokenMap<'b> {
     /// * `Def` -> `TypeDef` (rid from [`TokenMap::register_type_row`],
     ///   falling back to arena position + 1),
     /// * `External` (with nesting chain) -> `TypeRef`,
-    /// * `GenericInstance` (and composites requiring one) -> `TypeSpec`.
+    /// * everything else -> `TypeSpec`.
     ///
-    /// Composite shapes (`SzArray`, `Ptr`, `ByRef`, `FnPtr`, `CMod`, ...)
-    /// have no bare-table encoding and yield [`Error::Argument`].
+    /// Every non-table shape is emitted as a `TypeSpec` row whose signature is
+    /// the type's own encoding — this mirrors Mono.Cecil's
+    /// `MetadataBuilder.GetToken`, which routes any `TypeSpecification`
+    /// (generic instances, generic variables, `SzArray`/`Array`, `Ptr`,
+    /// `ByRef`, `FnPtr`, `CMod`, ...) through a fresh `TypeSpec` row whenever
+    /// a bare coded token is needed (IL operands such as `constrained. !!T`,
+    /// `box !0`, `sizeof int[]`, catch-clause types, ...).
     pub fn tdor_cell(&self, ty: &TypeDesc, m: &Module) -> Result<u32> {
         match ty {
             TypeDesc::Def(id) => Ok((Self::rid_of(&self.state.borrow().type_rows, id.0) << 2) | 0),
             TypeDesc::External(_) => Ok((self.intern_external(ty, m)? << 2) | 1),
-            TypeDesc::GenericInstance { .. } => Ok((self.intern_type_spec(ty, m)? << 2) | 2),
-            _ => Err(Error::argument(format!(
-                "type shape {ty:?} has no bare TypeDefOrRef encoding"
-            ))),
+            ty => Ok((self.intern_type_spec(ty, m)? << 2) | 2),
         }
     }
 
@@ -483,6 +485,21 @@ impl<'b> TokenMap<'b> {
         st.ssigs.push(blob.clone());
         st.standalone_ids.insert(blob, rid);
         Ok(Token::new(TableIndex::StandAloneSig, rid))
+    }
+
+    /// Returns the `StandAloneSig` token for a raw signature blob (e.g. a
+    /// `calli` signature captured at read time), deduplicating byte-identical
+    /// blobs into a single pending row. The row drains through
+    /// [`PendingRows::standalone_sigs`] like the local-variable signatures.
+    pub fn stand_alone_sig_blob(&mut self, blob: &[u8]) -> Token {
+        let mut st = self.state.borrow_mut();
+        if let Some(&rid) = st.standalone_ids.get(blob) {
+            return Token::new(TableIndex::StandAloneSig, rid);
+        }
+        let rid = st.ssigs.len() as u32 + 1;
+        st.ssigs.push(blob.to_vec());
+        st.standalone_ids.insert(blob.to_vec(), rid);
+        Token::new(TableIndex::StandAloneSig, rid)
     }
 
     // -- classification ------------------------------------------------------

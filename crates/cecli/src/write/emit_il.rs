@@ -11,8 +11,10 @@
 //! encoding (two passes: layout, then emission), so stale input offsets are
 //! normalized rather than trusted.
 
+use std::collections::BTreeMap;
+
 use cecli_core::io::ByteWriter;
-use cecli_core::{Error, Result, Token};
+use cecli_core::{Error, Result, TableIndex, Token};
 use cecli_cil::{ExceptionHandlerType, OpCode, OperandType};
 
 use crate::model::types::{
@@ -39,14 +41,16 @@ const STRING_TOKEN_TYPE: u32 = 0x70 << 24;
 /// yield `Ok(0)` and leave `out` untouched (Cecil's `IsEmptyMethodBody` rule);
 /// the caller then omits the method from the `MethodDef.RVA` column.
 ///
-/// Fat bodies are padded so their header starts 4-aligned relative to the
-/// start of this body, mirroring `CodeWriter.WriteResolvedMethodBody`; place
-/// the body at a 4-aligned RVA for a spec-conformant image.
+/// Fat headers and EH sections are padded to an ABSOLUTE 4-aligned stream
+/// position (`out.position() % 4`), mirroring Cecil's `Align` semantics where
+/// every body is written into one contiguous code stream; concatenated bodies
+/// therefore stay aligned without relying on each body starting at zero.
 pub fn encode_body(
     body: &ResolvedBody,
     tmap: &mut TokenMap<'_>,
     m: &Module,
     out: &mut ByteWriter,
+    sas_blobs: &BTreeMap<u32, Vec<u8>>,
 ) -> Result<u64> {
     if body.instructions.is_empty() && body.locals.is_empty() {
         return Ok(0);
@@ -61,22 +65,20 @@ pub fn encode_body(
 
     let has_eh = !body.exception_handlers.is_empty();
     if requires_fat_header(code_size, body, has_eh) {
-        align_from(out, start);
+        align_from(out);
         write_fat_header(out, body, tmap, m, code_size as u32, has_eh)?;
     } else {
         // Tiny form: six-bit code size, enforced by the fat-selection rule.
         out.u8(TINY_FORMAT | ((code_size as u8) << 2));
     }
 
-    // Pass 2: emit instructions; all branch displacements derive from the
-    // layout fixed above, so no back-patching is required.
     for (instr, &offset) in body.instructions.iter().zip(&offsets) {
         write_opcode(out, instr.opcode);
-        write_operand(out, instr, offset, tmap, m)?;
+        write_operand(out, instr, offset, tmap, m, sas_blobs)?;
     }
 
     if has_eh {
-        align_from(out, start);
+        align_from(out);
         write_exception_handlers(out, body, tmap, m)?;
     }
 
@@ -179,6 +181,7 @@ fn write_operand(
     offset: i32,
     tmap: &mut TokenMap<'_>,
     m: &Module,
+    sas_blobs: &BTreeMap<u32, Vec<u8>>,
 ) -> Result<()> {
     let opcode_size = instr.opcode.size as i32;
     // Fast path: no operand to encode.
@@ -245,13 +248,22 @@ fn write_operand(
         (ROperand::Field(field), OperandType::InlineField | OperandType::InlineTok) => {
             out.u32(tmap.field_ref(field, m)?.0);
         }
+        // `calli`: remap the read-time StandAloneSig rid through its captured
+        // blob so the emitted token points at this module's deduped row;
+        // unknown rids pass through unchanged (deferred-resolution policy).
+        (ROperand::Token(token), OperandType::InlineSig) => match token.table() {
+            TableIndex::StandAloneSig => match sas_blobs.get(&token.rid()) {
+                Some(blob) => out.u32(tmap.stand_alone_sig_blob(blob).0),
+                None => out.u32(token.0),
+            },
+            _ => out.u32(token.0),
+        },
         (
             ROperand::Token(token),
             OperandType::InlineTok
             | OperandType::InlineType
             | OperandType::InlineMethod
-            | OperandType::InlineField
-            | OperandType::InlineSig,
+            | OperandType::InlineField,
         ) => {
             out.u32(token.0);
         }
@@ -319,9 +331,10 @@ fn to_cil_clause(
     Ok(clause)
 }
 
-/// Pads zeros until `position - start` is 4-aligned.
-fn align_from(out: &mut ByteWriter, start: usize) {
-    while (out.position() - start) % 4 != 0 {
+/// Pads zeros until the writer's ABSOLUTE position is 4-aligned (Cecil `Align`
+/// semantics: bodies concatenate into one code stream).
+fn align_from(out: &mut ByteWriter) {
+    while out.position() % 4 != 0 {
         out.u8(0);
     }
 }
@@ -410,7 +423,7 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        let written = encode_body(&body, &mut tmap, &m, &mut out).expect("encode");
+        let written = encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         let bytes = out.into_vec();
 
         assert_eq!(written as usize, bytes.len());
@@ -443,7 +456,7 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        encode_body(&body, &mut tmap, &m, &mut out).expect("encode");
+        encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         let bytes = out.into_vec();
 
         assert_eq!(&bytes[1..], &[0x00, 0x2B, 0xFD, 0x2A]); // -3 displacement
@@ -460,7 +473,7 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        let written = encode_body(&body, &mut tmap, &m, &mut out).expect("encode");
+        let written = encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         assert_eq!(written, 0);
         assert!(out.is_empty());
     }
@@ -502,7 +515,7 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        let written = encode_body(&body, &mut tmap, &m, &mut out).expect("encode");
+        let written = encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         let bytes = out.into_vec();
         assert_eq!(written as usize, bytes.len());
 
@@ -572,7 +585,7 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        encode_body(&body, &mut tmap, &m, &mut out).expect("encode");
+        encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         let bytes = out.into_vec();
 
         let index = tmap.user_string("hello");
@@ -618,7 +631,7 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        encode_body(&body, &mut tmap, &m, &mut out).expect("encode");
+        encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         let bytes = out.into_vec();
 
         // Code is a single `ret`; section follows after 4-alignment padding.
@@ -654,10 +667,10 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        encode_body(&fits, &mut tmap, &m, &mut out).expect("fits");
+        encode_body(&fits, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("fits");
         assert_eq!(&out.as_slice()[2..6], &0x1234_5678u32.to_le_bytes());
 
-        let err = encode_body(&too_big, &mut tmap, &m, &mut out).unwrap_err();
+        let err = encode_body(&too_big, &mut tmap, &m, &mut out, &BTreeMap::new()).unwrap_err();
         assert!(err.to_string().contains("32 bits"));
     }
 
@@ -697,7 +710,50 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        assert!(encode_body(&bad, &mut tmap, &m, &mut out).is_err());
+        assert!(encode_body(&bad, &mut tmap, &m, &mut out, &BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn calli_sig_token_remapped_through_captured_blob() {
+        // Read-time rid 7 with a captured blob: the emitted token must point
+        // at the writer's own deduped StandAloneSig row, not pass rid 7 raw.
+        let blob = [0x00u8, 0x01, 0x08]; // DEFAULT calling convention, 1 param, i32
+        let mut sas_blobs = BTreeMap::new();
+        sas_blobs.insert(7u32, blob.to_vec());
+
+        let body = ResolvedBody {
+            instructions: vec![
+                instr(0, CALLI, ROperand::Token(Token::new(TableIndex::StandAloneSig, 7))),
+                instr(5, RET, ROperand::None),
+            ],
+            ..Default::default()
+        };
+
+        let mut builder = MetadataBuilder::new("v4.0.30319");
+        let mut tmap = TokenMap::new(&mut builder);
+        let m = Module::default();
+
+        let mut out = ByteWriter::new();
+        encode_body(&body, &mut tmap, &m, &mut out, &sas_blobs).expect("encode");
+        let bytes = out.into_vec();
+
+        let expected = tmap.stand_alone_sig_blob(&blob);
+        assert_ne!(expected.rid(), 7, "writer allocates its own first row");
+        // tiny header (1) + calli opcode (1) + token (4) + ret (1).
+        assert_eq!(&bytes[2..6], &expected.0.to_le_bytes());
+
+        // An unknown read-time rid falls back to the raw passthrough.
+        let stale = ResolvedBody {
+            instructions: vec![instr(0, CALLI, ROperand::Token(Token::new(
+                TableIndex::StandAloneSig,
+                9,
+            )))],
+            ..Default::default()
+        };
+        let mut out2 = ByteWriter::new();
+        encode_body(&stale, &mut tmap, &m, &mut out2, &sas_blobs).expect("encode");
+        let bytes2 = out2.into_vec();
+        assert_eq!(&bytes2[2..6], &Token::new(TableIndex::StandAloneSig, 9).0.to_le_bytes());
     }
 
     /// Maps a resolved operand onto its decoded `cecli-cil` counterpart for

@@ -9,11 +9,11 @@
 
 use cecli::model::security::{decode_security_xml, encode_security_xml};
 use cecli::model::types::{
-    ExternalType, MethodDefinition, MethodId, MethodSignature, Parameter,
+    ExternalType, FieldId, MethodDefinition, MethodId, MethodSignature, Parameter,
     RInstruction, ScopeRef, SecurityDeclaration, TypeDesc, TypeId,
 };
 use cecli::module_def::Module;
-use cecli_core::flags::{MethodAttributes, SecurityAction};
+use cecli_core::flags::{FieldAttributes, MethodAttributes, SecurityAction};
 use cecli_core::{Error, Result};
 
 // ---------------------------------------------------------------------------
@@ -23,9 +23,15 @@ use cecli_core::{Error, Result};
 /// Port of `ModuleDefinitionRocks.cs`.
 pub trait ModuleDefinitionRocks {
     /// All types reachable from this module, in the exact order Cecil's
-    /// `GetAllTypes` yields them: for every top-level type (in arena order),
-    /// nested descendants come *before* their declaring type (the original
-    /// LINQ `SelectMany(...).Prepend(type)` semantics).
+    /// `GetTypes` (exposed as `GetAllTypes`) yields them: a pre-order
+    /// depth-first walk where each declaring type comes *first* and its
+    /// nested descendants follow recursively; top-level roots are visited in
+    /// arena order.
+    ///
+    /// Divergence from Cecil: `ModuleDefinition.Types` always starts with the
+    /// `<Module>` pseudo-row, so Cecil's enumeration includes it. This arena
+    /// stores only real `TypeDef` rows — there is no `<Module>` pseudo-row —
+    /// hence none is yielded.
     fn get_all_types(&self) -> Vec<TypeId>;
 
     /// Finds a top-level type by namespace and simple name with an exact
@@ -35,13 +41,14 @@ pub trait ModuleDefinitionRocks {
     fn get_type_with_generics(&self, ns: &str, name: &str, arity: usize) -> Option<TypeId>;
 }
 
-/// Depth-first walk yielding nested descendants first, then the type itself.
-fn collect_descendants_first(m: &Module, id: TypeId, out: &mut Vec<TypeId>) {
+/// Pre-order depth-first walk: the type itself first, then each nested
+/// subtree recursively (Cecil `ModuleDefinition.GetTypes`).
+fn collect_types_preorder(m: &Module, id: TypeId, out: &mut Vec<TypeId>) {
+    out.push(id);
     let nested = &m.types[id.index()].nested_types;
     for child in nested.iter().copied() {
-        collect_descendants_first(m, child, out);
+        collect_types_preorder(m, child, out);
     }
-    out.push(id);
 }
 
 /// Strips a trailing generic-arity suffix (`` `2 ``) from a metadata name.
@@ -65,7 +72,7 @@ impl ModuleDefinitionRocks for Module {
         for i in 0..self.types.len() {
             let id = TypeId(i as u32);
             if self.types[i].declaring_type.is_none() {
-                collect_descendants_first(self, id, &mut out);
+                collect_types_preorder(self, id, &mut out);
             }
         }
         out
@@ -97,7 +104,8 @@ pub trait TypeDefinitionRocks {
     /// Directly nested types, in declaration order.
     fn get_nested_types(&self, m: &Module) -> Vec<TypeId>;
 
-    /// All constructors (`.ctor` / `.cctor` with SPECIAL_NAME), in declaration
+    /// Constructors: `.ctor` / `.cctor` rows carrying both SPECIAL_NAME and
+    /// RTSPECIAL_NAME (the ECMA constructor marker pair), in declaration
     /// order.
     fn get_constructors(&self, m: &Module) -> Vec<MethodId>;
 
@@ -115,6 +123,13 @@ pub trait TypeDefinitionRocks {
     /// encodes the common "can I new this up?" expectation).
     fn get_default_constructor(&self, m: &Module) -> Option<MethodId>;
 
+    /// Port of `GetEnumUnderlyingType` (Cecil keeps the helper in `Mixin`):
+    /// the type of the first non-static field, which carries an enum's value.
+    /// Errors when the type declares no instance field — unlike Cecil this
+    /// helper does not pre-verify `IsEnum`; the instance-field scan alone
+    /// defines the result.
+    fn get_enum_underlying_type(&self, m: &Module) -> Result<TypeDesc>;
+
     /// Builds a `GENERICINST` over this type. Fails unless `args.len()`
     /// matches the declared generic-parameter count.
     fn make_generic_instance(
@@ -125,8 +140,9 @@ pub trait TypeDefinitionRocks {
 }
 
 fn is_constructor(md: &MethodDefinition) -> bool {
-    md.attributes.contains(MethodAttributes::SPECIAL_NAME)
-        && (md.name == ".ctor" || md.name == ".cctor")
+    md.attributes.contains(
+        MethodAttributes::SPECIAL_NAME | MethodAttributes::RTSPECIAL_NAME,
+    ) && (md.name == ".ctor" || md.name == ".cctor")
 }
 
 impl TypeDefinitionRocks for TypeId {
@@ -196,6 +212,22 @@ impl TypeDefinitionRocks for TypeId {
             definition: Box::new(TypeDesc::Def(*self)),
             arguments: args,
         })
+    }
+
+    fn get_enum_underlying_type(&self, m: &Module) -> Result<TypeDesc> {
+        // Mixin.GetEnumUnderlyingType: the first instance field in
+        // declaration order carries the enum's underlying primitive type.
+        let td = &m.types[self.index()];
+        for fid in &td.fields {
+            let fd = &m.fields[fid.index()];
+            if !fd.attributes.contains(FieldAttributes::STATIC) {
+                return Ok(fd.signature.0.clone());
+            }
+        }
+        Err(Error::argument(format!(
+            "type {} declares no instance field, so it has no enum underlying type",
+            td.name
+        )))
     }
 }
 
@@ -310,7 +342,10 @@ pub trait TypeReferenceRocks {
     fn make_array_type(&self) -> TypeDesc;
 
     /// Multi-dimensional array with `rank` dimensions. `rank == 0` is rejected
-    /// like the C# overload.
+    /// like the C# overload. The frozen [`TypeDesc::Array`] carries no
+    /// explicit rank field, so the rank is preserved by storing
+    /// `sizes`/`lobounds` vectors of length `rank` filled with zeros (the
+    /// unspecified-bounds encoding).
     fn make_array_type_ranked(&self, rank: usize) -> Result<TypeDesc>;
 
     /// Pointer over this type.
@@ -480,12 +515,14 @@ impl TypeReferenceRocks for TypeDesc {
 
     fn make_array_type_ranked(&self, rank: usize) -> Result<TypeDesc> {
         if rank == 0 {
-            return Err(Error::argument("array rank must be greater than zero"));
+            // C# MakeArrayType(0) throws; rank-1 arrays use make_array_type.
+            return Err(Error::argument("array rank must be at least 1"));
         }
         Ok(TypeDesc::Array {
             element: Box::new(self.clone()),
-            sizes: Vec::new(),
-            lobounds: Vec::new(),
+            // Rank-preserving encoding: one zero entry per dimension.
+            sizes: vec![0; rank],
+            lobounds: vec![0; rank],
         })
     }
 
@@ -780,16 +817,16 @@ mod tests {
     }
 
     #[test]
-    fn get_all_types_yields_nested_before_declaring_type() {
+    fn get_all_types_yields_declaring_type_before_nested() {
         let m = sample_module();
         let ids = m.get_all_types();
         let names: Vec<&str> = ids
             .iter()
             .map(|id| m.types[id.index()].name.as_str())
             .collect();
-        // Top-level types in arena order; within a subtree descendants are
-        // yielded before their declaring type (Cecil Prepend semantics).
-        assert_eq!(names, vec!["Widget", "Func`2", "Deeper", "Inner", "Outer"]);
+        // Cecil pre-order DFS: each declaring type precedes its nested
+        // descendants; top-level roots follow arena order.
+        assert_eq!(names, vec!["Widget", "Func`2", "Outer", "Inner", "Deeper"]);
     }
 
     #[test]
@@ -859,8 +896,61 @@ mod tests {
         let md = &m.methods[ctor.expect("public .ctor").index()];
         assert_eq!(md.name, ".ctor");
         assert!(!md.attributes.contains(MethodAttributes::STATIC));
-        // Outer only declares a PRIVATE instance ctor.
+        // Outer only declares a PRIVATE instance ctor — and one lacking
+        // RTSPECIAL_NAME is not a constructor at all, so it never shows up
+        // in the ctor views either.
         assert_eq!(TypeId(4).get_default_constructor(&m), None);
+        assert!(TypeId(4).get_constructors(&m).is_empty());
+        let outer_plain: Vec<&str> = TypeId(4)
+            .get_methods(&m)
+            .iter()
+            .map(|mid| m.methods[mid.index()].name.as_str())
+            .collect();
+        assert!(outer_plain.contains(&".ctor"));
+    }
+
+    #[test]
+    fn get_enum_underlying_type_returns_first_instance_field_type() {
+        let mut m = Module::default();
+        let enum_ty = add_type(
+            &mut m,
+            TypeDefinition {
+                namespace: "NS".into(),
+                name: "Color".into(),
+                ..Default::default()
+            },
+        );
+        let value_field = cecli::model::types::FieldDefinition {
+            name: "value__".into(),
+            attributes: FieldAttributes::PUBLIC,
+            signature: cecli::model::types::FieldSignature(TypeDesc::Internal("int32".into())),
+            ..Default::default()
+        };
+        m.fields.push(value_field);
+        m.types[enum_ty.index()].fields.push(FieldId((m.fields.len() - 1) as u32));
+        let static_field = cecli::model::types::FieldDefinition {
+            name: "Red".into(),
+            attributes: FieldAttributes::PUBLIC | FieldAttributes::STATIC | FieldAttributes::LITERAL,
+            signature: cecli::model::types::FieldSignature(TypeDesc::Def(enum_ty)),
+            ..Default::default()
+        };
+        m.fields.push(static_field);
+        m.types[enum_ty.index()].fields.push(FieldId((m.fields.len() - 1) as u32));
+
+        let underlying = enum_ty
+            .get_enum_underlying_type(&m)
+            .expect("instance field carries the underlying type");
+        assert_eq!(underlying, TypeDesc::Internal("int32".into()));
+
+        // A type with only static fields has no underlying type.
+        let empty = add_type(
+            &mut m,
+            TypeDefinition {
+                name: "NotAnEnum".into(),
+                ..Default::default()
+            },
+        );
+        assert!(empty.get_enum_underlying_type(&m).is_err());
     }
 
     #[test]
@@ -998,7 +1088,8 @@ mod tests {
         match &ranked {
             TypeDesc::Array { element, sizes, lobounds } => {
                 assert_eq!(**element, t);
-                assert!(sizes.is_empty() && lobounds.is_empty());
+                assert_eq!((sizes.len(), lobounds.len()), (2, 2));
+                assert!(sizes.iter().all(|&s| s == 0) && lobounds.iter().all(|&l| l == 0));
             }
             other => panic!("unexpected: {other:?}"),
         }

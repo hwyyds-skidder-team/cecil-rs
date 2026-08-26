@@ -46,6 +46,80 @@ pub const DEFAULT_RUNTIME_VERSION: &str = "v4.0.30319";
 /// use 8 so the facade can place one contiguous blob without per-type knowledge.
 const FIELD_DATA_ALIGN: usize = 8;
 
+/// Rows of the tables Mono.Cecil sorts before serialization
+/// (`MetadataBuilder.SortTables`): buffered during emission, then added to
+/// the builder stably-sorted by their first-column parent/key cell ascending
+/// (coded-cell numeric compare) right before the metadata root finalizes.
+/// These tables are leaves - no emitted cell references their rids - so
+/// deferring their `add_row` calls is rid-safe. (`CustomDebugInformation`
+/// belongs to the same sorted set in Cecil, but its rows are only ever
+/// produced by the portable-PDB writer, never here.)
+#[derive(Default)]
+struct SortedTables {
+    constant: Vec<Vec<u64>>,
+    custom_attribute: Vec<Vec<u64>>,
+    field_marshal: Vec<Vec<u64>>,
+    decl_security: Vec<Vec<u64>>,
+    class_layout: Vec<Vec<u64>>,
+    field_layout: Vec<Vec<u64>>,
+    method_semantics: Vec<Vec<u64>>,
+    impl_map: Vec<Vec<u64>>,
+    /// FieldRva rows carry their FieldId so RVA patch bookkeeping survives
+    /// the sort.
+    field_rva: Vec<(FieldId, Vec<u64>)>,
+    nested_class: Vec<Vec<u64>>,
+}
+
+impl SortedTables {
+    /// Stably sorts every buffer by its first cell and drains it into
+    /// `builder`; FieldRva placeholder rows extend `rva_patches` with their
+    /// FINAL (sorted) row indexes.
+    fn flush(
+        self,
+        builder: &mut MetadataBuilder,
+        rva_patches: &mut Vec<(FieldId, usize)>,
+    ) -> Result<()> {
+        let Self {
+            constant,
+            custom_attribute,
+            field_marshal,
+            decl_security,
+            class_layout,
+            field_layout,
+            method_semantics,
+            impl_map,
+            mut field_rva,
+            nested_class,
+        } = self;
+        for (table, mut rows) in [
+            (TableIndex::Constant, constant),
+            (TableIndex::CustomAttribute, custom_attribute),
+            (TableIndex::FieldMarshal, field_marshal),
+            (TableIndex::DeclSecurity, decl_security),
+            (TableIndex::ClassLayout, class_layout),
+            (TableIndex::FieldLayout, field_layout),
+            (TableIndex::MethodSemantics, method_semantics),
+            (TableIndex::ImplMap, impl_map),
+            (TableIndex::NestedClass, nested_class),
+        ] {
+            // `sort_by_key` is stable: equal keys keep first-encounter order,
+            // matching Cecil's sort stability guarantees.
+            rows.sort_by_key(|row| row[0]);
+            for row in rows {
+                builder.add_row(table, &row)?;
+            }
+        }
+        field_rva.sort_by_key(|(_, row)| row[0]);
+        for (fid, row) in &field_rva {
+            let rid = builder.add_row(TableIndex::FieldRva, row)?;
+            if row[0] == 0 {
+                rva_patches.push((*fid, rid as usize - 1));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Result of metadata emission.
 #[derive(Debug)]
 pub struct EmittedMetadata {
@@ -132,6 +206,7 @@ pub fn emit_metadata_with(
     let mut local_var_sig_tokens: Vec<(MethodId, Token)> = Vec::new();
     // Whether the Assembly row exists (drives Assembly-parented side tables).
     let mut assembly_emitted = false;
+    let mut sorted = SortedTables::default();
 
     // -- Module (ECMA-335 II §22.30): generation, name, MVID, EncId, EncBaseId.
     let name_idx = tmap.builder().insert_string(&m.name);
@@ -342,14 +417,11 @@ pub fn emit_metadata_with(
 
         // ClassLayout row (§22.9).
         if let Some(cl) = td.class_layout {
-            tmap.builder().add_row(
-                TableIndex::ClassLayout,
-                &[
-                    cl.packing_size as i16 as u16 as u64,
-                    cl.class_size as i32 as u32 as u64,
-                    type_rid as u64,
-                ],
-            )?;
+            sorted.class_layout.push(vec![
+                cl.packing_size as i16 as u16 as u64,
+                cl.class_size as i32 as u32 as u64,
+                type_rid as u64,
+            ]);
         }
 
         // Fields (§22.16) plus their satellite rows, in Cecil's per-field order:
@@ -374,36 +446,26 @@ pub fn emit_metadata_with(
                 }
                 let chunk_offset = field_data.len() as u64;
                 field_data.extend_from_slice(&fd.initial_value);
-                {
-                    let rva = if layout.data_segment_rva != 0 {
-                        layout.data_segment_rva + chunk_offset
-                    } else {
-                        0
-                    };
-                    let rid = tmap
-                        .builder()
-                        .add_row(TableIndex::FieldRva, &[rva, frid as u64])?;
-                    if rva == 0 {
-                        rva_patches.push((*fid, rid as usize - 1));
-                    }
-                }
+                let rva = if layout.data_segment_rva != 0 {
+                    layout.data_segment_rva + chunk_offset
+                } else {
+                    0
+                };
+                sorted.field_rva.push((*fid, vec![rva, frid as u64]));
             }
 
             if let Some(off) = fd.offset {
-                tmap.builder().add_row(
-                    TableIndex::FieldLayout,
-                    &[off as i32 as u32 as u64, frid as u64],
-                )?;
+                sorted.field_layout.push(vec![off as i32 as u32 as u64, frid as u64]);
             }
 
             for ca in &fd.custom_attributes {
-                add_custom_attribute(&mut tmap, m, TableIndex::Field, frid, ca)?;
+                add_custom_attribute(&mut tmap, m, TableIndex::Field, frid, ca, &mut sorted)?;
             }
             if let Some(c) = &fd.constant {
-                add_constant(&mut tmap, &coded::HAS_CONSTANT, TableIndex::Field, frid, c)?;
+                add_constant(&mut tmap, &coded::HAS_CONSTANT, TableIndex::Field, frid, c, &mut sorted)?;
             }
             if let Some(mi) = &fd.marshal_info {
-                add_marshal_info(&mut tmap, m, &coded::HAS_FIELD_MARSHAL, TableIndex::Field, frid, mi)?;
+                add_marshal_info(&mut tmap, m, &coded::HAS_FIELD_MARSHAL, TableIndex::Field, frid, mi, &mut sorted)?;
             }
         }
 
@@ -443,13 +505,13 @@ pub fn emit_metadata_with(
             if requires_parameter_row(&md.return_parameter) {
                 let prid = next_param_rid;
                 next_param_rid += 1;
-                add_parameter(&mut tmap, m, prid, 0, &md.return_parameter)?;
+                add_parameter(&mut tmap, m, prid, 0, &md.return_parameter, &mut sorted)?;
             }
             for (i, p) in md.parameters.iter().enumerate() {
                 if requires_parameter_row(p) {
                     let prid = next_param_rid;
                     next_param_rid += 1;
-                    add_parameter(&mut tmap, m, prid, i as u16 + 1, p)?;
+                    add_parameter(&mut tmap, m, prid, i as u16 + 1, p, &mut sorted)?;
                 }
             }
 
@@ -465,22 +527,19 @@ pub fn emit_metadata_with(
                 let entry_idx = tmap.builder().insert_string(&pk.entry_point);
                 let forwarded =
                     encode_coded(&coded::MEMBER_FORWARDED, TableIndex::MethodDef, mrid)?;
-                tmap.builder().add_row(
-                    TableIndex::ImplMap,
-                    &[
-                        pk.attributes.bits() as u64,
-                        forwarded,
-                        entry_idx as u64,
-                        pos as u64 + 1,
-                    ],
-                )?;
+                sorted.impl_map.push(vec![
+                    pk.attributes.bits() as u64,
+                    forwarded,
+                    entry_idx as u64,
+                    pos as u64 + 1,
+                ]);
             }
 
             for ca in &md.custom_attributes {
-                add_custom_attribute(&mut tmap, m, TableIndex::MethodDef, mrid, ca)?;
+                add_custom_attribute(&mut tmap, m, TableIndex::MethodDef, mrid, ca, &mut sorted)?;
             }
             for d in &md.security_declarations {
-                add_decl_security(&mut tmap, &coded::HAS_DECL_SECURITY, TableIndex::MethodDef, mrid, d)?;
+                add_decl_security(&mut tmap, &coded::HAS_DECL_SECURITY, TableIndex::MethodDef, mrid, d, &mut sorted)?;
             }
             for ov in &md.overrides {
                 let body_tok = tmap.method_ref(&ov.body, m)?;
@@ -528,22 +587,19 @@ pub fn emit_metadata_with(
                     &[pd.attributes.bits() as u64, pname as u64, psig as u64],
                 )?;
                 if let Some(getter) = pd.get_method {
-                    add_semantic(&mut tmap, MethodSemanticsAttributes::GETTER, getter,
-                        &coded::HAS_SEMANTICS, TableIndex::Property, prid)?;
+                    add_semantic(&mut tmap, MethodSemanticsAttributes::GETTER, getter, &coded::HAS_SEMANTICS, TableIndex::Property, prid, &mut sorted)?;
                 }
                 if let Some(setter) = pd.set_method {
-                    add_semantic(&mut tmap, MethodSemanticsAttributes::SETTER, setter,
-                        &coded::HAS_SEMANTICS, TableIndex::Property, prid)?;
+                    add_semantic(&mut tmap, MethodSemanticsAttributes::SETTER, setter, &coded::HAS_SEMANTICS, TableIndex::Property, prid, &mut sorted)?;
                 }
                 for other in &pd.other_methods {
-                    add_semantic(&mut tmap, MethodSemanticsAttributes::OTHER, *other,
-                        &coded::HAS_SEMANTICS, TableIndex::Property, prid)?;
+                    add_semantic(&mut tmap, MethodSemanticsAttributes::OTHER, *other, &coded::HAS_SEMANTICS, TableIndex::Property, prid, &mut sorted)?;
                 }
                 for ca in &pd.custom_attributes {
-                    add_custom_attribute(&mut tmap, m, TableIndex::Property, prid, ca)?;
+                    add_custom_attribute(&mut tmap, m, TableIndex::Property, prid, ca, &mut sorted)?;
                 }
                 if let Some(c) = &pd.constant {
-                    add_constant(&mut tmap, &coded::HAS_CONSTANT, TableIndex::Property, prid, c)?;
+                    add_constant(&mut tmap, &coded::HAS_CONSTANT, TableIndex::Property, prid, c, &mut sorted)?;
                 }
             }
         }
@@ -567,33 +623,29 @@ pub fn emit_metadata_with(
                     &[ed.attributes.bits() as u64, ename as u64, event_type_cell as u64],
                 )?;
                 if let Some(add_on) = ed.add_on {
-                    add_semantic(&mut tmap, MethodSemanticsAttributes::ADD_ON, add_on,
-                        &coded::HAS_SEMANTICS, TableIndex::Event, erid)?;
+                    add_semantic(&mut tmap, MethodSemanticsAttributes::ADD_ON, add_on, &coded::HAS_SEMANTICS, TableIndex::Event, erid, &mut sorted)?;
                 }
                 if let Some(remove_on) = ed.remove_on {
-                    add_semantic(&mut tmap, MethodSemanticsAttributes::REMOVE_ON, remove_on,
-                        &coded::HAS_SEMANTICS, TableIndex::Event, erid)?;
+                    add_semantic(&mut tmap, MethodSemanticsAttributes::REMOVE_ON, remove_on, &coded::HAS_SEMANTICS, TableIndex::Event, erid, &mut sorted)?;
                 }
                 if let Some(fire) = ed.fire {
-                    add_semantic(&mut tmap, MethodSemanticsAttributes::FIRE, fire,
-                        &coded::HAS_SEMANTICS, TableIndex::Event, erid)?;
+                    add_semantic(&mut tmap, MethodSemanticsAttributes::FIRE, fire, &coded::HAS_SEMANTICS, TableIndex::Event, erid, &mut sorted)?;
                 }
                 for other in &ed.other_methods {
-                    add_semantic(&mut tmap, MethodSemanticsAttributes::OTHER, *other,
-                        &coded::HAS_SEMANTICS, TableIndex::Event, erid)?;
+                    add_semantic(&mut tmap, MethodSemanticsAttributes::OTHER, *other, &coded::HAS_SEMANTICS, TableIndex::Event, erid, &mut sorted)?;
                 }
                 for ca in &ed.custom_attributes {
-                    add_custom_attribute(&mut tmap, m, TableIndex::Event, erid, ca)?;
+                    add_custom_attribute(&mut tmap, m, TableIndex::Event, erid, ca, &mut sorted)?;
                 }
             }
         }
 
         // Type-level custom attributes and security declarations.
         for ca in &td.custom_attributes {
-            add_custom_attribute(&mut tmap, m, TableIndex::TypeDef, type_rid, ca)?;
+            add_custom_attribute(&mut tmap, m, TableIndex::TypeDef, type_rid, ca, &mut sorted)?;
         }
         for d in &td.security_declarations {
-            add_decl_security(&mut tmap, &coded::HAS_DECL_SECURITY, TableIndex::TypeDef, type_rid, d)?;
+            add_decl_security(&mut tmap, &coded::HAS_DECL_SECURITY, TableIndex::TypeDef, type_rid, d, &mut sorted)?;
         }
     }
 
@@ -601,10 +653,9 @@ pub fn emit_metadata_with(
     // order: nested rid, enclosing rid.
     for (ti, td) in m.types.iter().enumerate() {
         if let Some(parent) = td.declaring_type {
-            tmap.builder().add_row(
-                TableIndex::NestedClass,
-                &[ti as u64 + 1, parent.0 as u64 + 1],
-            )?;
+            sorted
+                .nested_class
+                .push(vec![ti as u64 + 1, parent.0 as u64 + 1]);
         }
     }
 
@@ -638,7 +689,7 @@ pub fn emit_metadata_with(
                 .add_row(TableIndex::GenericParamConstraint, &[grid as u64, cell as u64])?;
         }
         for ca in &gp.custom_attributes {
-            add_custom_attribute(&mut tmap, m, TableIndex::GenericParam, grid, ca)?;
+            add_custom_attribute(&mut tmap, m, TableIndex::GenericParam, grid, ca, &mut sorted)?;
         }
     }
 
@@ -647,17 +698,17 @@ pub fn emit_metadata_with(
     if let Some(name) = asm {
         if assembly_emitted {
             for ca in &name.custom_attributes {
-                add_custom_attribute(&mut tmap, m, TableIndex::Assembly, 1, ca)?;
+                add_custom_attribute(&mut tmap, m, TableIndex::Assembly, 1, ca, &mut sorted)?;
             }
             for d in &name.security_declarations {
-                add_decl_security(&mut tmap, &coded::HAS_DECL_SECURITY, TableIndex::Assembly, 1, d)?;
+                add_decl_security(&mut tmap, &coded::HAS_DECL_SECURITY, TableIndex::Assembly, 1, d, &mut sorted)?;
             }
         }
     }
     // Custom attributes attached to assembly references.
     for (i, r) in m.assembly_refs.iter().enumerate() {
         for ca in &r.custom_attributes {
-                add_custom_attribute(&mut tmap, m, TableIndex::AssemblyRef, i as u32 + 1, ca)?;
+                add_custom_attribute(&mut tmap, m, TableIndex::AssemblyRef, i as u32 + 1, ca, &mut sorted)?;
         }
     }
 
@@ -688,6 +739,8 @@ pub fn emit_metadata_with(
     for s in &pending.standalone_sigs {
         builder.add_row(TableIndex::StandAloneSig, &[*s as u64])?;
     }
+    // -- Emit the Cecil-sorted tables stably ordered by their first column.
+    sorted.flush(builder, &mut rva_patches)?;
 
     let entry_point_token = entry
         .map(|id| Token::new(TableIndex::MethodDef, id.0 + 1))
@@ -756,6 +809,7 @@ fn add_parameter(
     rid: u32,
     sequence: u16,
     p: &Parameter,
+    sorted: &mut SortedTables,
 ) -> Result<()> {
     let name = tmap.builder().insert_string(&p.name);
     tmap.builder().add_row(
@@ -763,13 +817,13 @@ fn add_parameter(
         &[p.attributes.bits() as u64, sequence as u64, name as u64],
     )?;
     for ca in &p.custom_attributes {
-        add_custom_attribute(tmap, m, TableIndex::Param, rid, ca)?;
+        add_custom_attribute(tmap, m, TableIndex::Param, rid, ca, sorted)?;
     }
     if let Some(c) = &p.constant {
-        add_constant(tmap, &coded::HAS_CONSTANT, TableIndex::Param, rid, c)?;
+        add_constant(tmap, &coded::HAS_CONSTANT, TableIndex::Param, rid, c, sorted)?;
     }
     if let Some(mi) = &p.marshal_info {
-        add_marshal_info(tmap, m, &coded::HAS_FIELD_MARSHAL, TableIndex::Param, rid, mi)?;
+        add_marshal_info(tmap, m, &coded::HAS_FIELD_MARSHAL, TableIndex::Param, rid, mi, sorted)?;
     }
     Ok(())
 }
@@ -781,14 +835,13 @@ fn add_custom_attribute(
     table: TableIndex,
     rid: u32,
     ca: &CustomAttribute,
+    sorted: &mut SortedTables,
 ) -> Result<()> {
     let ctor = tmap.method_ref(&ca.constructor, m)?;
     let parent = encode_coded(&coded::HAS_CUSTOM_ATTRIBUTE, table, rid)?;
     let ty_cell = encode_coded(&coded::CUSTOM_ATTRIBUTE_TYPE, ctor.table(), ctor.rid())?;
     let blob = tmap.builder().insert_blob(&ca.blob);
-    tmap
-        .builder()
-        .add_row(TableIndex::CustomAttribute, &[parent, ty_cell, blob as u64])?;
+    sorted.custom_attribute.push(vec![parent, ty_cell, blob as u64]);
     Ok(())
 }
 
@@ -801,6 +854,7 @@ fn add_constant(
     table: TableIndex,
     rid: u32,
     value: &ConstantValue,
+    sorted: &mut SortedTables,
 ) -> Result<()> {
     let (tag, payload): (u8, Vec<u8>) = match value {
         ConstantValue::String(s) => (
@@ -810,10 +864,8 @@ fn add_constant(
         other => write_constant_blob(other)?,
     };
     let parent = encode_coded(group, table, rid)?;
-    let blob = tmap.builder().insert_blob(&payload);
-    tmap
-        .builder()
-        .add_row(TableIndex::Constant, &[tag as u64, 0, parent, blob as u64])?;
+    let blob_idx = tmap.builder().insert_blob(&payload);
+    sorted.constant.push(vec![tag as u64, 0, parent, blob_idx as u64]);
     Ok(())
 }
 
@@ -825,6 +877,7 @@ fn add_marshal_info(
     table: TableIndex,
     rid: u32,
     info: &MarshalInfo,
+    sorted: &mut SortedTables,
 ) -> Result<()> {
     let blob = {
         let tm_ref = &*tmap;
@@ -833,9 +886,7 @@ fn add_marshal_info(
     };
     let blob_idx = tmap.builder().insert_blob(&blob);
     let parent = encode_coded(group, table, rid)?;
-    tmap
-        .builder()
-        .add_row(TableIndex::FieldMarshal, &[parent, blob_idx as u64])?;
+    sorted.field_marshal.push(vec![parent, blob_idx as u64]);
     Ok(())
 }
 
@@ -846,12 +897,13 @@ fn add_decl_security(
     table: TableIndex,
     rid: u32,
     d: &SecurityDeclaration,
+    sorted: &mut SortedTables,
 ) -> Result<()> {
     let blob = tmap.builder().insert_blob(&d.blob);
     let parent = encode_coded(group, table, rid)?;
-    tmap
-        .builder()
-        .add_row(TableIndex::DeclSecurity, &[d.action as u16 as u64, parent, blob as u64])?;
+    sorted
+        .decl_security
+        .push(vec![d.action as u16 as u64, parent, blob as u64]);
     Ok(())
 }
 
@@ -863,12 +915,14 @@ fn add_semantic(
     group: &'static CodedIndexGroup,
     table: TableIndex,
     rid: u32,
+    sorted: &mut SortedTables,
 ) -> Result<()> {
     let owner = encode_coded(group, table, rid)?;
-    tmap.builder().add_row(
-        TableIndex::MethodSemantics,
-        &[semantics.bits() as u64, method.0 as u64 + 1, owner],
-    )?;
+    sorted.method_semantics.push(vec![
+        semantics.bits() as u64,
+        method.0 as u64 + 1,
+        owner,
+    ]);
     Ok(())
 }
 
@@ -1138,13 +1192,16 @@ mod tests {
             strings.get(cell::<u32>(&reader, TableIndex::MethodDef, 1, 3)).unwrap(),
             "GetX"
         );
-
-        // Semantics: getter -> Property tag 1 rid 1, addon -> Event tag 0 rid 1.
+        // Semantics rows are STABLY SORTED by their FIRST column - the
+        // SemanticsAttributes flag (A7-F1) - not the parent cell: the
+        // Property getter (flag 2) precedes the Event add-on (flag 8)
+        // although add_E was emitted first.
         let sem = reader.row(TableIndex::MethodSemantics, 1).unwrap();
         assert_eq!(
             cecli_metadata::decode_coded(&coded::HAS_SEMANTICS, sem[2]),
             Some((TableIndex::Property, 1))
         );
+        assert_eq!(sem[1], 2, "getter is MethodDef rid 2");
         let sem2 = reader.row(TableIndex::MethodSemantics, 2).unwrap();
         assert_eq!(
             cecli_metadata::decode_coded(&coded::HAS_SEMANTICS, sem2[2]),
@@ -1243,5 +1300,42 @@ mod tests {
             .all(|(x, y)| x == y);
         // GUID heap input is fixed ([7u8;16]), so the whole root must repeat.
         assert!(same, "metadata root must be byte-deterministic");
+    }
+
+    #[test]
+    fn sorted_tables_flush_stably_by_first_cell() {
+        // A7-F1: Cecil sorts Constant/CustomAttribute/FieldMarshal/DeclSecurity/
+        // ClassLayout/FieldLayout/MethodSemantics/ImplMap/FieldRva/NestedClass by
+        // their first-column key cell before serialization. Keys are pushed in
+        // deliberately descending order here.
+        let mut builder = MetadataBuilder::new("v4.0.30319");
+        let mut patches = Vec::new();
+        let mut s = SortedTables::default();
+        s.custom_attribute.push(vec![7, 1, 2]);
+        s.custom_attribute.push(vec![3, 3, 4]);
+        s.method_semantics.push(vec![9, 1, 30]);
+        s.method_semantics.push(vec![5, 99, 31]);
+        s.method_semantics.push(vec![5, 98, 32]); // equal key: stability keeps 99 first
+        s.field_rva.push((FieldId(1), vec![0, 2])); // placeholder patch
+        s.field_rva.push((FieldId(0), vec![0x2000, 1]));
+        s.flush(&mut builder, &mut patches).expect("flush");
+
+        let root = builder.finalize();
+        let reader = MetadataReader::parse(&root).expect("parse");
+        assert_eq!(reader.row_count(TableIndex::CustomAttribute), 2);
+        assert_eq!(reader.column(TableIndex::CustomAttribute, 1, 0).unwrap(), 3);
+        assert_eq!(reader.column(TableIndex::CustomAttribute, 2, 0).unwrap(), 7);
+        assert_eq!(reader.row_count(TableIndex::MethodSemantics), 3);
+        assert_eq!(reader.column(TableIndex::MethodSemantics, 1, 0).unwrap(), 5);
+        assert_eq!(reader.column(TableIndex::MethodSemantics, 1, 1).unwrap(), 99);
+        assert_eq!(reader.column(TableIndex::MethodSemantics, 2, 0).unwrap(), 5);
+        assert_eq!(reader.column(TableIndex::MethodSemantics, 2, 1).unwrap(), 98);
+        // FieldRva rows sort ascending by Rva cell; the zero placeholder lands
+        // first. Patches record the ZERO-BASED sorted position (the consumer
+        // adds one to reach the final rid).
+        assert_eq!(reader.row_count(TableIndex::FieldRva), 2);
+        assert_eq!(reader.column(TableIndex::FieldRva, 1, 0).unwrap(), 0);
+        assert_eq!(reader.column(TableIndex::FieldRva, 2, 0).unwrap(), 0x2000);
+        assert_eq!(patches, vec![(FieldId(1), 0)]);
     }
 }

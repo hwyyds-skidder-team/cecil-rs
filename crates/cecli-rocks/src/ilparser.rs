@@ -5,10 +5,12 @@
 //! callback per operand kind. Here bodies arrive already decoded
 //! ([`ResolvedBody`]), so the same logic becomes
 //!
-//! * [`validate_body`] - re-plays the parser's per-`OperandType` dispatch as a
-//!   consistency check: every instruction operand must have the shape its
-//!   opcode demands, branch/switch targets must land inside the code, local
-//!   variable indices must exist, and exception-clause ranges must be sane;
+//! * [`validate_body`] / [`validate_body_for`] - re-plays the parser's
+//!   per-`OperandType` dispatch as a consistency check: every instruction
+//!   operand must have the shape its opcode demands, branch/switch targets
+//!   must land inside the code, local-variable indices must exist, argument
+//!   indices are checked against the caller-supplied parameter count, and
+//!   exception-clause ranges must be sane;
 //! * [`visit`] - the visitor walk (index + instruction pairs);
 //! * [`collect_branch_targets`] / [`find_by_offset`] - small query helpers.
 //!
@@ -88,16 +90,40 @@ fn invalid(idx: usize, msg: String) -> Error {
     Error::invalid_op(format!("instruction #{idx}: {msg}"))
 }
 
-/// Validates a resolved body:
+/// Validates a resolved body without argument-index checking.
 ///
 /// * every operand kind agrees with `opcode.operand_type`
 ///   ([`operand_matches`]);
 /// * instruction offsets are non-decreasing and never overlap;
 /// * branch and switch targets lie within `[0, code_size]`;
-/// * local variable indices are `< locals.len()`;
+/// * local variable indices (`ldloc*`/`stloc*`) are `< locals.len()`;
 /// * exception-handler try/handler ranges stay inside the code with
 ///   non-negative lengths, and filter offsets point into the code.
+///
+/// Argument-carrying opcodes (`ldarg`, `ldarg.s`, `starg.s`, `ldarga.s`)
+/// cannot be range-checked here: a resolved body does not know its method's
+/// parameter count. This wrapper therefore delegates to
+/// [`validate_body_for`] with a `usize::MAX` parameter count, which lets any
+/// well-shaped argument index pass while still rejecting malformed operands.
+/// Callers that know the declaring method should prefer
+/// [`validate_body_for`].
 pub fn validate_body(body: &ResolvedBody) -> Result<()> {
+    validate_body_for(body, usize::MAX)
+}
+
+/// Validates a resolved body with full argument checking.
+///
+/// Same rules as [`validate_body`], plus:
+///
+/// * argument indices (`ShortInlineArg`/`InlineArg` opcodes) are
+///   `< param_count`.
+///
+/// `param_count` is the caller-supplied slot count for argument operands;
+/// for an instance method the implicit `this` occupies slot 0, so callers
+/// should pass `1 + parameters.len()` there, matching ECMA-335 II §15.4.1.
+/// The `Ldarg_0..Ldarg_3` macro opcodes carry no operand
+/// (`OperandType::InlineNone`) and are covered by the shape check only.
+pub fn validate_body_for(body: &ResolvedBody, param_count: usize) -> Result<()> {
     let end = code_size(body);
 
     let mut expected_min = 0i32;
@@ -143,14 +169,30 @@ pub fn validate_body(body: &ResolvedBody) -> Result<()> {
                 }
             }
             ROperand::Var(index) => {
-                if (*index as usize) >= body.locals.len() {
-                    return Err(invalid(
-                        idx,
-                        format!(
-                            "variable index {index} out of range ({} locals)",
-                            body.locals.len()
-                        ),
-                    ));
+                // `ROperand::Var` stores both argument and local slots; the
+                // opcode's operand kind decides which table the index names.
+                match ins.opcode.operand_type {
+                    OperandType::ShortInlineArg | OperandType::InlineArg => {
+                        if (*index as usize) >= param_count {
+                            return Err(invalid(
+                                idx,
+                                format!(
+                                    "argument index {index} out of range ({param_count} parameter slots)"
+                                ),
+                            ));
+                        }
+                    }
+                    _ => {
+                        if (*index as usize) >= body.locals.len() {
+                            return Err(invalid(
+                                idx,
+                                format!(
+                                    "variable index {index} out of range ({} locals)",
+                                    body.locals.len()
+                                ),
+                            ));
+                        }
+                    }
                 }
             }
             _ => {}
@@ -286,6 +328,56 @@ mod tests {
         let mut body = ok_body();
         body.instructions[3].operand = ROperand::Branch(999);
         assert!(validate_body(&body).is_err());
+    }
+
+    /// Zero-local body exercising the argument opcodes:
+    /// `ldarg.s 0@0` (2 bytes) | `ret@2`.
+    fn arg_body() -> ResolvedBody {
+        ResolvedBody {
+            locals: Vec::new(),
+            instructions: vec![
+                ins(0, opcodes::LDARG_S, ROperand::Var(0)),
+                ins(2, opcodes::RET, ROperand::None),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ldarg_on_zero_local_method_passes_with_parameter_count() {
+        let body = arg_body();
+        // The macro `ldarg.0` carries no operand and always passes.
+        validate_body_for(&body, 1).expect("one parameter slot covers ldarg.0/ldarg.s 0");
+    }
+
+    #[test]
+    fn arg_indices_validate_against_supplied_parameter_count() {
+        let mut body = arg_body();
+        assert!(
+            validate_body_for(&body, 0).is_err(),
+            "ldarg.s 0 needs at least one parameter slot"
+        );
+        body.instructions[0].operand = ROperand::Var(3);
+        assert!(validate_body_for(&body, 4).is_ok());
+        assert!(validate_body_for(&body, 3).is_err());
+    }
+
+    #[test]
+    fn validate_body_without_provider_skips_arg_range_check() {
+        let body = arg_body();
+        // No parameter count is known here; well-shaped args must pass.
+        validate_body(&body).expect("argument indices are unchecked without a provider");
+    }
+
+    #[test]
+    fn local_indices_still_validate_without_parameter_count() {
+        // stloc.s into a nonexistent local stays an error even though the
+        // wrapper passes usize::MAX as the parameter count.
+        let mut body = ok_body();
+        body.instructions[6].opcode = opcodes::STLOC_S;
+        body.instructions[6].operand = ROperand::Var(9); // only 1 local
+        assert!(validate_body(&body).is_err());
+        assert!(validate_body_for(&body, usize::MAX).is_err());
     }
 
     #[test]

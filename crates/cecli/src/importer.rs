@@ -8,24 +8,29 @@
 //!
 //! * A local definition (`Def`) maps to the matching `Def` in the target when
 //!   one exists (same namespace, name, and declaring-type chain), otherwise to
-//!   an [`TypeDesc::External`] whose scope is the best [`ScopeRef::Assembly`]
-//!   match for the source module's own assembly name in
-//!   `target.assembly_refs`, falling back to [`ScopeRef::Moduleless`] (v1 does
-//!   not append a new `AssemblyRef` row; Mono.Cecil would add one).
+//!   an [`TypeDesc::External`] whose scope is resolved against the source
+//!   assembly's identity (see below).
 //! * Composite shapes (`SzArray`, `Array`, `Ptr`, `ByRef`, `Pinned`,
 //!   `GenericInstance`, `FnPtr`, `CMod`) recurse into their element types /
 //!   signatures. `Var` / `MVar` are context-bound numbers and pass through
 //!   untouched.
 //! * Already-external references are re-scoped against the target's assembly
-//!   references by name (`ThisModule` scope is treated as source-local).
+//!   references by identity (name + version + culture + public key or token).
+//!   When no reference matches, a deduped clone of the incoming
+//!   [`AssemblyNameReference`] is appended to `target.assembly_refs` and the
+//!   scope points at it - mirroring Mono.Cecil's `ImportReference`. A
+//!   `ThisModule` scope is treated as source-local.
 //!
-//! Matching rule (documented contract): a `Def` maps to `Def(target)` only via
-//! the structural scan in [`find_matching`] - there is no deep semantic merge
-//! (no member-by-member unification) in v1.
+//! * The source module's own assembly identity is taken from the optional
+//!   `source_identity` parameter on [`Importer::new`] and the free functions
+//!   (the facade passes its own assembly-name reference). When absent, the
+//!   importer falls back to matching `source.name` against the target's
+//!   assembly references by name only, and to [`ScopeRef::Moduleless`] when
+//!   nothing matches.
 
 use crate::model::types::{
-    ExternalField, ExternalMethod, ExternalType, FieldRef, FieldSignature, MethodRef,
-    MethodSignature, ScopeRef, TypeDefinition, TypeDesc, TypeId,
+    AssemblyNameReference, ExternalField, ExternalMethod, ExternalType, FieldRef, FieldSignature,
+    MethodRef, MethodSignature, ScopeRef, TypeDesc, TypeId,
 };
 use crate::module_def::Module;
 
@@ -38,18 +43,36 @@ use crate::module_def::Module;
 pub struct Importer<'a> {
     /// Module the incoming references were built against.
     pub source: &'a Module,
-    /// Module the remapped references must be valid in.
-    pub target: &'a Module,
+    /// Module the remapped references must be valid in. The importer may
+    /// append missing [`AssemblyNameReference`] rows to it while importing.
+    pub target: &'a mut Module,
+    /// Identity of the source assembly used to scope source-local
+    /// definitions. When `None`, the importer approximates with
+    /// `source.name`.
+    pub source_identity: Option<&'a AssemblyNameReference>,
 }
 
 impl<'a> Importer<'a> {
     /// Creates an importer remapping `source` references into `target`.
-    pub fn new(source: &'a Module, target: &'a Module) -> Self {
-        Importer { source, target }
+    ///
+    /// `source_identity` is the source assembly's own name reference; pass it
+    /// whenever the caller knows the assembly identity (the facade passes its
+    /// own). With `None`, source-local definitions fall back to a name-only
+    /// match against `source.name` in `target.assembly_refs`.
+    pub fn new(
+        source: &'a Module,
+        target: &'a mut Module,
+        source_identity: Option<&'a AssemblyNameReference>,
+    ) -> Self {
+        Importer {
+            source,
+            target,
+            source_identity,
+        }
     }
 
     /// Imports a type reference (free-function form: [`import_type`]).
-    pub fn import_type(&self, ty: &TypeDesc) -> TypeDesc {
+    pub fn import_type(&mut self, ty: &TypeDesc) -> TypeDesc {
         match ty {
             TypeDesc::Def(id) => self.import_def(*id),
             TypeDesc::External(ext) => {
@@ -98,18 +121,20 @@ impl<'a> Importer<'a> {
     /// Imports a method reference (free-function form: [`import_method`]).
     ///
     /// A `Def` is always rebuilt as an [`ExternalMethod`] cloned from the
-    /// source definition (name + remapped signature + remapped parent); v1
-    /// performs no member-level merge even when the declaring type resolves to
-    /// a `Def` in the target.
-    pub fn import_method(&self, r: &MethodRef) -> MethodRef {
+    /// source definition (name + remapped signature + remapped parent); no
+    /// member-level merge is performed even when the declaring type resolves
+    /// to a `Def` in the target.
+    pub fn import_method(&mut self, r: &MethodRef) -> MethodRef {
         match r {
             MethodRef::Def(id) => {
-                let method = &self.source.methods[id.index()];
-                let parent = self.import_type(&TypeDesc::Def(method.declaring_type));
+                let parent =
+                    self.import_type(&TypeDesc::Def(self.source.methods[id.index()].declaring_type));
+                let name = self.source.methods[id.index()].name.clone();
+                let signature = self.source.methods[id.index()].signature.clone();
                 MethodRef::External(ExternalMethod {
                     parent,
-                    name: method.name.clone(),
-                    signature: self.import_signature(&method.signature),
+                    name,
+                    signature: self.import_signature(&signature),
                 })
             }
             MethodRef::External(external) => MethodRef::External(ExternalMethod {
@@ -128,13 +153,16 @@ impl<'a> Importer<'a> {
     ///
     /// A `Def` is always rebuilt as an [`ExternalField`] cloned from the source
     /// definition, mirroring [`Importer::import_method`].
-    pub fn import_field(&self, r: &FieldRef) -> FieldRef {
+    pub fn import_field(&mut self, r: &FieldRef) -> FieldRef {
         match r {
             FieldRef::Def(id) => {
-                let field = &self.source.fields[id.index()];
                 // Recover the declaring type by scanning the source arenas:
                 // fields do not back-reference their owner, so take the first
                 // type listing this field. Valid modules always contain one.
+                // Name and signature are cloned up front so no shared source
+                // borrow stays alive across the mutable target access.
+                let name = self.source.fields[id.index()].name.clone();
+                let signature = self.source.fields[id.index()].signature.clone();
                 let parent = self
                     .source
                     .types
@@ -144,8 +172,8 @@ impl<'a> Importer<'a> {
                     .unwrap_or_else(|| self.source_local_external());
                 FieldRef::External(ExternalField {
                     parent,
-                    name: field.name.clone(),
-                    signature: FieldSignature(self.import_type(&field.signature.0)),
+                    name,
+                    signature: FieldSignature(self.import_type(&signature.0)),
                 })
             }
             FieldRef::External(external) => FieldRef::External(ExternalField {
@@ -158,7 +186,7 @@ impl<'a> Importer<'a> {
 
 
     /// Imports every [`TypeDesc`] inside a method signature.
-    pub fn import_signature(&self, sig: &MethodSignature) -> MethodSignature {
+    pub fn import_signature(&mut self, sig: &MethodSignature) -> MethodSignature {
         MethodSignature {
             has_this: sig.has_this,
             explicit_this: sig.explicit_this,
@@ -171,30 +199,30 @@ impl<'a> Importer<'a> {
     }
 
     /// Maps a source-local definition handle to the target module.
-    fn import_def(&self, id: TypeId) -> TypeDesc {
+    fn import_def(&mut self, id: TypeId) -> TypeDesc {
         let def = &self.source.types[id.index()];
-        match find_matching(self.source, self.target, def) {
+        let matched = find_matching(self.source, self.target, def);
+        match matched {
             Some(matched) => TypeDesc::Def(matched),
             None => {
-                let external = self.external_from_chain(def);
-                TypeDesc::External(Box::new(external))
+                // Outermost-first namespace/name chain of `def`; computed
+                // before any mutable target access so the shared source
+                // borrow ends here.
+                let chain = declaring_chain(self.source, def);
+                TypeDesc::External(Box::new(self.external_from_chain(chain)))
             }
         }
     }
 
     /// Builds an [`ExternalType`] carrying the full declaring-type chain of
-    /// `def`, scoped to the best assembly-reference match for the source
-    /// module (or [`ScopeRef::Moduleless`]).
-    fn external_from_chain(&self, def: &TypeDefinition) -> ExternalType {
+    /// `def`, scoped to the target's assembly reference matching the source
+    /// assembly's identity (appended when missing), or
+    /// [`ScopeRef::Moduleless`] under the name-only fallback without an
+    /// identity.
+    fn external_from_chain(&mut self, mut chain: Vec<(String, String)>) -> ExternalType {
         let scope = self.source_local_scope();
-        let mut chain = Vec::new();
-        let mut current = Some(def);
-        while let Some(ty) = current {
-            chain.push((ty.namespace.clone(), ty.name.clone()));
-            current = ty.declaring_type.map(|pid| &self.source.types[pid.index()]);
-        }
-        // chain is innermost-first; nesting is outermost-first with the leaf
-        chain.reverse(); // root .. leaf
+        // chain is outermost-first; nesting is outermost-first with the leaf
+        // popped off last.
         let (namespace, name) = chain.pop().expect("type chain has at least the leaf");
         let nesting = chain
             .into_iter()
@@ -216,11 +244,11 @@ impl<'a> Importer<'a> {
     }
 
     /// Re-scopes an already-external reference against the target's assembly
-    /// references. Unmatched assembly scopes keep their original reference
-    /// (the writer emits the missing `AssemblyRef`); a `ThisModule` scope
-    /// refers to the source module itself and is treated like a source-local
-    /// definition.
-    fn rebuild_external(&self, ext: &ExternalType) -> ExternalType {
+    /// references. Unmatched assembly scopes get a deduped clone appended to
+    /// the target (mirroring Mono.Cecil's `ImportReference`); a `ThisModule`
+    /// scope refers to the source module itself and is treated like a
+    /// source-local definition.
+    fn rebuild_external(&mut self, ext: &ExternalType) -> ExternalType {
         let mut rebuilt = ExternalType {
             namespace: ext.namespace.clone(),
             name: ext.name.clone(),
@@ -231,9 +259,7 @@ impl<'a> Importer<'a> {
                 .collect(),
             scope: match &ext.scope {
                 ScopeRef::ThisModule => self.source_local_scope(),
-                ScopeRef::Assembly(anr) => {
-                    ScopeRef::Assembly(self.match_assembly_ref(anr).clone())
-                }
+                ScopeRef::Assembly(anr) => ScopeRef::Assembly(self.match_or_append(anr)),
                 ScopeRef::OtherModule(_) | ScopeRef::Moduleless => ext.scope.clone(),
             },
         };
@@ -248,36 +274,49 @@ impl<'a> Importer<'a> {
         rebuilt
     }
 
-    /// Best [`ScopeRef::Assembly`] match for `anr`'s name in the target;
-    /// returns `anr` unchanged when no reference matches.
-    fn match_assembly_ref(
-        &self,
-        anr: &crate::model::types::AssemblyNameReference,
-    ) -> crate::model::types::AssemblyNameReference {
-        self.target
-            .assembly_refs
-            .iter()
-            .find(|candidate| candidate.name == anr.name)
-            .cloned()
-            .unwrap_or_else(|| anr.clone())
-    }
-
-    /// Scope standing in for the source module's own assembly identity.
-    fn source_local_scope(&self) -> ScopeRef {
-        match self
+    /// Target [`AssemblyNameReference`] matching `anr`'s identity (name +
+    /// version + culture + public key or token); appends a deduped clone of
+    /// `anr` to the target and returns it when no reference matches.
+    fn match_or_append(&mut self, anr: &AssemblyNameReference) -> AssemblyNameReference {
+        if let Some(existing) = self
             .target
             .assembly_refs
             .iter()
-            .find(|a| a.name == self.source.name)
+            .find(|candidate| {
+                candidate.name == anr.name
+                    && candidate.version == anr.version
+                    && candidate.culture == anr.culture
+                    && candidate.public_key_or_token == anr.public_key_or_token
+            })
         {
-            Some(anr) => ScopeRef::Assembly(anr.clone()),
-            None => ScopeRef::Moduleless,
+            return existing.clone();
+        }
+        self.target.assembly_refs.push(anr.clone());
+        anr.clone()
+    }
+
+    /// Scope standing in for the source module's own assembly identity.
+    ///
+    /// With a known identity the target's assembly references are matched on
+    /// the full identity key, appending a deduped row when missing. Without
+    /// one, the importer falls back to matching `source.name` by name only,
+    /// and to [`ScopeRef::Moduleless`] when nothing matches.
+    fn source_local_scope(&mut self) -> ScopeRef {
+        match self.source_identity {
+            Some(identity) => ScopeRef::Assembly(self.match_or_append(identity)),
+            None => {
+                let name = &self.source.name;
+                match self.target.assembly_refs.iter().find(|a| a.name == *name) {
+                    Some(anr) => ScopeRef::Assembly(anr.clone()),
+                    None => ScopeRef::Moduleless,
+                }
+            }
         }
     }
 
     /// Fallback external descriptor for the source module itself (used only
     /// when a field reference cannot be attributed to any declaring type).
-    fn source_local_external(&self) -> TypeDesc {
+    fn source_local_external(&mut self) -> TypeDesc {
         TypeDesc::External(Box::new(ExternalType {
             namespace: String::new(),
             name: String::new(),
@@ -290,22 +329,37 @@ impl<'a> Importer<'a> {
 /// Imports a type reference from `source` into `target`.
 ///
 /// See [`Importer::import_type`] and the [module docs](self).
-pub fn import_type(ty: &TypeDesc, source: &Module, target: &Module) -> TypeDesc {
-    Importer::new(source, target).import_type(ty)
+pub fn import_type(
+    ty: &TypeDesc,
+    source: &Module,
+    target: &mut Module,
+    source_identity: Option<&AssemblyNameReference>,
+) -> TypeDesc {
+    Importer::new(source, target, source_identity).import_type(ty)
 }
 
 /// Imports a method reference from `source` into `target`.
 ///
 /// See [`Importer::import_method`].
-pub fn import_method(r: &MethodRef, source: &Module, target: &Module) -> MethodRef {
-    Importer::new(source, target).import_method(r)
+pub fn import_method(
+    r: &MethodRef,
+    source: &Module,
+    target: &mut Module,
+    source_identity: Option<&AssemblyNameReference>,
+) -> MethodRef {
+    Importer::new(source, target, source_identity).import_method(r)
 }
 
 /// Imports a field reference from `source` into `target`.
 ///
 /// See [`Importer::import_field`].
-pub fn import_field(r: &FieldRef, source: &Module, target: &Module) -> FieldRef {
-    Importer::new(source, target).import_field(r)
+pub fn import_field(
+    r: &FieldRef,
+    source: &Module,
+    target: &mut Module,
+    source_identity: Option<&AssemblyNameReference>,
+) -> FieldRef {
+    Importer::new(source, target, source_identity).import_field(r)
 }
 
 /// Linear-scan matcher: finds the target type equivalent to `def`.
@@ -360,7 +414,7 @@ mod tests {
     use super::*;
     use crate::model::types::{
         AssemblyNameReference, ExternalMethod, ExternalType, FieldDefinition, FieldSignature,
-        MethodDefinition, MethodSignature, TypeDefinition,
+        MethodDefinition, MethodSignature, TypeDefinition, Version,
     };
     use crate::model::types::{FieldId, MethodId};
     fn system(name: &str) -> TypeDesc {
@@ -449,9 +503,9 @@ mod tests {
     #[test]
     fn def_maps_to_moduleless_external_when_unmatched() {
         let (src, pid, _, _) = make_source(false);
-        let target = make_target();
+        let mut target = make_target();
 
-        let imported = import_type(&TypeDesc::Def(pid), &src, &target);
+        let imported = import_type(&TypeDesc::Def(pid), &src, &mut target, None);
         match imported {
             TypeDesc::External(ext) => {
                 assert_eq!(ext.namespace, "");
@@ -473,7 +527,7 @@ mod tests {
             .assembly_refs
             .push(AssemblyNameReference::new("srcasm"));
 
-        let imported = import_type(&TypeDesc::Def(pid), &src, &target);
+        let imported = import_type(&TypeDesc::Def(pid), &src, &mut target, None);
         match imported {
             TypeDesc::External(ext) => match ext.scope {
                 ScopeRef::Assembly(anr) => assert_eq!(anr.name, "srcasm"),
@@ -490,7 +544,7 @@ mod tests {
         let mut target = make_target();
 
         // First import: External.
-        let first = import_type(&TypeDesc::Def(pid), &src, &target);
+        let first = import_type(&TypeDesc::Def(pid), &src, &mut target, None);
         assert!(matches!(first, TypeDesc::External(_)));
 
         // Add the same-named type to the target.
@@ -502,14 +556,14 @@ mod tests {
         });
 
         // Second import: Def(target id 0).
-        let second = import_type(&TypeDesc::Def(pid), &src, &target);
+        let second = import_type(&TypeDesc::Def(pid), &src, &mut target, None);
         assert_eq!(second, TypeDesc::Def(TypeId(0)));
     }
 
     #[test]
     fn nested_declaring_chain_is_required_and_rebuilt() {
         let (src, _, _, _) = make_source(true);
-        let target = make_target();
+        let mut target = make_target();
 
         // Inner (TypeId 2) alone must NOT match a target "Inner" without the
         // Outer chain.
@@ -518,7 +572,7 @@ mod tests {
             name: "Inner".into(),
             ..Default::default()
         });
-        let imported = import_type(&TypeDesc::Def(TypeId(2)), &src, &partial);
+        let imported = import_type(&TypeDesc::Def(TypeId(2)), &src, &mut partial, None);
         assert!(
             matches!(imported, TypeDesc::External(_)),
             "chain mismatch must fall back to External"
@@ -535,11 +589,11 @@ mod tests {
             declaring_type: Some(TypeId(0)),
             ..Default::default()
         });
-        let imported = import_type(&TypeDesc::Def(TypeId(2)), &src, &full);
+        let imported = import_type(&TypeDesc::Def(TypeId(2)), &src, &mut full, None);
         assert_eq!(imported, TypeDesc::Def(TypeId(1)));
 
         // Without the chain, the External carries nesting outermost-first.
-        let external = import_type(&TypeDesc::Def(TypeId(2)), &src, &target);
+        let external = import_type(&TypeDesc::Def(TypeId(2)), &src, &mut target, None);
         match external {
             TypeDesc::External(ext) => {
                 assert_eq!(ext.name, "Inner");
@@ -559,7 +613,7 @@ mod tests {
             ..Default::default()
         });
 
-        let importer = Importer::new(&src, &target);
+        let mut importer = Importer::new(&src, &mut target, None);
         let sig = int32_sig(TypeDesc::Def(pid));
         let imported = importer.import_signature(&sig);
 
@@ -583,7 +637,7 @@ mod tests {
             ..Default::default()
         });
 
-        let imported = import_method(&MethodRef::Def(gid), &src, &target);
+        let imported = import_method(&MethodRef::Def(gid), &src, &mut target, None);
         match imported {
             MethodRef::External(ExternalMethod {
                 parent,
@@ -602,13 +656,13 @@ mod tests {
     #[test]
     fn method_spec_recurses_into_inner_reference_and_arguments() {
         let (src, pid, _, _) = make_source(false);
-        let target = make_target();
+        let mut target = make_target();
 
         let spec = MethodRef::Spec {
             method: Box::new(MethodRef::Def(MethodId(0))),
             arguments: vec![TypeDesc::Def(pid)],
         };
-        let imported = import_method(&spec, &src, &target);
+        let imported = import_method(&spec, &src, &mut target, None);
         match imported {
             MethodRef::Spec { method, arguments } => {
                 assert!(matches!(*method, MethodRef::External(_)));
@@ -621,9 +675,9 @@ mod tests {
     #[test]
     fn field_import_rebuilds_external_with_remapped_parent() {
         let (src, _pid, fid, _gid) = make_source(false);
-        let target = make_target();
+        let mut target = make_target();
 
-        let imported = import_field(&FieldRef::Def(fid), &src, &target);
+        let imported = import_field(&FieldRef::Def(fid), &src, &mut target, None);
         match imported {
             FieldRef::External(ExternalField {
                 parent,
@@ -661,7 +715,7 @@ mod tests {
             ],
         };
 
-        let imported = import_type(&ty, &src, &target);
+        let imported = import_type(&ty, &src, &mut target, None);
         match imported {
             TypeDesc::GenericInstance {
                 definition,
@@ -691,21 +745,31 @@ mod tests {
     }
 
     #[test]
-    fn existing_external_rescopes_to_matching_target_ref() {
+    fn external_rescopes_to_identity_matched_target_ref() {
         let (src, _, _, _) = make_source(false);
         let mut target = make_target();
-        // Same-name-but-different-instance mscorlib ref in the target.
+        // Target's mscorlib carries a real version; the incoming external
+        // uses the same identity, so it must re-scope without appending.
         let mut anr = AssemblyNameReference::new("mscorlib");
-        anr.version = crate::model::types::Version::new(4, 0, 0, 0);
+        anr.version = Version::new(4, 0, 0, 0);
         target.assembly_refs.clear();
-        target.assembly_refs.push(anr);
+        target.assembly_refs.push(anr.clone());
 
-        let importer = Importer::new(&src, &target);
-        let imported = importer.import_type(&system("Int32"));
+        let ty = TypeDesc::External(Box::new(ExternalType {
+            namespace: "System".into(),
+            name: "Int32".into(),
+            nesting: Vec::new(),
+            scope: ScopeRef::Assembly(anr),
+        }));
+
+        let mut importer = Importer::new(&src, &mut target, None);
+        let imported = importer.import_type(&ty);
+        assert_eq!(target.assembly_refs.len(), 1);
         match imported {
             TypeDesc::External(ext) => match ext.scope {
                 ScopeRef::Assembly(resolved) => {
-                    assert_eq!(resolved.version, crate::model::types::Version::new(4, 0, 0, 0));
+                    assert_eq!(resolved.name, "mscorlib");
+                    assert_eq!(resolved.version, Version::new(4, 0, 0, 0));
                 }
                 other => panic!("expected Assembly scope, got {:?}", other),
             },
@@ -714,22 +778,142 @@ mod tests {
     }
 
     #[test]
+    fn missing_assembly_scope_is_appended_once_and_deduped() {
+        let (src, _, _, _) = make_source(false);
+        let mut target = make_target();
+        let mut anr = AssemblyNameReference::new("System.Runtime");
+        anr.version = Version::new(8, 0, 0, 0);
+        anr.public_key_or_token = vec![0xB0, 0x3F, 0x5F, 0x7F];
+        let ty = TypeDesc::External(Box::new(ExternalType {
+            namespace: "System".into(),
+            name: "String".into(),
+            nesting: Vec::new(),
+            scope: ScopeRef::Assembly(anr),
+        }));
+
+        // The Importer holds `&mut target` for its whole lifetime, so reads
+        // of `target.assembly_refs` happen before the binding is created or
+        // after it is dropped at the end of each scoped block.
+        assert_eq!(target.assembly_refs.len(), 1);
+
+        // First import appends exactly one new AssemblyRef row.
+        let first = {
+            let mut importer = Importer::new(&src, &mut target, None);
+            importer.import_type(&ty)
+        };
+        assert_eq!(target.assembly_refs.len(), 2);
+        let appended = match &first {
+            TypeDesc::External(ext) => match &ext.scope {
+                ScopeRef::Assembly(resolved) => resolved.clone(),
+                other => panic!("expected Assembly scope, got {:?}", other),
+            },
+            other => panic!("expected External, got {:?}", other),
+        };
+        assert_eq!(appended.name, "System.Runtime");
+        assert_eq!(appended.version, Version::new(8, 0, 0, 0));
+        // Dedup check by index scan: exactly one new row landed after the
+        // pre-existing mscorlib ref, and it matches the resolved scope.
+        assert_eq!(target.assembly_refs[1], appended);
+
+        // Second import of the same identity dedups instead of appending.
+        let second = {
+            let mut importer = Importer::new(&src, &mut target, None);
+            importer.import_type(&ty)
+        };
+        assert_eq!(target.assembly_refs.len(), 2);
+        match second {
+            TypeDesc::External(ext) => {
+                assert_eq!(ext.scope, ScopeRef::Assembly(appended));
+            }
+            other => panic!("expected External, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn version_mismatch_counts_as_missing_and_appends() {
+        let (src, _, _, _) = make_source(false);
+        let mut target = make_target();
+        // Target has mscorlib 4.0.0.0; the incoming external is mscorlib
+        // 2.0.0.0 - identity differs, so a new ref must be appended.
+        let mut anr = AssemblyNameReference::new("mscorlib");
+        anr.version = Version::new(4, 0, 0, 0);
+        target.assembly_refs.clear();
+        target.assembly_refs.push(anr);
+
+        let mut incoming = AssemblyNameReference::new("mscorlib");
+        incoming.version = Version::new(2, 0, 0, 0);
+        let ty = TypeDesc::External(Box::new(ExternalType {
+            namespace: "System".into(),
+            name: "Object".into(),
+            nesting: Vec::new(),
+            scope: ScopeRef::Assembly(incoming),
+        }));
+
+        let mut importer = Importer::new(&src, &mut target, None);
+        importer.import_type(&ty);
+        assert_eq!(target.assembly_refs.len(), 2);
+        assert_eq!(target.assembly_refs[1].version, Version::new(2, 0, 0, 0));
+    }
+
+    #[test]
+    fn identity_override_used_when_provided() {
+        let (src, pid, _, _) = make_source(false);
+        let mut target = make_target();
+        // The name-only approximation would find this `srcasm` ref; the
+        // explicit identity must win instead.
+        target
+            .assembly_refs
+            .push(AssemblyNameReference::new("srcasm"));
+
+        let mut identity = AssemblyNameReference::new("real.src");
+        identity.version = Version::new(2, 5, 0, 0);
+        identity.culture = Some("en".into());
+        identity.public_key_or_token = vec![0xDE, 0xAD, 0xBE, 0xEF];
+
+        let imported = import_type(
+            &TypeDesc::Def(pid),
+            &src,
+            &mut target,
+            Some(&identity),
+        );
+        match imported {
+            TypeDesc::External(ext) => match ext.scope {
+                ScopeRef::Assembly(anr) => {
+                    assert_eq!(anr.name, "real.src");
+                    assert_eq!(anr.version, Version::new(2, 5, 0, 0));
+                    assert_eq!(anr.culture.as_deref(), Some("en"));
+                    assert_eq!(anr.public_key_or_token, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+                }
+                other => panic!("expected Assembly scope, got {:?}", other),
+            },
+            other => panic!("expected External, got {:?}", other),
+        }
+        // Exactly one new row (the appended identity) beyond mscorlib + srcasm.
+        assert_eq!(target.assembly_refs.len(), 3);
+        assert_eq!(target.assembly_refs[2], identity);
+    }
+
+    #[test]
     fn importer_struct_mirrors_free_functions() {
         let (src, pid, fid, gid) = make_source(false);
-        let target = make_target();
-        let importer = Importer::new(&src, &target);
+        let mut struct_target = make_target();
+        let mut importer = Importer::new(&src, &mut struct_target, None);
+        let struct_ty = importer.import_type(&TypeDesc::Def(pid));
+        let struct_md = importer.import_method(&MethodRef::Def(gid));
+        let struct_fd = importer.import_field(&FieldRef::Def(fid));
 
+        let mut fn_target = make_target();
         assert_eq!(
-            importer.import_type(&TypeDesc::Def(pid)),
-            import_type(&TypeDesc::Def(pid), &src, &target)
+            struct_ty,
+            import_type(&TypeDesc::Def(pid), &src, &mut fn_target, None)
         );
         assert_eq!(
-            importer.import_method(&MethodRef::Def(gid)),
-            import_method(&MethodRef::Def(gid), &src, &target)
+            struct_md,
+            import_method(&MethodRef::Def(gid), &src, &mut fn_target, None)
         );
         assert_eq!(
-            importer.import_field(&FieldRef::Def(fid)),
-            import_field(&FieldRef::Def(fid), &src, &target)
+            struct_fd,
+            import_field(&FieldRef::Def(fid), &src, &mut fn_target, None)
         );
     }
 }

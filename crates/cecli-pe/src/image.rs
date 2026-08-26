@@ -4,6 +4,8 @@
 //! `ImageReader.cs` that feed it. An [`Image`] owns a copy of the source bytes
 //! so RVA translation can return slices.
 
+use std::borrow::Cow;
+
 use crate::section::{DataDirectory, Section};
 use cecli_core::{Error, Result, Token};
 
@@ -248,10 +250,19 @@ impl Image {
     }
 
     /// The section containing `rva`, if any.
+    ///
+    /// Membership follows the PE loader's mapping: `rva` belongs to a
+    /// section when it lies in `[virtual_address, virtual_address +
+    /// max(virtual_size, size_of_raw_data))`. Bytes between the file-backed
+    /// raw data and the larger virtual size are load-time zero fill (BSS),
+    /// which mixed-mode C++/CLI images routinely reference.
     pub fn section_at_virtual_address(&self, rva: u64) -> Option<&Section> {
-        let rva = rva as u32;
+        let rva = rva.min(u32::MAX as u64) as u32;
         self.sections.iter().find(|s| {
-            rva >= s.virtual_address && rva < s.virtual_address.saturating_add(s.size_of_raw_data)
+            let mapped_end = s
+                .virtual_address
+                .saturating_add(s.virtual_size.max(s.size_of_raw_data));
+            rva >= s.virtual_address && rva < mapped_end
         })
     }
 
@@ -261,6 +272,10 @@ impl Image {
     }
 
     /// Translates an RVA into a file offset (`PointerToRawData` based).
+    ///
+    /// Fails only when the RVA is not mapped into any section; offsets into
+    /// the zero-filled tail of a section are returned unchanged so callers
+    /// can detect them against the section's raw extent.
     pub fn rva_offset(&self, rva: u64) -> Result<usize> {
         let section = self
             .section_at_virtual_address(rva)
@@ -268,22 +283,38 @@ impl Image {
         Ok((rva - section.virtual_address as u64 + section.pointer_to_raw_data as u64) as usize)
     }
 
-    /// Translates an RVA to the slice of raw bytes backing it. The slice ends
-    /// at the end of the section's raw data.
-    pub fn rva(&self, rva: u64) -> Result<&[u8]> {
+    /// Translates an RVA to the bytes backing it, running to the mapped end
+    /// of the section.
+    ///
+    /// File-backed bytes are borrowed from the image; any tail beyond
+    /// `pointer_to_raw_data + size_of_raw_data` is load-time zero fill and
+    /// materializes as zeros in the returned buffer.
+    pub fn rva(&self, rva: u64) -> Result<Cow<'_, [u8]>> {
         let section = self
             .section_at_virtual_address(rva)
             .ok_or_else(|| Error::argument(format!("rva {rva:#x} is not inside any section")))?;
-        let start =
-            (rva - section.virtual_address as u64 + section.pointer_to_raw_data as u64) as usize;
-        let end = ((section.pointer_to_raw_data as u64 + section.size_of_raw_data as u64) as usize)
-            .min(self.raw.len());
-        if start >= end {
+        let off = rva - section.virtual_address as u64;
+        let raw_size = section.size_of_raw_data as u64;
+        let mapped_size = (section.virtual_size as u64).max(raw_size);
+        if off >= mapped_size {
             return Err(Error::bad_image(format!(
-                "rva {rva:#x} maps past the end of the file"
+                "rva {rva:#x} maps past the end of its section"
             )));
         }
-        Ok(&self.raw[start..end])
+        let len = (mapped_size - off) as usize;
+        let start = section.pointer_to_raw_data as u64 + off;
+        let raw_start = start.min(self.raw.len() as u64) as usize;
+        let raw_end = ((section.pointer_to_raw_data as u64 + raw_size) as usize).min(self.raw.len());
+        if raw_start >= raw_end {
+            // Entirely inside the zero-filled tail.
+            return Ok(Cow::Owned(vec![0u8; len]));
+        }
+        if len == raw_end - raw_start {
+            return Ok(Cow::Borrowed(&self.raw[raw_start..raw_end]));
+        }
+        let mut bytes = self.raw[raw_start..raw_end].to_vec();
+        bytes.resize(len, 0);
+        Ok(Cow::Owned(bytes))
     }
 }
 

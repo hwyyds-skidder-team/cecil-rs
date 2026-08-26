@@ -9,8 +9,12 @@ cecli-core.workspace = true
 cecli-pe.workspace = true
 cecli-metadata.workspace = true
 cecli-cil.workspace = true
+cecli-pdb.workspace = true
 rsa = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 
 [features]
 strongname = ["dep:rsa", "dep:sha2"]
+
+[dev-dependencies]
+cecli-mdb.workspace = true
