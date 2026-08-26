@@ -1,0 +1,66 @@
+# cecli-rs
+
+Mono.Cecil 的 Rust 完整重写:读取、检查、修改并写回 .NET 程序集(ECMA-335)。
+
+```rust
+use cecli::AssemblyDefinition;
+
+let mut asm = AssemblyDefinition::read_file("demo.dll")?;
+let module = asm.main_module_mut();
+
+if let Some(ty) = module.get_type("Demo", "Greeter") {
+    println!("found {}", module.type_full_name(ty));
+}
+
+asm.write_file("patched.dll")?;
+```
+
+## Crate 布局
+
+依赖单向分层,上层不感知下层细节之外的内容:
+
+| Crate | 职责 |
+|---|---|
+| `cecli-core` | 二进制游标(含 Cecil 逐位等价的压缩整数)、Token/表/编码索引、ElementType、全部特性位标志 |
+| `cecli-pe` | PE32/PE32+ 镜像解析与生成(未修改镜像字节级直通;修改后规范化重建,含校验和) |
+| `cecli-metadata` | BSJB 根、五堆、全部 45+8 张表的 schema、行读写与 `MetadataBuilder` |
+| `cecli-cil` | 219 条操作码表、方法体模型、fat/tiny 头与异常子句编解码 |
+| `cecli` | 门面:arena 对象模型、Assembly 读/写、签名/特性/封送/安全编解码、解析器、导入器、类型名解析器、IL 编辑器、WinRT 投影、强名签名(`strongname` feature) |
+| `cecli-pdb` | Portable PDB(文档/序列点/作用域)+ 原生 PDB(MSF 容器 + CodeView 符号/行号,只读) |
+| `cecli-mdb` | Mono MDB 符号格式读写 |
+| `cecli-rocks` | 原 Mono.Cecil.Rocks 全部扩展的 trait 形式(GetAllTypes、GetEnumUnderlyingType、IL 校验、DocCommentId 等) |
+
+## 能力概览
+
+- 读 → 检查 → 改 → 写完整闭环;未触碰的镜像可字节级直通
+- 泛型实例 / vararg / 函数指针 / 自定义修饰符等全部签名字形
+- 自定义特性:构造函数签名驱动的真实镜像解码 + 类型化参数视图
+- 方法体编辑:`BodyEditor`(插入/替换/删除/发射辅助)、`simplify_macros` / `optimize_macros` / `renumber`
+- 符号:Portable PDB 读写(文档、序列点、局部作用域)、原生 PDB 行号读取、MDB 读写
+- P/Invoke、封送规范全量 NativeTypeSpec、安全声明(XML/二进制两种线格式)
+- WinRT 投影(`apply_projections` / `remove_projections`,移植自 WindowsRuntimeProjections.cs)
+- 强名签名:.snk 密钥解析与 PE 签名(启用 `strongname` feature)
+
+## 与 Mono.Cecil 的 API 差异
+
+能力面对齐(经逐文件审计核对),使用模型重新设计为 Rust 惯用风格:
+
+- **值语义 arena 模型**:成员以 `TypeId`/`MethodId` 等 Copy 句柄交叉引用,无惰性图与内部可变性;
+  引用与定义由 `TypeDesc::Def | External(...)` 枚举表达
+- **`Result` 替代异常**:所有格式错误返回 `cecli_core::Error`,不 panic
+- **扩展方法 → trait**:`ModuleDefinitionRocks` 等显式引入
+- 有意偏离(BCL 强依赖项)记录于各模块文档:ReadingMode 惰性加载(eager 设计取舍)、
+  GAC 自动探测(改为显式搜索目录 + 版本比较选择)、CSP 具名密钥容器(仅支持 .snk 文件)
+
+## 测试
+
+```sh
+cargo test --workspace          # 347 个测试,含真实程序集夹具的读→写→重读等价套件
+cargo test -p cecli --features strongname   # 强名签名套件
+```
+
+`fixtures/` 内置 127 个真实 .NET 程序集/PDB/MDB 作为回归基线。
+
+## License
+
+MIT(与上游 Mono.Cecil 一致)
