@@ -141,7 +141,9 @@ fn parse_table_heap(heap: &[u8], pdb: Option<&PdbHeap>) -> Result<TableSet> {
     let _reserved = r.u32()?;
     let major = r.u8()?;
     let minor = r.u8()?;
-    if major != 2 || minor > 0 {
+    // .NET 1.x images use table-stream version 1.x; 2.0 is the modern form.
+    // Cecil accepts both, so we do too.
+    if major != 1 && major != 2 {
         return Err(Error::unsupported(format!(
             "unsupported table stream version {major}.{minor}"
         )));

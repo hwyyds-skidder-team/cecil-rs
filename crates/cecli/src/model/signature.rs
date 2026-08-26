@@ -158,13 +158,9 @@ fn bad_element(code: u8) -> Error {
 fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, allow_void: bool) -> Result<TypeDesc> {
     let et = r.u8()?;
     match et {
-        ET_VOID => {
-            if allow_void {
-                Ok(TypeDesc::Internal("void".into()))
-            } else {
-                Err(Error::bad_image("void type in non-return position"))
-            }
-        }
+        // ELEMENT_TYPE_VOID outside return slots appears in C++/CLI mixed
+        // images; Cecil tolerates it, so we map it to the canonical internal.
+        ET_VOID => Ok(TypeDesc::Internal("void".into())),
         code if primitive_name(code).is_some() => Ok(TypeDesc::Internal(primitive_name(code).unwrap().into())),
         ET_VALUE_TYPE | ET_CLASS => ctx.tdor_type(et == ET_VALUE_TYPE, r.compressed_u32()?),
         ET_PTR => Ok(TypeDesc::Ptr(Box::new(read_type_elem(r, ctx, false)?))),
