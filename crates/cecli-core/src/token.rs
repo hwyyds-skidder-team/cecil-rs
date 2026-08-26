@@ -383,6 +383,12 @@ impl CodedIndexGroup {
         CodedIndexGroup { name, tables, tag_bits: bits }
     }
 
+    /// Explicit tag-bit override for groups whose spec reserves unused slots
+    /// (e.g. CustomAttributeType: 5 slots, only 2 populated, still 3 tag bits).
+    pub const fn with_tag_bits(name: &'static str, tables: &'static [TableIndex], tag_bits: u32) -> Self {
+        CodedIndexGroup { name, tables, tag_bits }
+    }
+
     /// Number of low bits the encoded row-id must be shifted by.
     pub fn shift_bits(&self) -> u32 {
         self.tag_bits
@@ -419,9 +425,10 @@ pub mod coded {
     pub const MEMBER_FORWARDED: CodedIndexGroup = group!("MemberForwarded", Field, MethodDef);
     pub const IMPLEMENTATION: CodedIndexGroup =
         group!("Implementation", File, AssemblyRef, ExportedType);
-    pub const CUSTOM_ATTRIBUTE_TYPE: CodedIndexGroup = CodedIndexGroup::new(
+    pub const CUSTOM_ATTRIBUTE_TYPE: CodedIndexGroup = CodedIndexGroup::with_tag_bits(
         "CustomAttributeType",
         &[TableIndex::MethodDef, TableIndex::MemberRef],
+        3,
     );
     pub const RESOLUTION_SCOPE: CodedIndexGroup =
         group!("ResolutionScope", Module, ModuleRef, AssemblyRef, TypeRef);
