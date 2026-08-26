@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 cecli.workspace = true
+cecli-core.workspace = true
 cecli-cil.workspace = true

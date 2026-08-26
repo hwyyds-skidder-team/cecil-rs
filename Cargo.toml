@@ -10,6 +10,8 @@ license = "MIT"
 [workspace.dependencies]
 cecli = { path = "crates/cecli" }
 bitflags = "2"
+rsa = "0.9"
+sha2 = "0.10"
 cecli-core = { path = "crates/cecli-core" }
 cecli-pe = { path = "crates/cecli-pe" }
 cecli-metadata = { path = "crates/cecli-metadata" }

@@ -106,49 +106,45 @@ impl<'a> ByteReader<'a> {
         self.take(n)
     }
 
-    /// ECMA-335 II §23.2 compressed unsigned integer.
+    /// Compressed unsigned integer, bit-exact port of Mono.Cecil's
+    /// `ByteBuffer.ReadCompressedUInt32`: envelopes `0-0x7F`,
+    /// `10xx xxxx+1` (15 bits), `11xx xxxx+3` (30 bits).
     pub fn compressed_u32(&mut self) -> Result<u32> {
         let first = self.u8()?;
         if first & 0x80 == 0 {
             return Ok(first as u32);
         }
-        if first & 0xC0 == 0x80 {
-            Ok((((first & 0x3F) as u32) << 8) | self.u8()? as u32)
-        } else {
-            let hi = ((first & 0x1F) as u32) << 24;
-            Ok(hi | (self.u8()? as u32) << 16 | (self.u8()? as u32) << 8 | self.u8()? as u32)
+        if first & 0x40 == 0 {
+            return Ok((((first & !0x80) as u32) << 8) | self.u8()? as u32);
         }
-    }
-
-    /// ECMA-335 II §23.2 compressed signed integer.
-    pub fn compressed_i32(&mut self) -> Result<i32> {
-        let first = self.u8()?;
-        let raw: u32 = if first & 0x80 == 0 {
-            first as u32
-        } else if first & 0xC0 == 0x80 {
-            (((first & 0x3F) as u32) << 8) | self.u8()? as u32
-        } else {
-            ((first & 0x1F) as u32) << 24
+        Ok(
+            (((first & !0xC0) as u32) << 24)
                 | (self.u8()? as u32) << 16
                 | (self.u8()? as u32) << 8
-                | self.u8()? as u32
-        };
-        // Envelope width comes from the first byte's prefix pattern, not the
-        // payload magnitude: signed encodings are not canonical.
-        let width_bits: u32 = if first & 0x80 == 0 {
-            7
-        } else if first & 0xC0 == 0x80 {
-            14
-        } else {
-            29
-        };
-        let val = (raw >> 1) as i32;
-        if raw & 1 != 0 && width_bits < 32 {
-            Ok(val | (-1i32) << (width_bits - 1))
-        } else {
-            Ok(val)
-        }
+                | self.u8()? as u32,
+        )
     }
+
+    /// Compressed signed integer, bit-exact port of Mono.Cecil's
+    /// `ByteBuffer.ReadCompressedInt32`: magnitude halves the decoded
+    /// unsigned value, then subtracts an envelope-specific bias.
+    pub fn compressed_i32(&mut self) -> Result<i32> {
+        if self.is_empty() {
+            return Err(Error::bad_image("compressed integer at end of stream"));
+        }
+        let first = self.bytes()[self.position()];
+        let u = self.compressed_u32()?;
+        let v = (u >> 1) as i32;
+        if u & 1 == 0 {
+            return Ok(v);
+        }
+        Ok(match first & 0xC0 {
+            0 | 0x40 => v - 0x40,
+            0x80 => v - 0x2000,
+            _ => v.wrapping_sub(0x10000000),
+        })
+    }
+
 
     pub fn align(&mut self, alignment: usize) -> Result<()> {
         let rem = self.pos % alignment;
@@ -243,42 +239,43 @@ impl ByteWriter {
         self.buf[pos..pos + 4].copy_from_slice(&v.to_le_bytes());
     }
 
-    /// ECMA-335 II §23.2 compressed unsigned integer.
-    pub fn compressed_u32(&mut self, mut v: u32) {
+    /// Compressed unsigned integer, bit-exact port of Mono.Cecil's
+    /// `ByteBuffer.WriteCompressedUInt32` (values `>= 0x4000_0000` lose the
+    /// top two bits exactly like upstream).
+    pub fn compressed_u32(&mut self, v: u32) {
         if v < 0x80 {
             self.u8(v as u8);
         } else if v < 0x4000 {
-            self.u8(((v >> 8) | 0x80) as u8);
-            self.u8((v & 0xFF) as u8);
-        } else if v < 0x2000_0000 {
-            self.u8(((v >> 24) | 0xC0) as u8);
-            self.u8((v >> 16) as u8);
-            self.u8((v >> 8) as u8);
-            self.u8(v as u8);
+            self.u8((0x80 | (v >> 8)) as u8);
+            self.u8((v & 0xff) as u8);
         } else {
-            // Encoded as five bytes: 0xC0 prefix byte then full 32-bit value.
-            self.u8(0xC0);
-            self.u32(v);
-            // The branch above never runs because values >= 0x2000_0000 fall here.
-            let _ = &mut v;
+            self.u8(((v >> 24) | 0xC0) as u8);
+            self.u8(((v >> 16) & 0xff) as u8);
+            self.u8(((v >> 8) & 0xff) as u8);
+            self.u8((v & 0xff) as u8);
         }
     }
 
-    /// ECMA-335 II §23.2 compressed signed integer.
-    pub fn compressed_i32(&mut self, v: i32) {
-        // Rotate left through carry: payload = (v << 1) | sign_bit, masked to the
-        // chosen envelope; the value's range (not the rotated magnitude) picks it.
-        let rotated = ((v as u32) << 1) | (((v >> 31) as u32) & 1);
-        if (-64..=63).contains(&v) {
-            self.u8((rotated & 0x7F) as u8);
-        } else if (-8192..=8191).contains(&v) {
-            self.u8(((rotated >> 8) & 0x3F | 0x80) as u8);
-            self.u8((rotated & 0xFF) as u8);
+    /// Compressed signed integer, bit-exact port of Mono.Cecil's
+    /// `ByteBuffer.WriteCompressedInt32` (valid range `-2^28 .. 2^28-1`;
+    /// out-of-range values saturate into the largest envelope instead of
+    /// panicking, since our writer API is infallible).
+    pub fn compressed_i32(&mut self, value: i32) {
+        const B6: i32 = (1 << 6) - 1;
+        const B13: i32 = (1 << 13) - 1;
+        const B28: i32 = (1 << 28) - 1;
+        let sign_mask = value >> 31;
+        if (value & !B6) == (sign_mask & !B6) {
+            let n = ((value & B6) << 1) | (sign_mask & 1);
+            self.u8(n as u8);
+        } else if (value & !B13) == (sign_mask & !B13) {
+            let n = ((value & B13) << 1) | (sign_mask & 1);
+            let val = (0x8000u16 | n as u16).to_be_bytes();
+            self.bytes(&val);
         } else {
-            self.u8((((rotated >> 24) & 0x1F) | 0xC0) as u8);
-            self.u8((rotated >> 16) as u8);
-            self.u8((rotated >> 8) as u8);
-            self.u8(rotated as u8);
+            let n = (((value & B28) << 1) | (sign_mask & 1)) as u32;
+            let val = 0xC000_0000u32 | n;
+            self.bytes(&val.to_be_bytes());
         }
     }
 

@@ -702,7 +702,11 @@ pub enum NativeTypeSpec {
     CustomMarshaler {
         guid: [u8; 16],
         unmarshaller_ty: String,
+        /// Managed marshaller type name (third SerString on the wire).
+        managed_ty: String,
         cookie: String,
     },
+    /// `NativeType.Max` (0x50) - appears as a nested array element sentinel.
+    Max,
     Error,
 }

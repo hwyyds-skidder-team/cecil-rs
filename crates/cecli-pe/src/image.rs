@@ -18,6 +18,10 @@ impl TargetArchitecture {
     pub const AMD64: TargetArchitecture = TargetArchitecture(0x8664);
     pub const ARM64: TargetArchitecture = TargetArchitecture(0xAA64);
 
+    /// Raw machine value stored in the PE file header.
+    pub fn machine(self) -> u16 {
+        self.0
+    }
     /// True for 64-bit image formats (PE32+ optional header).
     pub fn is_pe64(&self) -> bool {
         *self == Self::AMD64 || *self == Self::IA64 || *self == Self::ARM64
