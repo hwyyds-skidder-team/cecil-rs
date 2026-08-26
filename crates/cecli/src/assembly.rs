@@ -1,8 +1,10 @@
 //! Assembly definition: the public facade over one or more modules.
+//! (flag types come straight from cecli_core)
 
 use crate::model::types::*;
 use crate::module_def::Module;
-
+use cecli_core::flags::{AssemblyAttributes, AssemblyHashAlgorithm};
+// Assembly-level identity (`Assembly` row equivalent).
 /// Assembly-level identity (`Assembly` row equivalent).
 #[derive(Debug, Clone)]
 pub struct AssemblyNameDefinition {

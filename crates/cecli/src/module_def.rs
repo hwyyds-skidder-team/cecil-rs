@@ -2,7 +2,7 @@
 
 use crate::model::types::*;
 
-/// A CLI module (one PE image worth of metadata).
+use cecli_core::flags::TypeAttributes;
 #[derive(Debug, Clone)]
 pub struct Module {
     /// Simple name from the `Module` row.
