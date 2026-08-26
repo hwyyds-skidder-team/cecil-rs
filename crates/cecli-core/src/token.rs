@@ -365,10 +365,15 @@ impl TokenType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodedIndexGroup {
     pub name: &'static str,
-    /// Tables participating, in tag order.
+    /// Tables participating, in tag order (tag `first_tag + i` -> `tables[i]`).
     pub tables: &'static [TableIndex],
     /// Number of low bits used by the tag.
     pub tag_bits: u32,
+    /// Value of the FIRST used tag. Groups with spec-reserved leading slots
+    /// (e.g. CustomAttributeType: tags 0-2 NotUsed, 3 slots total, valid
+    /// tags 2=MethodDef and 3=MemberRef per ECMA II 24.2.6) carry a non-zero
+    /// offset so raw tags index correctly.
+    pub first_tag: u32,
 }
 
 impl CodedIndexGroup {
@@ -380,13 +385,23 @@ impl CodedIndexGroup {
             9..=16 => 4,
             _ => 5,
         };
-        CodedIndexGroup { name, tables, tag_bits: bits }
+        CodedIndexGroup { name, tables, tag_bits: bits, first_tag: 0 }
     }
 
-    /// Explicit tag-bit override for groups whose spec reserves unused slots
-    /// (e.g. CustomAttributeType: 5 slots, only 2 populated, still 3 tag bits).
+    /// Explicit tag-bit override plus reserved leading tag count.
+    pub const fn with_layout(
+        name: &'static str,
+        tables: &'static [TableIndex],
+        tag_bits: u32,
+        first_tag: u32,
+    ) -> Self {
+        CodedIndexGroup { name, tables, tag_bits, first_tag }
+    }
+
+    /// Explicit tag-bit override for groups whose spec reserves unused slots.
+    #[deprecated(note = "use with_layout; with_tag_bits assumes first_tag = 0")]
     pub const fn with_tag_bits(name: &'static str, tables: &'static [TableIndex], tag_bits: u32) -> Self {
-        CodedIndexGroup { name, tables, tag_bits }
+        CodedIndexGroup { name, tables, tag_bits, first_tag: 0 }
     }
 
     /// Number of low bits the encoded row-id must be shifted by.
@@ -420,16 +435,17 @@ pub mod coded {
     pub const MEMBER_REF_PARENT: CodedIndexGroup = group!(
         "MemberRefParent", TypeDef, TypeRef, ModuleRef, MethodDef, TypeSpec
     );
+    pub const CUSTOM_ATTRIBUTE_TYPE: CodedIndexGroup = CodedIndexGroup::with_layout(
+        "CustomAttributeType",
+        &[TableIndex::MethodDef, TableIndex::MemberRef],
+        3,
+        2,
+    );
     pub const HAS_SEMANTICS: CodedIndexGroup = group!("HasSemantics", Event, Property);
     pub const METHOD_DEF_OR_REF: CodedIndexGroup = group!("MethodDefOrRef", MethodDef, MemberRef);
     pub const MEMBER_FORWARDED: CodedIndexGroup = group!("MemberForwarded", Field, MethodDef);
     pub const IMPLEMENTATION: CodedIndexGroup =
         group!("Implementation", File, AssemblyRef, ExportedType);
-    pub const CUSTOM_ATTRIBUTE_TYPE: CodedIndexGroup = CodedIndexGroup::with_tag_bits(
-        "CustomAttributeType",
-        &[TableIndex::MethodDef, TableIndex::MemberRef],
-        3,
-    );
     pub const RESOLUTION_SCOPE: CodedIndexGroup =
         group!("ResolutionScope", Module, ModuleRef, AssemblyRef, TypeRef);
     pub const TYPE_OR_METHOD_DEF: CodedIndexGroup =

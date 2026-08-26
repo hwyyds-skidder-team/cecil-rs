@@ -186,6 +186,7 @@ pub fn encode_coded(group: &'static CodedIndexGroup, table: TableIndex, rid: u32
         .tables
         .iter()
         .position(|&t| t == table)
+        .map(|pos| pos as u64 + group.first_tag as u64)
         .ok_or_else(|| {
             Error::argument(format!(
                 "table {} does not participate in coded group {}",
@@ -196,7 +197,7 @@ pub fn encode_coded(group: &'static CodedIndexGroup, table: TableIndex, rid: u32
     if rid > 0x00FF_FFFF {
         return Err(Error::argument(format!("rid {rid} exceeds 24 bits")));
     }
-    Ok(((rid as u64) << group.shift_bits()) | tag as u64)
+    Ok(((rid as u64) << group.shift_bits()) | tag)
 }
 
 /// Decodes a coded-index cell into its `(table, rid)` pair. The low
@@ -206,7 +207,11 @@ pub fn decode_coded(group: &'static CodedIndexGroup, encoded: u64) -> Option<(Ta
     let mask = (1u64 << group.shift_bits()) - 1;
     let tag = (encoded & mask) as usize;
     let rid = (encoded >> group.shift_bits()) as u32;
-    Some((*group.tables.get(tag)?, rid))
+    if (tag as u64) < group.first_tag as u64 {
+        // Spec-reserved slot (e.g. CustomAttributeType tags 0-1).
+        return None;
+    }
+    Some((*group.tables.get(tag - group.first_tag as usize)?, rid))
 }
 
 /// Layout of one present table inside the `#~` stream.

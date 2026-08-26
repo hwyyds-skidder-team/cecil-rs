@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use cecli_core::io::ByteWriter;
-use cecli_core::token::TableIndex;
+use cecli_core::token::{TableIndex, Token};
 use cecli_core::{Error, Result};
 
 use crate::root::write_root;
@@ -148,6 +148,17 @@ impl GuidHeapBuffer {
     }
 }
 
+/// Accumulated portable-PDB `#Pdb` heap payload: the 20-byte PDB id, the
+/// module entry point token, and the row counts of the type-system tables
+/// recorded in the associated assembly (ECMA-335 Part V).
+#[derive(Debug, Clone)]
+struct PdbHeapBuffer {
+    id: [u8; 20],
+    entry_point: Token,
+    /// `(table byte, row count)` pairs in ascending table order.
+    table_counts: Vec<(u8, u32)>,
+}
+
 /// Builds metadata from scratch: heaps plus raw table rows, finalized into
 /// BSJB bytes parseable by [`crate::MetadataReader`].
 #[derive(Debug)]
@@ -157,6 +168,7 @@ pub struct MetadataBuilder {
     user_strings: UserStringHeapBuffer,
     blobs: BlobHeapBuffer,
     guids: GuidHeapBuffer,
+    pdb: Option<PdbHeapBuffer>,
     rows: Vec<Vec<Vec<u64>>>,
 }
 
@@ -169,6 +181,7 @@ impl MetadataBuilder {
             user_strings: UserStringHeapBuffer::new(),
             blobs: BlobHeapBuffer::new(),
             guids: GuidHeapBuffer::default(),
+            pdb: None,
             rows: (0..TABLE_COUNT).map(|_| Vec::new()).collect(),
         }
     }
@@ -223,6 +236,23 @@ impl MetadataBuilder {
         self.rows[table as usize].len() as u32
     }
 
+    /// Records the portable-PDB `#Pdb` heap payload emitted by
+    /// [`MetadataBuilder::finalize`] as a `#Pdb` stream.
+    ///
+    /// `id` is the 20-byte PDB id (GUID + time stamp), `entry_point` the
+    /// module entry point token, and `type_system_counts` the
+    /// `(table byte, row count)` pairs recorded in ascending table order,
+    /// exactly like Mono.Cecil's `PortablePdbWriter.WritePdbHeap`.
+    pub fn set_pdb_heap(&mut self, id: [u8; 20], entry_point: Token, type_system_counts: &[(u8, u32)]) {
+        let mut counts = type_system_counts.to_vec();
+        counts.sort_by_key(|&(table, _)| table);
+        self.pdb = Some(PdbHeapBuffer {
+            id,
+            entry_point,
+            table_counts: counts,
+        });
+    }
+
     /// Serializes the complete BSJB root.
     ///
     /// Heap-size flags are derived from the final heap lengths (> `0xFFFF`
@@ -275,6 +305,20 @@ impl MetadataBuilder {
             }
         }
 
+        let pdb_stream = self.pdb.map(|pdb| {
+            let mut pw = ByteWriter::new();
+            pw.bytes(&pdb.id);
+            pw.u32(pdb.entry_point.0);
+            let mut valid = 0u64;
+            for &(table, _) in &pdb.table_counts {
+                valid |= 1u64 << table;
+            }
+            pw.u64(valid);
+            for &(_, count) in &pdb.table_counts {
+                pw.u32(count);
+            }
+            pw.into_vec()
+        });
         let tables = tw.into_vec();
         let mut streams: Vec<(&str, &[u8])> = vec![
             ("#~", tables.as_slice()),
@@ -288,6 +332,9 @@ impl MetadataBuilder {
         }
         if self.blobs.data.len() > 1 {
             streams.push(("#Blob", self.blobs.data.as_slice()));
+        }
+        if let Some(pdb) = &pdb_stream {
+            streams.push(("#Pdb", pdb.as_slice()));
         }
         write_root(&self.version, &streams)
     }
@@ -595,5 +642,33 @@ mod tests {
         assert_eq!(r.version_string(), "v4.0.30319");
         assert_eq!(r.tables().valid_mask(), 0);
         assert_eq!(r.heaps().strings.get(0).unwrap(), "");
+    }
+
+    #[test]
+    fn pdb_heap_stream_roundtrips() {
+        let mut b = MetadataBuilder::new("v4.0.30319");
+        b.add_row(
+            TableIndex::Document,
+            &[0, 1, 0, 2],
+        )
+        .expect("document row");
+        let id = [
+            0x01u8, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14,
+        ];
+        // Counts intentionally out of order; set_pdb_heap must sort them.
+        b.set_pdb_heap(id, Token::new(TableIndex::MethodDef, 7), &[(0x32, 3), (0x30, 1)]);
+
+        let bytes = b.finalize();
+        let r = MetadataReader::parse(&bytes).expect("parses");
+        let pdb = r.heaps().pdb.expect("#Pdb stream present");
+        assert_eq!(pdb.id(), id.as_slice());
+        assert_eq!(pdb.entry_point(), Token::new(TableIndex::MethodDef, 7).0);
+        assert!(pdb.has_table(TableIndex::Document));
+        assert!(pdb.has_table(TableIndex::LocalScope));
+        assert!(!pdb.has_table(TableIndex::MethodDebugInformation));
+        assert_eq!(pdb.row_count(TableIndex::Document), 1);
+        assert_eq!(pdb.row_count(TableIndex::LocalScope), 3);
+        assert_eq!(pdb.row_count(TableIndex::LocalVariable), 0);
     }
 }
