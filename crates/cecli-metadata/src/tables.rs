@@ -127,6 +127,8 @@ pub fn column_kinds(table: TableIndex) -> Option<&'static [ColumnKind]> {
         ],
         T::AssemblyProcessor => &[K::U32],
         T::AssemblyOS => &[K::U32, K::U32, K::U32],
+        // ECMA-335 II 22.5: MajorVersion..Revision U16x4, Flags U32,
+        // PublicKeyOrToken BlobIdx, Name StringIdx, Culture StringIdx, HashValue BlobIdx.
         T::AssemblyRef => &[
             K::U16,
             K::U16,
@@ -134,9 +136,9 @@ pub fn column_kinds(table: TableIndex) -> Option<&'static [ColumnKind]> {
             K::U16,
             K::U32,
             K::BlobIdx,
+            K::StringIdx,
+            K::StringIdx,
             K::BlobIdx,
-            K::StringIdx,
-            K::StringIdx,
         ],
         T::AssemblyRefProcessor => &[K::U32, K::Simple(T::AssemblyRef)],
         T::AssemblyRefOS => &[K::U32, K::U32, K::U32, K::Simple(T::AssemblyRef)],
