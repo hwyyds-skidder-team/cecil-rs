@@ -4,7 +4,7 @@
 use bitflags::bitflags;
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct TypeAttributes: u32 {
         const VISIBILITY_MASK = 0x0000_0007;
         const NOT_PUBLIC = 0x0000_0000;
@@ -48,7 +48,7 @@ bitflags! {
 
 impl TypeAttributes {
     pub fn visibility(self) -> u32 {
-        (self.bits() & Self::VISIBILITY_MASK.bits())
+        self.bits() & Self::VISIBILITY_MASK.bits()
     }
     pub fn with_visibility(self, v: u32) -> Self {
         TypeAttributes::from_bits_truncate((self.bits() & !0x7) | v)
@@ -56,7 +56,7 @@ impl TypeAttributes {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct FieldAttributes: u16 {
         const FIELD_ACCESS_MASK = 0x0007;
         const COMPILER_CONTROLLED = 0x0000;
@@ -81,7 +81,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct MethodAttributes: u16 {
         const MEMBER_ACCESS_MASK = 0x0007;
         const COMPILER_CONTROLLED = 0x0000;
@@ -113,7 +113,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct ParameterAttributes: u16 {
         const NONE = 0x0000;
         const IN = 0x0001;
@@ -127,7 +127,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct PropertyAttributes: u16 {
         const NONE = 0x0000;
         const SPECIAL_NAME = 0x0200;
@@ -137,7 +137,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct EventAttributes: u16 {
         const NONE = 0x0000;
         const SPECIAL_NAME = 0x0200;
@@ -146,7 +146,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct GenericParameterAttributes: u16 {
         const VARIANCE_MASK = 0x0003;
         const NON_VARIANT = 0x0000;
@@ -162,7 +162,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct MethodImplAttributes: u16 {
         const CODE_TYPE_MASK = 0x0003;
         const IL = 0x0000;
@@ -186,7 +186,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct MethodSemanticsAttributes: u16 {
         const NONE = 0x0000;
         const SETTER = 0x0001;
@@ -199,7 +199,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct PInvokeAttributes: u16 {
         const NO_MANGLE = 0x0001;
 
@@ -229,7 +229,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct ManifestResourceAttributes: u32 {
         const VISIBILITY_MASK = 0x0000_0007;
         const PUBLIC = 0x0000_0001;
@@ -238,7 +238,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct AssemblyAttributes: u32 {
         const PUBLIC_KEY = 0x0001;
         const SIDE_BY_SIDE_COMPATIBLE = 0x0000;
@@ -250,7 +250,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct FileRowAttributes: u32 {
         const CONTAINS_METADATA = 0x0000;
         const CONTAINS_NO_METADATA = 0x0001;
@@ -258,7 +258,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct ModuleAttributes: u32 {
         const IL_ONLY = 0x0000_0001;
         const REQUIRED_32_BIT = 0x0000_0002;
@@ -270,7 +270,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct ModuleCharacteristics: u16 {
         const HIGH_ENTROPY_VA = 0x0020;
         const DYNAMIC_BASE = 0x0040;

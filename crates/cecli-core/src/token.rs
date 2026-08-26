@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// A CLI metadata token: high byte = table, low 24 bits = row id (1-based).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct Token(pub u32);
 
 impl Token {
