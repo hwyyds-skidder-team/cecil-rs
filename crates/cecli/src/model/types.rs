@@ -507,6 +507,8 @@ impl Default for PropertyDefinition {
 pub struct EventDefinition {
     pub name: String,
     pub attributes: EventAttributes,
+    /// Delegate type raised by this event (`Event.EventType` column).
+    pub event_type: Option<TypeDesc>,
     pub add_on: Option<MethodId>,
     pub remove_on: Option<MethodId>,
     pub fire: Option<MethodId>,
@@ -519,6 +521,7 @@ impl Default for EventDefinition {
         EventDefinition {
             name: String::new(),
             attributes: EventAttributes::empty(),
+            event_type: None,
             add_on: None,
             remove_on: None,
             fire: None,
@@ -610,14 +613,12 @@ pub enum ROperand {
     /// Local variable index.
     Var(u16),
 }
-
 /// Exception handling clause with IL offsets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExceptionHandlerIL {
     pub kind: ExceptionKind,
     pub try_offset: i32,
     pub try_length: i32,
-    /// Valid when kind is Filter; filter handler starts at this offset.
     pub filter_offset: i32,
     pub handler_offset: i32,
     pub handler_length: i32,
