@@ -1,1 +1,3 @@
-// cecli-mdb: implementation follows in subsequent phases.
+//! cecli-mdb: Mono MDB debug information format.
+pub mod reader;
+pub mod writer;
