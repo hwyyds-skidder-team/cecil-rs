@@ -13,12 +13,12 @@
 
 use std::collections::BTreeMap;
 
+use cecli_cil::{ExceptionHandlerType, OpCode, OperandType};
 use cecli_core::io::ByteWriter;
 use cecli_core::{Error, Result, TableIndex, Token};
-use cecli_cil::{ExceptionHandlerType, OpCode, OperandType};
 
 use crate::model::types::{
-    ExceptionHandlerIL, ExceptionKind, ResolvedBody, RInstruction, ROperand,
+    ExceptionHandlerIL, ExceptionKind, RInstruction, ROperand, ResolvedBody,
 };
 use crate::module_def::Module;
 use crate::write::token_map::TokenMap;
@@ -88,11 +88,7 @@ pub fn encode_body(
 /// Cecil's `RequiresFatHeader`: the fat form is used whenever the code does
 /// not fit the tiny envelope or any explicit state exists.
 fn requires_fat_header(code_size: usize, body: &ResolvedBody, has_eh: bool) -> bool {
-    code_size >= 64
-        || body.init_locals
-        || !body.locals.is_empty()
-        || has_eh
-        || body.max_stack > 8
+    code_size >= 64 || body.init_locals || !body.locals.is_empty() || has_eh || body.max_stack > 8
 }
 
 /// Recomputes sequential instruction offsets (`CodeWriter.ComputeHeader`).
@@ -129,9 +125,7 @@ fn rinstr_size(instr: &RInstruction) -> Result<usize> {
 fn switch_targets(operand: &ROperand) -> Result<&Vec<i32>> {
     match operand {
         ROperand::Switch(targets) => Ok(targets),
-        other => Err(Error::invalid_op(format!(
-            "switch operand expected, found {other:?}"
-        ))),
+        other => Err(Error::invalid_op(format!("switch operand expected, found {other:?}"))),
     }
 }
 
@@ -334,7 +328,7 @@ fn to_cil_clause(
 /// Pads zeros until the writer's ABSOLUTE position is 4-aligned (Cecil `Align`
 /// semantics: bodies concatenate into one code stream).
 fn align_from(out: &mut ByteWriter) {
-    while out.position() % 4 != 0 {
+    while !out.position().is_multiple_of(4) {
         out.u8(0);
     }
 }
@@ -368,19 +362,11 @@ mod tests {
     }
 
     fn instr(offset: i32, opcode: OpCode, operand: ROperand) -> RInstruction {
-        RInstruction {
-            offset,
-            opcode,
-            operand,
-        }
+        RInstruction { offset, opcode, operand }
     }
 
     fn int32_local() -> LocalVariable {
-        LocalVariable {
-            index: 0,
-            ty: TypeDesc::Internal("int32".into()),
-            pinned: false,
-        }
+        LocalVariable { index: 0, ty: TypeDesc::Internal("int32".into()), pinned: false }
     }
 
     /// Decodes header + code via the `cecli-cil` helpers.
@@ -401,9 +387,7 @@ mod tests {
         while data.get(pos) == Some(&0) {
             pos += 1;
         }
-        let clauses = cecli_cil::parse_sections(&data[pos..])
-            .expect("sections parse")
-            .0;
+        let clauses = cecli_cil::parse_sections(&data[pos..]).expect("sections parse").0;
         (pos, clauses)
     }
 
@@ -423,7 +407,8 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        let written = encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
+        let written =
+            encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         let bytes = out.into_vec();
 
         assert_eq!(written as usize, bytes.len());
@@ -473,7 +458,8 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        let written = encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
+        let written =
+            encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         assert_eq!(written, 0);
         assert!(out.is_empty());
     }
@@ -515,7 +501,8 @@ mod tests {
         let m = Module::default();
 
         let mut out = ByteWriter::new();
-        let written = encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
+        let written =
+            encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
         let bytes = out.into_vec();
         assert_eq!(written as usize, bytes.len());
 
@@ -530,9 +517,8 @@ mod tests {
         assert_eq!(bytes[1], FAT_HEADER_SIZE_BYTE);
 
         // Locals StandAloneSig token flows through the map.
-        let expected_locals = tmap
-            .local_var_sig_token(std::slice::from_ref(&int32_local()), &m)
-            .expect("local sig");
+        let expected_locals =
+            tmap.local_var_sig_token(std::slice::from_ref(&int32_local()), &m).expect("local sig");
         assert_eq!(header.locals_token, expected_locals);
         assert!(!header.locals_token.is_nil());
 
@@ -643,10 +629,7 @@ mod tests {
         // Sorted by try offset despite unsorted input.
         assert_eq!(clauses[0].try_start, 0);
         assert_eq!(clauses[0].handler_type, ExceptionHandlerType::Catch);
-        assert_eq!(
-            clauses[0].catch_type,
-            tmap.type_token(&ty, &m).expect("catch token")
-        );
+        assert_eq!(clauses[0].catch_type, tmap.type_token(&ty, &m).expect("catch token"));
         assert_eq!(clauses[1].try_start, 100);
         assert_eq!(clauses[1].handler_type, ExceptionHandlerType::Fault);
     }
@@ -681,21 +664,12 @@ mod tests {
         assert!(!requires_fat_header(63, &base, false));
         // Every forcing condition flips the decision at 63 bytes.
         assert!(requires_fat_header(64, &base, false));
-        let init = ResolvedBody {
-            init_locals: true,
-            ..base.clone()
-        };
+        let init = ResolvedBody { init_locals: true, ..base.clone() };
         assert!(requires_fat_header(63, &init, false));
-        let local = ResolvedBody {
-            locals: vec![int32_local()],
-            ..base.clone()
-        };
+        let local = ResolvedBody { locals: vec![int32_local()], ..base.clone() };
         assert!(requires_fat_header(63, &local, false));
         assert!(requires_fat_header(63, &base, true));
-        let deep_stack = ResolvedBody {
-            max_stack: 9,
-            ..base
-        };
+        let deep_stack = ResolvedBody { max_stack: 9, ..base };
         assert!(requires_fat_header(63, &deep_stack, false));
     }
 
@@ -744,10 +718,11 @@ mod tests {
 
         // An unknown read-time rid falls back to the raw passthrough.
         let stale = ResolvedBody {
-            instructions: vec![instr(0, CALLI, ROperand::Token(Token::new(
-                TableIndex::StandAloneSig,
-                9,
-            )))],
+            instructions: vec![instr(
+                0,
+                CALLI,
+                ROperand::Token(Token::new(TableIndex::StandAloneSig, 9)),
+            )],
             ..Default::default()
         };
         let mut out2 = ByteWriter::new();

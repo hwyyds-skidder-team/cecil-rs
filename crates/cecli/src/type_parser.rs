@@ -29,11 +29,7 @@ enum Spec {
     Ptr,
     ByRef,
     SzArray,
-    Array {
-        rank: usize,
-        sizes: Vec<i32>,
-        lobounds: Vec<i32>,
-    },
+    Array { rank: usize, sizes: Vec<i32>, lobounds: Vec<i32> },
 }
 
 /// Intermediate parse-tree node mirroring `TypeParser.Type`.
@@ -130,7 +126,11 @@ impl Parser {
         // input carries trailing garbage (`System.Int32 x`).
         let fullname = match fullname.split_whitespace().collect::<Vec<_>>()[..] {
             [single] => single.to_string(),
-            _ => return Err(Error::argument(format!("unexpected whitespace in type name `{fullname}'"))),
+            _ => {
+                return Err(Error::argument(format!(
+                    "unexpected whitespace in type name `{fullname}'"
+                )))
+            }
         };
 
         let nested_names = self.parse_nested_names();
@@ -156,14 +156,7 @@ impl Parser {
 
         let assembly = if fq_name { self.parse_assembly_name() } else { String::new() };
 
-        Ok(ParsedType {
-            fullname,
-            nested_names,
-            arity,
-            specs,
-            generic_arguments,
-            assembly,
-        })
+        Ok(ParsedType { fullname, nested_names, arity, specs, generic_arguments, assembly })
     }
 
     /// `ParseSpecs`. Strict about closing brackets; multi-dimensional lists may carry
@@ -194,7 +187,11 @@ impl Parser {
                                     "unterminated `[*]' array specification",
                                 ));
                             }
-                            specs.push(Spec::Array { rank: 1, sizes: Vec::new(), lobounds: Vec::new() });
+                            specs.push(Spec::Array {
+                                rank: 1,
+                                sizes: Vec::new(),
+                                lobounds: Vec::new(),
+                            });
                         }
                         _ => specs.push(self.parse_dimensions()?),
                     }
@@ -322,8 +319,7 @@ impl Parser {
 /// -> size, empty -> unspecified.
 fn parse_dimension(token: &str) -> Result<(Option<i32>, Option<i32>)> {
     fn num(text: &str) -> Result<i32> {
-        text.parse::<i32>()
-            .map_err(|_| Error::argument(format!("invalid array bound `{text}'")))
+        text.parse::<i32>().map_err(|_| Error::argument(format!("invalid array bound `{text}'")))
     }
     if let Some((lo, size)) = token.split_once(':') {
         let lo = lo.trim();
@@ -364,7 +360,11 @@ fn resolve_scope(assembly: &str, scopes: &[AssemblyNameReference]) -> ScopeRef {
 /// Build the [`TypeDesc`] from a parsed node: external chain first (outermost root,
 /// innermost returned), then generic instantiation over it, then the spec wrappers
 /// applied outside-in (first spec outermost), like `CreateSpecs`.
-fn build_type_desc(info: ParsedType, base_scope: ScopeRef, scopes: &[AssemblyNameReference]) -> TypeDesc {
+fn build_type_desc(
+    info: ParsedType,
+    base_scope: ScopeRef,
+    scopes: &[AssemblyNameReference],
+) -> TypeDesc {
     let scope = if info.assembly.is_empty() {
         base_scope.clone()
     } else {
@@ -391,8 +391,10 @@ fn build_type_desc(info: ParsedType, base_scope: ScopeRef, scopes: &[AssemblyNam
 
     if let Some(arguments) = info.generic_arguments {
         debug_assert_eq!(arguments.len(), info.arity);
-        let arguments =
-            arguments.into_iter().map(|arg| build_type_desc(arg, base_scope.clone(), scopes)).collect();
+        let arguments = arguments
+            .into_iter()
+            .map(|arg| build_type_desc(arg, base_scope.clone(), scopes))
+            .collect();
         ty = TypeDesc::GenericInstance { definition: Box::new(ty), arguments };
     }
 
@@ -409,7 +411,11 @@ fn build_type_desc(info: ParsedType, base_scope: ScopeRef, scopes: &[AssemblyNam
     ty
 }
 
-fn parse_impl(full_name: &str, base_scope: ScopeRef, scopes: &[AssemblyNameReference]) -> Result<TypeDesc> {
+fn parse_impl(
+    full_name: &str,
+    base_scope: ScopeRef,
+    scopes: &[AssemblyNameReference],
+) -> Result<TypeDesc> {
     let full_name = full_name.trim();
     if full_name.is_empty() {
         return Err(Error::argument("type name is empty"));
@@ -543,8 +549,9 @@ mod tests {
     #[test]
     fn assembly_qualified_resolves_against_scopes() {
         let scopes = moduleless_scopes();
-        let ty = parse_type_name_scoped("My.T, MyLib, Version=1.0.0.0", ScopeRef::ThisModule, &scopes)
-            .unwrap();
+        let ty =
+            parse_type_name_scoped("My.T, MyLib, Version=1.0.0.0", ScopeRef::ThisModule, &scopes)
+                .unwrap();
         match ty {
             TypeDesc::External(ext) => {
                 assert_eq!((ext.namespace.as_str(), ext.name.as_str()), ("My", "T"));
@@ -590,7 +597,11 @@ mod tests {
 
     #[test]
     fn modreq_modopt_unsupported() {
-        let err = parse_type_name("System.Int32 modreq(System.Runtime.InteropServices.IsVolatile)", ScopeRef::ThisModule).unwrap_err();
+        let err = parse_type_name(
+            "System.Int32 modreq(System.Runtime.InteropServices.IsVolatile)",
+            ScopeRef::ThisModule,
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
         assert!(parse_type_name("Ns.T modopt(Ns.M)", ScopeRef::ThisModule).is_err());
     }
@@ -602,7 +613,9 @@ mod tests {
             ScopeRef::ThisModule,
         )
         .unwrap();
-        let TypeDesc::GenericInstance { arguments, .. } = ty else { panic!("expected GenericInstance") };
+        let TypeDesc::GenericInstance { arguments, .. } = ty else {
+            panic!("expected GenericInstance")
+        };
         assert_eq!(arguments.len(), 2);
 
         // Escaped delimiters survive inside parts.
@@ -627,8 +640,11 @@ mod tests {
     #[test]
     fn nested_generic_arity_sums_across_levels() {
         // Outer`1 + Inner`1 = arity 2 total.
-        let ty = parse_type_name("Ns.Outer`1+Inner`1[[Ns.A],[Ns.B]]", ScopeRef::ThisModule).unwrap();
-        let TypeDesc::GenericInstance { arguments, .. } = ty else { panic!("expected GenericInstance") };
+        let ty =
+            parse_type_name("Ns.Outer`1+Inner`1[[Ns.A],[Ns.B]]", ScopeRef::ThisModule).unwrap();
+        let TypeDesc::GenericInstance { arguments, .. } = ty else {
+            panic!("expected GenericInstance")
+        };
         assert_eq!(arguments.len(), 2);
         // Mismatch across combined arity fails too.
         assert!(parse_type_name("Ns.Outer`1+Inner`1[[Ns.A]]", ScopeRef::ThisModule).is_err());
@@ -636,12 +652,10 @@ mod tests {
 
     #[test]
     fn nested_generic_argument_types_recurse() {
-        let ty = parse_type_name(
-            "Ns.Dict`1[[Ns.Inner+A[]]]",
-            ScopeRef::ThisModule,
-        )
-        .unwrap();
-        let TypeDesc::GenericInstance { arguments, .. } = ty else { panic!("expected GenericInstance") };
+        let ty = parse_type_name("Ns.Dict`1[[Ns.Inner+A[]]]", ScopeRef::ThisModule).unwrap();
+        let TypeDesc::GenericInstance { arguments, .. } = ty else {
+            panic!("expected GenericInstance")
+        };
         match &arguments[0] {
             TypeDesc::SzArray(elem) => match elem.as_ref() {
                 TypeDesc::External(ext) => {

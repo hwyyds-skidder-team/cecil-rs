@@ -38,7 +38,7 @@ impl Default for AssemblyNameDefinition {
 }
 
 /// An assembly: main module plus optional satellite netmodules.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AssemblyDefinition {
     pub name: AssemblyNameDefinition,
     pub main: Module,
@@ -46,17 +46,6 @@ pub struct AssemblyDefinition {
     pub modules: Vec<Module>,
     /// Entry point as a method arena index into `main`.
     pub entry_point: Option<MethodId>,
-}
-
-impl Default for AssemblyDefinition {
-    fn default() -> Self {
-        AssemblyDefinition {
-            name: AssemblyNameDefinition::default(),
-            main: Module::default(),
-            modules: Vec::new(),
-            entry_point: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +59,6 @@ impl AssemblyDefinition {
     pub fn read(bytes: &[u8]) -> Result<Self> {
         Self::read_impl(bytes, None, &crate::resolver::ReaderParameters::new())
     }
-
 
     /// Reads an assembly from a file path.
     ///
@@ -113,8 +101,7 @@ impl AssemblyDefinition {
     ) -> Result<Self> {
         let image = cecli_pe::Image::parse(bytes)?;
         let read_opts = crate::read::context::ReadOptions::default();
-        let (mut module, mut ctx) =
-            crate::read::module_reader::read_module(&image, &read_opts)?;
+        let (mut module, mut ctx) = crate::read::module_reader::read_module(&image, &read_opts)?;
 
         // Decode IL bodies against the parsed metadata root.
         let (md_rva, _) = image.metadata_rva()?;
@@ -162,10 +149,7 @@ impl AssemblyDefinition {
                 None => {
                     return Err(Error::Io(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
-                        format!(
-                            "no portable PDB found next to '{}'",
-                            origin_path.display()
-                        ),
+                        format!("no portable PDB found next to '{}'", origin_path.display()),
                     )));
                 }
             }
@@ -177,11 +161,11 @@ impl AssemblyDefinition {
         // are non-fatal here; the row stays preserved on the main module.
         let mut modules = Vec::new();
         for row in &module.file_rows {
-            if row.attributes.contains(cecli_core::flags::FileRowAttributes::CONTAINS_NO_METADATA)
-            {
+            if row.attributes.contains(cecli_core::flags::FileRowAttributes::CONTAINS_NO_METADATA) {
                 continue;
             }
-            if let Some(satellite_bytes) = locate_netmodule_bytes(origin.as_deref(), &row.name, opts)
+            if let Some(satellite_bytes) =
+                locate_netmodule_bytes(origin.as_deref(), &row.name, opts)
             {
                 if let Ok(satellite) = read_standalone_module(&satellite_bytes) {
                     modules.push(satellite);
@@ -191,14 +175,8 @@ impl AssemblyDefinition {
 
         let entry_point = method_of_token(&ctx, module.entry_point_token);
 
-        Ok(AssemblyDefinition {
-            name,
-            main: module,
-            modules,
-            entry_point,
-        })
+        Ok(AssemblyDefinition { name, main: module, modules, entry_point })
     }
-
 
     /// The manifest module.
     pub fn main_module(&self) -> &Module {
@@ -295,11 +273,7 @@ fn attach_portable_symbols(module: &mut Module, pdb_bytes: &[u8]) -> Result<()> 
         }
     }
 
-    module.debug = Some(crate::module_def::ModuleDebugInfo {
-        documents,
-        points,
-        scopes,
-    });
+    module.debug = Some(crate::module_def::ModuleDebugInfo { documents, points, scopes });
     Ok(())
 }
 
@@ -360,8 +334,11 @@ pub(crate) fn read_standalone_module(bytes: &[u8]) -> Result<Module> {
     Ok(module)
 }
 
- /// Resolves a MethodDef token through the read-context handle map.
-fn method_of_token(ctx: &crate::read::context::ReadContext, token: cecli_core::Token) -> Option<crate::model::types::MethodId> {
+/// Resolves a MethodDef token through the read-context handle map.
+fn method_of_token(
+    ctx: &crate::read::context::ReadContext,
+    token: cecli_core::Token,
+) -> Option<crate::model::types::MethodId> {
     if token.is_nil() || token.table_byte() != cecli_core::TableIndex::MethodDef as u8 {
         return None;
     }
@@ -563,11 +540,8 @@ impl AssemblyDefinition {
 /// variable/constant rows by rid rather than owning their data.
 pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
     const FALLBACK_VERSION: &str = "v4.0.30319";
-    let version = if module.runtime_version.is_empty() {
-        FALLBACK_VERSION
-    } else {
-        &module.runtime_version
-    };
+    let version =
+        if module.runtime_version.is_empty() { FALLBACK_VERSION } else { &module.runtime_version };
     let mut builder = cecli_pdb::portable_writer::PortablePdbBuilder::with_version(version);
     builder.set_module_guid(module.guid);
     builder.set_entry_point(module.entry_point_token);
@@ -586,7 +560,10 @@ pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
     for (&method_rid, entries) in &debug.points {
         let method = cecli_core::Token::new(cecli_core::TableIndex::MethodDef, method_rid);
         for &(doc_index, ref points) in entries.iter() {
-            let handle = handles.get(doc_index as usize).copied().unwrap_or(cecli_pdb::portable_writer::DocumentHandle(0));
+            let handle = handles
+                .get(doc_index as usize)
+                .copied()
+                .unwrap_or(cecli_pdb::portable_writer::DocumentHandle(0));
             builder.set_method_sequence_points(method, handle, points)?;
         }
     }
@@ -608,7 +585,6 @@ pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
 
     builder.finalize()
 }
-
 
 fn arch_is_pe64(arch: cecli_core::flags::TargetArchitecture) -> bool {
     use cecli_core::flags::TargetArchitecture as A;
@@ -751,7 +727,6 @@ fn carrier_image(module: &Module) -> Result<cecli_pe::Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::types::*;
 
     /// Builds a tiny in-memory assembly: Ns.Outer/Nested with one method.
     fn sample_assembly() -> AssemblyDefinition {
@@ -795,16 +770,10 @@ mod tests {
     #[test]
     fn full_name_reflection_style() {
         let mut ad = sample_assembly();
-        assert_eq!(
-            ad.full_name(),
-            "sample, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null"
-        );
+        assert_eq!(ad.full_name(), "sample, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null");
         ad.name.version = Version::new(1, 2, 3, 4);
         ad.name.culture = Some("de".into());
-        assert_eq!(
-            ad.full_name(),
-            "sample, Version=1.2.3.4, Culture=de, PublicKeyToken=null"
-        );
+        assert_eq!(ad.full_name(), "sample, Version=1.2.3.4, Culture=de, PublicKeyToken=null");
     }
 
     #[test]
@@ -813,8 +782,8 @@ mod tests {
         module.kind = cecli_core::flags::ModuleKind::Dll;
         module.architecture = cecli_core::flags::TargetArchitecture::AMD64;
         module.characteristics = cecli_core::flags::ModuleCharacteristics::NX_COMPAT;
-        module.attributes =
-            cecli_core::flags::ModuleAttributes::IL_ONLY | cecli_core::flags::ModuleAttributes::IL_LIBRARY;
+        module.attributes = cecli_core::flags::ModuleAttributes::IL_ONLY
+            | cecli_core::flags::ModuleAttributes::IL_LIBRARY;
         module.entry_point_token = cecli_core::Token::new(cecli_core::TableIndex::MethodDef, 7);
         let image = carrier_image(&module).expect("carrier parses");
         assert_eq!(image.architecture.0, 0x8664);
@@ -833,11 +802,8 @@ mod tests {
         let ad = AssemblyDefinition::read(&bytes).expect("hello.exe parses");
         let types = ad.main.types.len();
         let methods = ad.main.methods.len();
-        let entry_name = ad
-            .entry_point_method()
-            .expect("hello.exe has an entry point")
-            .name
-            .clone();
+        let entry_name =
+            ad.entry_point_method().expect("hello.exe has an entry point").name.clone();
 
         let written = ad.write().expect("write succeeds");
         let re = AssemblyDefinition::read(&written).expect("output re-parses");
@@ -852,9 +818,11 @@ mod tests {
     }
 
     fn unique_test_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir()
-            .join("cecli_facade_tests")
-            .join(format!("{}_{}", tag, std::process::id()));
+        let dir = std::env::temp_dir().join("cecli_facade_tests").join(format!(
+            "{}_{}",
+            tag,
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp test dir created");
         dir
@@ -893,8 +861,8 @@ mod tests {
         assert!(sidecar.exists(), "sidecar pdb emitted");
 
         let pdb_bytes = std::fs::read(&sidecar).expect("sidecar readable");
-        let reader =
-            cecli_pdb::portable_reader::PortablePdbReader::parse(&pdb_bytes).expect("emitted pdb parses");
+        let reader = cecli_pdb::portable_reader::PortablePdbReader::parse(&pdb_bytes)
+            .expect("emitted pdb parses");
         assert_eq!(reader.documents().unwrap().len(), debug.documents.len());
 
         // write_symbols=false emits no sidecar.

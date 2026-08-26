@@ -20,13 +20,13 @@ use crate::read::context::{MemberRefRow, ReadContext, ReadOptions};
 
 use cecli_core::flags::{
     AssemblyHashAlgorithm, EventAttributes, FieldAttributes, FileRowAttributes,
-    GenericParameterAttributes, ManifestResourceAttributes, MethodAttributes,
-    MethodImplAttributes, MethodSemanticsAttributes, ModuleAttributes, ModuleCharacteristics,
-    ModuleKind, PInvokeAttributes, ParameterAttributes, PropertyAttributes, SecurityAction,
-    TargetArchitecture, TargetRuntime, TypeAttributes,
+    GenericParameterAttributes, ManifestResourceAttributes, MethodAttributes, MethodImplAttributes,
+    MethodSemanticsAttributes, ModuleAttributes, ModuleCharacteristics, ModuleKind,
+    PInvokeAttributes, ParameterAttributes, PropertyAttributes, SecurityAction, TargetArchitecture,
+    TargetRuntime, TypeAttributes,
 };
-use cecli_core::{ElementType, Error, Result, TableIndex as T, Token};
 use cecli_core::token::coded;
+use cecli_core::{ElementType, Error, Result, TableIndex as T, Token};
 use cecli_metadata::{decode_coded, MetadataReader};
 
 /// Data of one `Assembly` table row, surfaced through
@@ -111,10 +111,7 @@ fn list_end(starts: &[u32], i: usize, count: u32) -> u32 {
 /// Reads a complete module (every metadata table, no method bodies) from a
 /// parsed image. Returns the owned object model plus the token maps required
 /// by later phases (body resolution, writing, facade glue).
-pub fn read_module(
-    image: &cecli_pe::Image,
-    opts: &ReadOptions,
-) -> Result<(Module, ReadContext)> {
+pub fn read_module(image: &cecli_pe::Image, opts: &ReadOptions) -> Result<(Module, ReadContext)> {
     // Bodies belong to unit R3 (`resolve_bodies`); never loaded here.
     let _ = opts;
 
@@ -125,10 +122,7 @@ pub fn read_module(
 
     let mut ctx = ReadContext::new(&md);
 
-    let mut module = Module {
-        entry_point_token: image.entry_point_token(),
-        ..Default::default()
-    };
+    let mut module = Module { entry_point_token: image.entry_point_token(), ..Default::default() };
     ctx.entry_point_token = module.entry_point_token;
 
     populate_shell(&mut module, image, md.version_string());
@@ -263,12 +257,7 @@ fn read_type_defs(
         // Namespace(2), Extends, FieldList, MethodList].
         let name = cell_str(md, T::TypeDef, rid, 1)?;
         let namespace = cell_str(md, T::TypeDef, rid, 2)?;
-        module.types.push(TypeDefinition {
-            namespace,
-            name,
-            attributes,
-            ..Default::default()
-        });
+        module.types.push(TypeDefinition { namespace, name, attributes, ..Default::default() });
         ctx.type_defs.push(TypeId(rid - 1));
         rows.push(TypedefRow {
             field_start: cell_u32(md, T::TypeDef, rid, 4)?,
@@ -343,12 +332,7 @@ fn read_fields(module: &mut Module, ctx: &mut ReadContext, md: &MetadataReader) 
             let sig_ctx = ctx.sig_context(md);
             parse_field_signature(sig_blob, &sig_ctx)?
         };
-        module.fields.push(FieldDefinition {
-            name,
-            attributes,
-            signature,
-            ..Default::default()
-        });
+        module.fields.push(FieldDefinition { name, attributes, signature, ..Default::default() });
         ctx.field_defs.push(FieldId(rid - 1));
     }
     Ok(())
@@ -359,8 +343,7 @@ fn read_methods(module: &mut Module, ctx: &mut ReadContext, md: &MetadataReader)
     for rid in 1..=count {
         let impl_attributes =
             MethodImplAttributes::from_bits_truncate(cell_u16(md, T::MethodDef, rid, 1)?);
-        let attributes =
-            MethodAttributes::from_bits_truncate(cell_u16(md, T::MethodDef, rid, 2)?);
+        let attributes = MethodAttributes::from_bits_truncate(cell_u16(md, T::MethodDef, rid, 2)?);
         let name = cell_str(md, T::MethodDef, rid, 3)?;
         let sig_blob = cell_blob(md, T::MethodDef, rid, 4)?;
         let signature = {
@@ -398,16 +381,10 @@ fn read_params(module: &mut Module, md: &MetadataReader) -> Result<Vec<Option<(M
         let end = list_end(&starts, i, count);
         let mut p = (*start).max(1);
         while p < end && p <= count {
-            let attributes =
-                ParameterAttributes::from_bits_truncate(cell_u16(md, T::Param, p, 0)?);
+            let attributes = ParameterAttributes::from_bits_truncate(cell_u16(md, T::Param, p, 0)?);
             let sequence = cell_u16(md, T::Param, p, 1)?;
             let name = cell_str(md, T::Param, p, 2)?;
-            let parameter = Parameter {
-                name,
-                attributes,
-                sequence,
-                ..Default::default()
-            };
+            let parameter = Parameter { name, attributes, sequence, ..Default::default() };
             owners[p as usize - 1] = Some((MethodId(i as u32), sequence));
             let method = &mut module.methods[i];
             if sequence == 0 {
@@ -454,7 +431,7 @@ fn read_properties_events_semantics(
             let event_type = md
                 .column(T::Event, e, 2)
                 .ok()
-                .and_then(|cell| if cell == 0 { None } else { Some(cell) })
+                .filter(|&cell| cell != 0)
                 .map(|cell| ctx.tdor_to_typedesc(md, cell as u32))
                 .transpose()?;
             module.events.push(EventDefinition {
@@ -510,15 +487,17 @@ fn read_properties_events_semantics(
 
     // -- MethodSemantics ---------------------------------------------------
     for rid in 1..=md.row_count(T::MethodSemantics) {
-        let semantics =
-            MethodSemanticsAttributes::from_bits_truncate(cell_u16(md, T::MethodSemantics, rid, 0)?);
+        let semantics = MethodSemanticsAttributes::from_bits_truncate(cell_u16(
+            md,
+            T::MethodSemantics,
+            rid,
+            0,
+        )?);
         let method = cell_u32(md, T::MethodSemantics, rid, 1)? as usize;
         let assoc_cell = md.column(T::MethodSemantics, rid, 2)?;
         let (table, target) = decode_group(&coded::HAS_SEMANTICS, assoc_cell)?;
         if method == 0 || method > module.methods.len() {
-            return Err(bad(format!(
-                "MethodSemantics row {rid} references method outside table"
-            )));
+            return Err(bad(format!("MethodSemantics row {rid} references method outside table")));
         }
         let method = MethodId(method as u32 - 1);
         match table {
@@ -621,9 +600,7 @@ fn read_generic_params(
         let owner = cell_u32(md, T::GenericParamConstraint, rid, 0)? as usize;
         let constraint_cell = md.column(T::GenericParamConstraint, rid, 1)?;
         if owner < 1 || owner > constraints.len() {
-            return Err(bad(format!(
-                "GenericParamConstraint row {rid}: owner out of range"
-            )));
+            return Err(bad(format!("GenericParamConstraint row {rid}: owner out of range")));
         }
         constraints[owner - 1].push(constraint_cell as u32);
     }
@@ -659,9 +636,7 @@ fn read_base_types_and_interfaces(
         let class = cell_u32(md, T::InterfaceImpl, rid, 0)? as usize;
         let iface_cell = cell_u32(md, T::InterfaceImpl, rid, 1)?;
         if class < 1 || class > module.types.len() {
-            return Err(bad(format!(
-                "InterfaceImpl row {rid}: class out of range"
-            )));
+            return Err(bad(format!("InterfaceImpl row {rid}: class out of range")));
         }
         let iface = ctx.tdor_to_typedesc(md, iface_cell)?;
         module.types[class - 1].interfaces.push(iface);
@@ -707,10 +682,9 @@ fn field_type_size(module: &Module, ty: &TypeDesc, pointer_size: usize) -> i32 {
         },
         TypeDesc::Ptr(_) | TypeDesc::FnPtr(_) => pointer_size as i32,
         TypeDesc::CMod { unmodified, .. } => field_type_size(module, unmodified, pointer_size),
-        TypeDesc::Def(id) => module.types[id.index()]
-            .class_layout
-            .map(|l| l.class_size)
-            .unwrap_or(0),
+        TypeDesc::Def(id) => {
+            module.types[id.index()].class_layout.map(|l| l.class_size).unwrap_or(0)
+        }
         _ => 0,
     }
 }
@@ -720,7 +694,11 @@ fn field_type_size(module: &Module, ty: &TypeDesc, pointer_size: usize) -> i32 {
 /// Mono.Cecil `GetFieldTypeSize` (primitive sizes; resolved class layout
 /// size otherwise). Divergence note: Cecil resolves lazily and degrades to
 /// an empty array on truncation; here malformed data is an error.
-fn read_field_rvas(module: &mut Module, image: &cecli_pe::Image, md: &MetadataReader) -> Result<()> {
+fn read_field_rvas(
+    module: &mut Module,
+    image: &cecli_pe::Image,
+    md: &MetadataReader,
+) -> Result<()> {
     let pointer_size = if image.architecture.is_pe64() { 8 } else { 4 };
     for rid in 1..=md.row_count(T::FieldRva) {
         let rva = cell_u32(md, T::FieldRva, rid, 0)? as u64;
@@ -753,8 +731,9 @@ fn read_constants(
         let et_byte = md.column(T::Constant, rid, 0)? as u8;
         let parent_cell = md.column(T::Constant, rid, 2)?;
         let blob = cell_blob(md, T::Constant, rid, 3)?;
-        let et = ElementType::from_u8(et_byte)
-            .ok_or_else(|| bad(format!("Constant row {rid}: unknown element type 0x{et_byte:02X}")))?;
+        let et = ElementType::from_u8(et_byte).ok_or_else(|| {
+            bad(format!("Constant row {rid}: unknown element type 0x{et_byte:02X}"))
+        })?;
         // Mono.Cecil `ReadConstantString`: a STRING constant's blob is the
         // raw UTF-16 payload (odd trailing byte dropped), not a #US index,
         // so it bypasses the primitive constant codec.
@@ -788,7 +767,8 @@ fn read_constants(
                     let method_def = &mut module.methods[method.index()];
                     if sequence == 0 {
                         method_def.return_parameter.constant = value;
-                    } else if let Some(parameter) = method_def.parameters.get_mut(sequence as usize - 1)
+                    } else if let Some(parameter) =
+                        method_def.parameters.get_mut(sequence as usize - 1)
                     {
                         parameter.constant = value;
                     }
@@ -815,9 +795,8 @@ fn read_marshal_specs(
     for rid in 1..=md.row_count(T::FieldMarshal) {
         let parent_cell = md.column(T::FieldMarshal, rid, 0)?;
         let blob = cell_blob(md, T::FieldMarshal, rid, 1)?;
-        let info = parse_marshal_spec(blob, &mut |cell_value: u32| {
-            ctx.tdor_to_typedesc(md, cell_value)
-        })?;
+        let info =
+            parse_marshal_spec(blob, &mut |cell_value: u32| ctx.tdor_to_typedesc(md, cell_value))?;
 
         let (table, target) = decode_group(&coded::HAS_FIELD_MARSHAL, parent_cell)?;
         match table {
@@ -872,11 +851,8 @@ fn read_impl_maps(module: &mut Module, md: &MetadataReader) -> Result<()> {
         if target as usize > module.methods.len() {
             return Err(bad(format!("ImplMap row {rid}: method out of range")));
         }
-        module.methods[target as usize - 1].pinvoke = Some(PInvokeInfo {
-            attributes,
-            entry_point,
-            module: module_name,
-        });
+        module.methods[target as usize - 1].pinvoke =
+            Some(PInvokeInfo { attributes, entry_point, module: module_name });
     }
     Ok(())
 }
@@ -893,10 +869,9 @@ fn read_method_impls(module: &mut Module, ctx: &ReadContext, md: &MetadataReader
             if method.index() >= module.methods.len() {
                 return Err(bad(format!("MethodImpl row {rid}: body method out of range")));
             }
-            module.methods[method.index()].overrides.push(MethodOverride {
-                body: body_ref,
-                declaration,
-            });
+            module.methods[method.index()]
+                .overrides
+                .push(MethodOverride { body: body_ref, declaration });
         }
     }
     Ok(())
@@ -918,7 +893,11 @@ fn security_action(value: u16) -> Result<SecurityAction> {
     })
 }
 
-fn read_decl_security(module: &mut Module, ctx: &mut ReadContext, md: &MetadataReader) -> Result<()> {
+fn read_decl_security(
+    module: &mut Module,
+    ctx: &mut ReadContext,
+    md: &MetadataReader,
+) -> Result<()> {
     for rid in 1..=md.row_count(T::DeclSecurity) {
         let action = security_action(cell_u16(md, T::DeclSecurity, rid, 0)?)?;
         let parent_cell = md.column(T::DeclSecurity, rid, 1)?;
@@ -931,17 +910,13 @@ fn read_decl_security(module: &mut Module, ctx: &mut ReadContext, md: &MetadataR
                 if target as usize > module.types.len() {
                     return Err(bad(format!("DeclSecurity row {rid}: type out of range")));
                 }
-                module.types[target as usize - 1]
-                    .security_declarations
-                    .push(declaration);
+                module.types[target as usize - 1].security_declarations.push(declaration);
             }
             T::MethodDef => {
                 if target as usize > module.methods.len() {
                     return Err(bad(format!("DeclSecurity row {rid}: method out of range")));
                 }
-                module.methods[target as usize - 1]
-                    .security_declarations
-                    .push(declaration);
+                module.methods[target as usize - 1].security_declarations.push(declaration);
             }
             T::Assembly => match ctx.assembly_row.as_mut() {
                 Some(row) => row.security_declarations.push(declaration),
@@ -1026,9 +1001,7 @@ fn read_custom_attributes(
             }
             T::Param => {
                 if target as usize > param_owners.len() {
-                    return Err(bad(format!(
-                        "CustomAttribute row {rid}: param out of range"
-                    )));
+                    return Err(bad(format!("CustomAttribute row {rid}: param out of range")));
                 }
                 let Some((method, sequence)) = param_owners[target as usize - 1] else {
                     continue;
@@ -1064,9 +1037,7 @@ fn read_custom_attributes(
                 // The Assembly table holds at most one row; anything else is
                 // a malformed parent cell.
                 if target != 1 {
-                    return Err(bad(format!(
-                        "CustomAttribute row {rid}: invalid Assembly parent"
-                    )));
+                    return Err(bad(format!("CustomAttribute row {rid}: invalid Assembly parent")));
                 }
                 match ctx.assembly_row.as_mut() {
                     Some(row) => row.custom_attributes.push(attribute),
@@ -1155,9 +1126,7 @@ fn read_files_exported_types_resources(
             }
             T::AssemblyRef => {
                 if impl_rid as usize > ctx.asm_refs.len() {
-                    return Err(bad(format!(
-                        "ExportedType row {rid}: assembly ref out of range"
-                    )));
+                    return Err(bad(format!("ExportedType row {rid}: assembly ref out of range")));
                 }
                 ExportedImpl::AssemblyRef(impl_rid as usize - 1)
             }
@@ -1175,8 +1144,12 @@ fn read_files_exported_types_resources(
 
     for rid in 1..=md.row_count(T::ManifestResource) {
         let offset = cell_u32(md, T::ManifestResource, rid, 0)?;
-        let flags =
-            ManifestResourceAttributes::from_bits_truncate(cell_u32(md, T::ManifestResource, rid, 1)?);
+        let flags = ManifestResourceAttributes::from_bits_truncate(cell_u32(
+            md,
+            T::ManifestResource,
+            rid,
+            1,
+        )?);
         let name = cell_str(md, T::ManifestResource, rid, 2)?;
         let impl_cell = md.column(T::ManifestResource, rid, 3)?;
 
@@ -1203,9 +1176,7 @@ fn read_files_exported_types_resources(
                 }
                 T::File => {
                     if impl_rid as usize > module.file_rows.len() {
-                        return Err(bad(format!(
-                            "ManifestResource row {rid}: file out of range"
-                        )));
+                        return Err(bad(format!("ManifestResource row {rid}: file out of range")));
                     }
                     Resource::Linked {
                         name,
@@ -1277,10 +1248,7 @@ mod tests {
 
     #[test]
     fn metadata_kind_detection() {
-        assert_eq!(
-            metadata_kind("v4.0.30319"),
-            cecli_core::flags::MetadataKind::Ecma335
-        );
+        assert_eq!(metadata_kind("v4.0.30319"), cecli_core::flags::MetadataKind::Ecma335);
         assert_eq!(
             metadata_kind("WindowsRuntime 1.3"),
             cecli_core::flags::MetadataKind::WindowsMetadata
@@ -1303,43 +1271,28 @@ mod tests {
         let bytes = std::fs::read(&path).expect("reading fixtures/hello.exe");
         let image = cecli_pe::Image::parse(&bytes).expect("parsing PE image");
 
-        let opts = ReadOptions {
-            load_bodies: false,
-        };
+        let opts = ReadOptions { load_bodies: false };
         let (module, ctx) = read_module(&image, &opts).expect("read_module");
 
         // Module shell. Ground truth (raw table dump of fixtures/hello.exe):
         // the Module row stores "hello.exe" while the Assembly row stores
         // "hello" - exactly what Mono.Cecil reports, so we assert both.
         assert_eq!(module.name, "hello.exe");
-        assert_eq!(
-            ctx.assembly_row.as_ref().expect("Assembly row present").name,
-            "hello"
-        );
+        assert_eq!(ctx.assembly_row.as_ref().expect("Assembly row present").name, "hello");
         assert!(!module.guid.iter().all(|b| *b == 0), "MVID must be present");
-        assert!(matches!(
-            module.metadata_kind,
-            cecli_core::flags::MetadataKind::Ecma335
-        ));
+        assert!(matches!(module.metadata_kind, cecli_core::flags::MetadataKind::Ecma335));
         assert!(module.attributes.contains(ModuleAttributes::IL_ONLY));
 
         // Arenas populated in row order; context mirrors them.
-        assert!(module.types.len() >= 1, "at least one type");
+        assert!(!module.types.is_empty(), "at least one type");
         assert_eq!(ctx.type_defs.len(), module.types.len());
         assert_eq!(ctx.method_defs.len(), module.methods.len());
         assert_eq!(ctx.field_defs.len(), module.fields.len());
         assert!(!module.methods.is_empty());
 
         // Main method: parameterless static void Main somewhere in the module.
-        let main = module
-            .methods
-            .iter()
-            .find(|m| m.name == "Main")
-            .expect("Main method exists");
-        assert!(
-            main.parameters.is_empty(),
-            "Main must have no parameters"
-        );
+        let main = module.methods.iter().find(|m| m.name == "Main").expect("Main method exists");
+        assert!(main.parameters.is_empty(), "Main must have no parameters");
         assert!(
             matches!(main.signature.return_type, TypeDesc::Internal(ref name) if name == "void"),
             "Main must return void"
@@ -1417,12 +1370,10 @@ mod tests {
         let (module, _ctx) = read_module(&image, &opts).expect("read_module");
 
         let program = module.find_type_full("Program").expect("Program resolves");
-        let nested_plus = module
-            .find_type_full("Program+<GetLittleArgs>d__0")
-            .expect("+ spelling resolves");
-        let nested_slash = module
-            .find_type_full("Program/<GetLittleArgs>d__0")
-            .expect("/ spelling resolves");
+        let nested_plus =
+            module.find_type_full("Program+<GetLittleArgs>d__0").expect("+ spelling resolves");
+        let nested_slash =
+            module.find_type_full("Program/<GetLittleArgs>d__0").expect("/ spelling resolves");
         assert_eq!(nested_plus, nested_slash);
         assert_eq!(
             module.type_def(nested_plus).declaring_type,

@@ -158,7 +158,6 @@ impl OffsetTable {
         w.i32(self.line_number_table_opcode_base);
         w.i32(self.file_flags);
     }
-
 }
 
 /// A registered source document (`SourceFileEntry`).
@@ -298,9 +297,7 @@ impl<'a> MdbReader<'a> {
         let guid: [u8; 16] = r.read_bytes(16)?.try_into().unwrap();
         let ot = OffsetTable::read(&mut r)?;
         if ot.line_number_table_line_range <= 0 || ot.line_number_table_opcode_base <= 0 {
-            return Err(Error::bad_image(
-                "mdb: invalid line-number-table encoding parameters",
-            ));
+            return Err(Error::bad_image("mdb: invalid line-number-table encoding parameters"));
         }
 
         let sources = Self::read_source_table(bytes, &ot)?;
@@ -319,14 +316,19 @@ impl<'a> MdbReader<'a> {
         })
     }
 
-    fn checked_range(base: i32, size: i32, len: usize, what: &str) -> Result<std::ops::Range<usize>> {
+    fn checked_range(
+        base: i32,
+        size: i32,
+        len: usize,
+        what: &str,
+    ) -> Result<std::ops::Range<usize>> {
         if base < 0 || size < 0 {
             return Err(Error::bad_image(format!("mdb: negative {what} extent")));
         }
         let start = base as usize;
-        let end = start.checked_add(size as usize).ok_or_else(|| {
-            Error::bad_image(format!("mdb: {what} extent overflows"))
-        })?;
+        let end = start
+            .checked_add(size as usize)
+            .ok_or_else(|| Error::bad_image(format!("mdb: {what} extent overflows")))?;
         if end > len {
             return Err(Error::bad_image(format!(
                 "mdb: {what} [{start},{end}) exceeds file size {len}"
@@ -365,11 +367,7 @@ impl<'a> MdbReader<'a> {
             let _guid = pr.read_bytes(16)?;
             let hash: [u8; 16] = pr.read_bytes(16)?.try_into().unwrap();
             // Trailing byte: auto-generated flag; ignored here.
-            sources.push(SourceFileEntry {
-                id: id as u32,
-                path,
-                hash,
-            });
+            sources.push(SourceFileEntry { id: id as u32, path, hash });
         }
         Ok(sources)
     }
@@ -578,11 +576,7 @@ impl<'a> MdbReader<'a> {
             let index = read_leb128(&mut r)?;
             let name = read_string(&mut r)?.to_owned();
             let block_index = read_leb128(&mut r)?;
-            locals.push(LocalVariableEntry {
-                index,
-                name,
-                block_index,
-            });
+            locals.push(LocalVariableEntry { index, name, block_index });
         }
         Ok(Some(locals))
     }
@@ -593,9 +587,7 @@ impl<'a> MdbReader<'a> {
         let line_range = self.ot.line_number_table_line_range;
         let opcode_base = self.ot.line_number_table_opcode_base;
         if opcode_base > 255 {
-            return Err(Error::unsupported(
-                "mdb: line-number-table opcode base exceeds 255",
-            ));
+            return Err(Error::unsupported("mdb: line-number-table opcode base exceeds 255"));
         }
         let max_address_increment = (255 - opcode_base) / line_range;
 
@@ -609,11 +601,7 @@ impl<'a> MdbReader<'a> {
         let mut stm_file: u32 = 1;
 
         loop {
-            let opcode = match r.u8() {
-                Ok(b) => b,
-                // A missing end-sequence marker means the table is truncated.
-                Err(e) => return Err(e),
-            };
+            let opcode = r.u8()?;
 
             if opcode == 0 {
                 let size = r.u8()? as usize;
@@ -627,7 +615,8 @@ impl<'a> MdbReader<'a> {
                 } else if ext == DW_LNE_MONO_NEGATE_IS_HIDDEN {
                     is_hidden = !is_hidden;
                     modified = true;
-                } else if (DW_LNE_MONO_EXTENSIONS_START..=DW_LNE_MONO_EXTENSIONS_END).contains(&ext) {
+                } else if (DW_LNE_MONO_EXTENSIONS_START..=DW_LNE_MONO_EXTENSIONS_END).contains(&ext)
+                {
                     // Reserved for future extensions; skip the payload.
                 } else {
                     return Err(Error::bad_image(format!(
@@ -639,8 +628,7 @@ impl<'a> MdbReader<'a> {
             } else if (opcode as i32) < opcode_base {
                 match opcode {
                     DW_LNS_COPY => {
-                        entries
-                            .push(LntEntry::new(stm_file, stm_line, stm_offset, is_hidden));
+                        entries.push(LntEntry::new(stm_file, stm_line, stm_offset, is_hidden));
                         modified = false;
                     }
                     DW_LNS_ADVANCE_PC => {
@@ -719,15 +707,7 @@ pub(crate) struct LntEntry {
 
 impl LntEntry {
     pub(crate) fn new(file: u32, row: i32, offset: i32, is_hidden: bool) -> Self {
-        LntEntry {
-            file,
-            row,
-            offset,
-            column: None,
-            end_row: None,
-            end_column: None,
-            is_hidden,
-        }
+        LntEntry { file, row, offset, column: None, end_row: None, end_column: None, is_hidden }
     }
 }
 
@@ -741,7 +721,12 @@ mod tests {
         let s1 = w.add_source("a.cs");
         let s2 = w.add_source("b.cs");
         let cu = w.add_compile_unit(&[s1, s2]);
-        w.add_method_lines(Token::new(cecli_core::TableIndex::MethodDef, 1), cu, &[(0, 10), (4, 11)], s1);
+        w.add_method_lines(
+            Token::new(cecli_core::TableIndex::MethodDef, 1),
+            cu,
+            &[(0, 10), (4, 11)],
+            s1,
+        );
         w.mark_sequence_points(
             Token::new(cecli_core::TableIndex::MethodDef, 2),
             cu,
@@ -774,10 +759,7 @@ mod tests {
     fn rejects_truncated_files() {
         let good = sample_file([9u8; 16]);
         for cut in [0usize, 10, 31, 100, 112, good.len() / 2, good.len() - 1] {
-            assert!(
-                MdbReader::open(&good[..cut]).is_err(),
-                "truncation at {cut} must be rejected"
-            );
+            assert!(MdbReader::open(&good[..cut]).is_err(), "truncation at {cut} must be rejected");
         }
     }
 

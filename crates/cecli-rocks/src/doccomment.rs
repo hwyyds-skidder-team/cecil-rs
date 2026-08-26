@@ -107,6 +107,7 @@ pub fn event_doc_id(ev: EventId, m: &Module) -> String {
 /// Tracks argument position while printing instantiated types; for nested
 /// instantiations each nesting level consumes its own slice of `arguments`
 /// starting at `argument_index` (port of C# `GenericTypeOptions`).
+#[derive(Default)]
 struct GenOpts<'a> {
     is_argument: bool,
     is_nested_type: bool,
@@ -118,12 +119,6 @@ impl<'a> GenOpts<'a> {
     /// Options for printing an instantiated type's element chain.
     fn argument(arguments: &'a [TypeDesc], is_nested_type: bool) -> Self {
         GenOpts { is_argument: true, is_nested_type, arguments, argument_index: 0 }
-    }
-}
-
-impl Default for GenOpts<'_> {
-    fn default() -> Self {
-        GenOpts { is_argument: false, is_nested_type: false, arguments: &[], argument_index: 0 }
     }
 }
 
@@ -294,8 +289,7 @@ fn write_chain_level(
     if opts.is_argument && gp_count > 0 {
         out.push('{');
         if opts.is_nested_type {
-            let available =
-                opts.arguments.len().saturating_sub(opts.argument_index).min(gp_count);
+            let available = opts.arguments.len().saturating_sub(opts.argument_index).min(gp_count);
             let args = &opts.arguments[opts.argument_index..opts.argument_index + available];
             opts.argument_index += gp_count;
             write_argument_list(out, args, m);
@@ -418,7 +412,10 @@ fn ext_chain(ext: &ExternalType) -> Vec<&ExternalType> {
 
 /// Finds the arena owner of a field/property/event by scanning the type
 /// arena in row order (these definitions carry no back-pointer).
-fn find_owner(m: &Module, owned_by: impl Fn(&cecli::model::types::TypeDefinition) -> bool) -> Option<TypeId> {
+fn find_owner(
+    m: &Module,
+    owned_by: impl Fn(&cecli::model::types::TypeDefinition) -> bool,
+) -> Option<TypeId> {
     m.types.iter().position(owned_by).map(|idx| TypeId(idx as u32))
 }
 
@@ -454,7 +451,9 @@ mod tests {
         EventDefinition, FieldDefinition, FieldSignature, MethodSignature, PropertyDefinition,
         PropertySignature, ScopeRef, TypeDefinition,
     };
-    use cecli_core::flags::{EventAttributes, FieldAttributes, MethodAttributes, SignatureCallingConvention};
+    use cecli_core::flags::{
+        EventAttributes, FieldAttributes, MethodAttributes, SignatureCallingConvention,
+    };
 
     fn ext(ns: &str, name: &str) -> TypeDesc {
         TypeDesc::External(Box::new(ExternalType {
@@ -505,11 +504,14 @@ mod tests {
         }
     }
 
-
     #[test]
     fn type_ids() {
         let mut m = Module::default();
-        let x = m.add_type(TypeDefinition { namespace: "N".into(), name: "X".into(), ..Default::default() });
+        let x = m.add_type(TypeDefinition {
+            namespace: "N".into(),
+            name: "X".into(),
+            ..Default::default()
+        });
         let inner = m.add_type(TypeDefinition {
             namespace: String::new(),
             name: "Nested".into(),
@@ -520,7 +522,11 @@ mod tests {
         assert_eq!(type_doc_id(&TypeDesc::Def(inner), &m), "T:N.X.Nested");
 
         // Generic arity survives in definition position.
-        let foo = m.add_type(TypeDefinition { namespace: "Ns".into(), name: "Foo`2".into(), ..Default::default() });
+        let foo = m.add_type(TypeDefinition {
+            namespace: "Ns".into(),
+            name: "Foo`2".into(),
+            ..Default::default()
+        });
         assert_eq!(type_doc_id(&TypeDesc::Def(foo), &m), "T:Ns.Foo`2");
 
         // External nested chain.
@@ -533,18 +539,37 @@ mod tests {
     #[test]
     fn method_and_field_and_event_ids() {
         let mut m = Module::default();
-        let x = m.add_type(TypeDefinition { namespace: "N".into(), name: "X".into(), ..Default::default() });
+        let x = m.add_type(TypeDefinition {
+            namespace: "N".into(),
+            name: "X".into(),
+            ..Default::default()
+        });
 
         let q = m.add_field(
             x,
-            FieldDefinition { name: "q".into(), attributes: FieldAttributes::empty(), signature: FieldSignature(int32()), ..Default::default() },
+            FieldDefinition {
+                name: "q".into(),
+                attributes: FieldAttributes::empty(),
+                signature: FieldSignature(int32()),
+                ..Default::default()
+            },
         );
         assert_eq!(field_doc_id(q, &m), "F:N.X.q");
 
-        let d = m.add_event(x, EventDefinition { name: "d".into(), attributes: EventAttributes::empty(), ..Default::default() });
+        let d = m.add_event(
+            x,
+            EventDefinition {
+                name: "d".into(),
+                attributes: EventAttributes::empty(),
+                ..Default::default()
+            },
+        );
         assert_eq!(event_doc_id(d, &m), "E:N.X.d");
 
-        let f = m.add_method(x, cecli::model::types::MethodDefinition { name: "f".into(), ..Default::default() });
+        let f = m.add_method(
+            x,
+            cecli::model::types::MethodDefinition { name: "f".into(), ..Default::default() },
+        );
         assert_eq!(method_doc_id(f, &m), "M:N.X.f");
 
         // ByRef parameters append '@'.
@@ -552,7 +577,10 @@ mod tests {
             x,
             cecli::model::types::MethodDefinition {
                 name: "bb".into(),
-                signature: sig(vec![ext("System", "String"), TypeDesc::ByRef(Box::new(int32()))], TypeDesc::Internal("void".into())),
+                signature: sig(
+                    vec![ext("System", "String"), TypeDesc::ByRef(Box::new(int32()))],
+                    TypeDesc::Internal("void".into()),
+                ),
                 ..Default::default()
             },
         );
@@ -566,7 +594,11 @@ mod tests {
                 signature: sig(
                     vec![
                         TypeDesc::SzArray(Box::new(ext("System", "Int16"))),
-                        TypeDesc::Array { element: Box::new(int32()), sizes: vec![], lobounds: vec![0, 0] },
+                        TypeDesc::Array {
+                            element: Box::new(int32()),
+                            sizes: vec![],
+                            lobounds: vec![0, 0],
+                        },
                     ],
                     TypeDesc::Internal("void".into()),
                 ),
@@ -579,7 +611,11 @@ mod tests {
     #[test]
     fn operator_addition_keeps_metadata_name() {
         let mut m = Module::default();
-        let x = m.add_type(TypeDefinition { namespace: "N".into(), name: "X".into(), ..Default::default() });
+        let x = m.add_type(TypeDefinition {
+            namespace: "N".into(),
+            name: "X".into(),
+            ..Default::default()
+        });
         let xd = TypeDesc::Def(x);
         let op = m.add_method(
             x,
@@ -597,7 +633,11 @@ mod tests {
     #[test]
     fn conversion_operator_appends_return_type() {
         let mut m = Module::default();
-        let x = m.add_type(TypeDefinition { namespace: "N".into(), name: "X".into(), ..Default::default() });
+        let x = m.add_type(TypeDefinition {
+            namespace: "N".into(),
+            name: "X".into(),
+            ..Default::default()
+        });
         let op = m.add_method(
             x,
             cecli::model::types::MethodDefinition {
@@ -613,12 +653,20 @@ mod tests {
     #[test]
     fn property_ids_including_indexer() {
         let mut m = Module::default();
-        let x = m.add_type(TypeDefinition { namespace: "N".into(), name: "X".into(), ..Default::default() });
+        let x = m.add_type(TypeDefinition {
+            namespace: "N".into(),
+            name: "X".into(),
+            ..Default::default()
+        });
         let prop = m.add_property(
             x,
             PropertyDefinition {
                 name: "prop".into(),
-                signature: PropertySignature { has_this: false, parameters: vec![], property_type: int32() },
+                signature: PropertySignature {
+                    has_this: false,
+                    parameters: vec![],
+                    property_type: int32(),
+                },
                 ..Default::default()
             },
         );
@@ -628,7 +676,11 @@ mod tests {
             x,
             PropertyDefinition {
                 name: "Item".into(),
-                signature: PropertySignature { has_this: false, parameters: vec![ext("System", "String")], property_type: int32() },
+                signature: PropertySignature {
+                    has_this: false,
+                    parameters: vec![ext("System", "String")],
+                    property_type: int32(),
+                },
                 ..Default::default()
             },
         );
@@ -638,7 +690,11 @@ mod tests {
     #[test]
     fn generic_method_with_nested_generic_instance_parameter() {
         let mut m = Module::default();
-        let owner = m.add_type(TypeDefinition { namespace: "N".into(), name: "GenericMethod".into(), ..Default::default() });
+        let owner = m.add_type(TypeDefinition {
+            namespace: "N".into(),
+            name: "GenericMethod".into(),
+            ..Default::default()
+        });
 
         // void WithNestedType<T>(GenericType<T>.NestedType)
         let meth = m.add_method(

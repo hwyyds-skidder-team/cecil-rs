@@ -21,10 +21,7 @@ pub struct VariableDefinition {
 impl VariableDefinition {
     /// Creates a local variable with the given slot index and type token.
     pub fn new(index: u16, variable_type: Token) -> Self {
-        VariableDefinition {
-            index,
-            variable_type,
-        }
+        VariableDefinition { index, variable_type }
     }
 }
 

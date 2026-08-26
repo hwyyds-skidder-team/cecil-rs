@@ -64,9 +64,7 @@ impl RootHeader {
 pub fn parse_root(data: &[u8]) -> Result<RootHeader> {
     let mut r = ByteReader::new(data);
     if r.u32()? != METADATA_SIGNATURE {
-        return Err(Error::bad_image(
-            "invalid metadata signature (expected \"BSJB\")",
-        ));
+        return Err(Error::bad_image("invalid metadata signature (expected \"BSJB\")"));
     }
     let major_version = r.u16()?;
     let minor_version = r.u16()?;
@@ -81,10 +79,7 @@ pub fn parse_root(data: &[u8]) -> Result<RootHeader> {
         )));
     }
     let version_bytes = r.read_bytes(version_length)?;
-    let end = version_bytes
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(version_length);
+    let end = version_bytes.iter().position(|&b| b == 0).unwrap_or(version_length);
     let version = String::from_utf8_lossy(&version_bytes[..end]).into_owned();
 
     let flags = r.u16()?;
@@ -112,13 +107,7 @@ pub fn parse_root(data: &[u8]) -> Result<RootHeader> {
         streams.push(StreamHeader { offset, size, name });
     }
 
-    Ok(RootHeader {
-        major_version,
-        minor_version,
-        version,
-        flags,
-        streams,
-    })
+    Ok(RootHeader { major_version, minor_version, version, flags, streams })
 }
 
 /// Returns the payload slice of `header` within the root `data`, validating
@@ -176,7 +165,7 @@ pub fn write_root(version: &str, streams: &[(&str, &[u8])]) -> Vec<u8> {
 
     for (_, data) in streams {
         w.bytes(data);
-        while w.len() % 4 != 0 {
+        while !w.len().is_multiple_of(4) {
             w.u8(0);
         }
     }
@@ -196,10 +185,8 @@ mod tests {
     fn root_write_parse_roundtrip() {
         let strings = [0u8, b'a', b'b', 0];
         let tables = [2u8; 8];
-        let bytes = write_root(
-            "v4.0.30319",
-            &[("#~", &tables), ("#Strings", &strings), ("#Blob", &[])],
-        );
+        let bytes =
+            write_root("v4.0.30319", &[("#~", &tables), ("#Strings", &strings), ("#Blob", &[])]);
         let root = parse_root(&bytes).expect("parses");
         assert_eq!(root.version, "v4.0.30319");
         assert_eq!(root.streams.len(), 3);

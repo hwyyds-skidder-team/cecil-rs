@@ -42,8 +42,10 @@ use crate::module_def::Module;
 /// `load` is invoked at most once per distinct reference.
 pub trait AssemblyBytesLoader {
     /// Returns the raw PE/CLI image bytes for `reference`, if available.
-    fn load(&mut self, reference: &crate::model::types::AssemblyNameReference)
-        -> Result<Option<Cow<'_, [u8]>>>;
+    fn load(
+        &mut self,
+        reference: &crate::model::types::AssemblyNameReference,
+    ) -> Result<Option<Cow<'_, [u8]>>>;
 }
 
 /// A successfully resolved type: the module holding it plus the arena handle.
@@ -78,12 +80,7 @@ impl<'a> ResolutionEngine<'a> {
     /// Creates an engine that only ever resolves inside `primary`; external
     /// scopes stay unresolved.
     pub fn new(primary: &'a Module) -> Self {
-        ResolutionEngine {
-            primary,
-            cache: Vec::new(),
-            cache_refs: Vec::new(),
-            loader: None,
-        }
+        ResolutionEngine { primary, cache: Vec::new(), cache_refs: Vec::new(), loader: None }
     }
 
     /// Creates an engine that reads referenced assemblies through `loader`
@@ -118,10 +115,7 @@ impl<'a> ResolutionEngine<'a> {
                 // module of `with_loader` engines; treat them as unresolvable
                 // rather than panicking.
                 if id.index() < self.primary.types.len() {
-                    Ok(Some(ResolvedType {
-                        module_index: 0,
-                        id: *id,
-                    }))
+                    Ok(Some(ResolvedType { module_index: 0, id: *id }))
                 } else {
                     Ok(None)
                 }
@@ -138,11 +132,14 @@ impl<'a> ResolutionEngine<'a> {
     /// `Spec` instantiations are collapsed onto their element method (the
     /// port of `MethodReference.GetElementMethod`); the search then walks the
     /// declaring type's base chain like `MetadataResolver.GetMethod`.
-    pub fn resolve_method(&mut self, r: &MethodRef) -> Result<Option<(usize, crate::model::types::MethodId)>> {
+    pub fn resolve_method(
+        &mut self,
+        r: &MethodRef,
+    ) -> Result<Option<(usize, crate::model::types::MethodId)>> {
         match r {
-            MethodRef::Def(id) => return Ok(Some((0, *id))),
+            MethodRef::Def(id) => Ok(Some((0, *id))),
             // GetElementMethod: collapse Spec onto its element method.
-            MethodRef::Spec { method, .. } => return self.resolve_method(method),
+            MethodRef::Spec { method, .. } => self.resolve_method(method),
             MethodRef::External(ext) => {
                 let Some(rt) = self.resolve_type(&ext.parent)? else {
                     return Ok(None);
@@ -154,7 +151,10 @@ impl<'a> ResolutionEngine<'a> {
 
     /// Resolves a field reference to `(module_index, FieldId)` walking the
     /// declaring type's base chain like `MetadataResolver.GetField`.
-    pub fn resolve_field(&mut self, r: &FieldRef) -> Result<Option<(usize, crate::model::types::FieldId)>> {
+    pub fn resolve_field(
+        &mut self,
+        r: &FieldRef,
+    ) -> Result<Option<(usize, crate::model::types::FieldId)>> {
         let FieldRef::External(ext) = r else {
             return match r {
                 FieldRef::Def(id) => Ok(Some((0, *id))),
@@ -225,10 +225,7 @@ impl<'a> ResolutionEngine<'a> {
                 for i in 0..self.cache.len() {
                     if self.cache[i].name == *name {
                         if let Some(id) = find_external_in_module(&self.cache[i], ext) {
-                            return Ok(Some(ResolvedType {
-                                module_index: i + 1,
-                                id,
-                            }));
+                            return Ok(Some(ResolvedType { module_index: i + 1, id }));
                         }
                     }
                 }
@@ -248,10 +245,7 @@ impl<'a> ResolutionEngine<'a> {
                 }
                 for i in 0..self.cache.len() {
                     if let Some(id) = find_external_in_module(&self.cache[i], ext) {
-                        return Ok(Some(ResolvedType {
-                            module_index: i + 1,
-                            id,
-                        }));
+                        return Ok(Some(ResolvedType { module_index: i + 1, id }));
                     }
                 }
                 Ok(None)
@@ -318,16 +312,10 @@ impl<'a> ResolutionEngine<'a> {
         match element {
             TypeDesc::Def(id) => {
                 if id.index() < self.module_at(context_index).types.len() {
-                    return Ok(Some(ResolvedType {
-                        module_index: context_index,
-                        id: *id,
-                    }));
+                    return Ok(Some(ResolvedType { module_index: context_index, id: *id }));
                 }
                 if context_index != 0 && id.index() < self.primary.types.len() {
-                    return Ok(Some(ResolvedType {
-                        module_index: 0,
-                        id: *id,
-                    }));
+                    return Ok(Some(ResolvedType { module_index: 0, id: *id }));
                 }
                 Ok(None)
             }
@@ -402,11 +390,7 @@ impl<'a> ResolutionEngine<'a> {
     }
 
     /// `TypeDefinition.IsValueType` generalized into a base-chain walk.
-    fn is_value_type_def(
-        &mut self,
-        index: usize,
-        id: crate::model::types::TypeId,
-    ) -> Result<bool> {
+    fn is_value_type_def(&mut self, index: usize, id: crate::model::types::TypeId) -> Result<bool> {
         let def = self.module_at(index).type_def(id);
         // Interfaces are reference types regardless of any (absent) base row.
         if def.attributes.contains(TypeAttributes::INTERFACE) {
@@ -454,7 +438,6 @@ impl<'a> ResolutionEngine<'a> {
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Type lookup helpers
@@ -524,7 +507,10 @@ fn type_display(ty: &TypeDesc, module: &Module) -> String {
 ///
 /// Falls back to the module's `ExportedType` rows for top-level names,
 /// following `AssemblyRef` implementations (port of `MetadataResolver.GetType`).
-fn find_external_in_module(module: &Module, ext: &ExternalType) -> Option<crate::model::types::TypeId> {
+fn find_external_in_module(
+    module: &Module,
+    ext: &ExternalType,
+) -> Option<crate::model::types::TypeId> {
     // Outermost-first chain ending with `ext` itself.
     let mut chain: Vec<&ExternalType> = ext.nesting.iter().map(|b| &**b).collect();
     chain.push(ext);
@@ -587,12 +573,8 @@ fn method_matches(
         return false;
     }
 
-    if !are_same(
-        module,
-        &candidate.signature.return_type,
-        reference_module,
-        &signature.return_type,
-    ) {
+    if !are_same(module, &candidate.signature.return_type, reference_module, &signature.return_type)
+    {
         return false;
     }
 
@@ -651,49 +633,24 @@ pub(crate) fn are_same(m_a: &Module, a: &TypeDesc, m_b: &Module, b: &TypeDesc) -
         | (ByRef(x), ByRef(y))
         | (Pinned(x), Pinned(y)) => are_same(m_a, x, m_b, y),
         (
-            Array {
-                element: e1,
-                sizes: s1,
-                lobounds: l1,
-            },
-            Array {
-                element: e2,
-                sizes: s2,
-                lobounds: l2,
-            },
+            Array { element: e1, sizes: s1, lobounds: l1 },
+            Array { element: e2, sizes: s2, lobounds: l2 },
         ) => {
             // Rank only; dimensions are not compared upstream either.
             s1.len() == s2.len() && l1.len() == l2.len() && are_same(m_a, e1, m_b, e2)
         }
         (
-            GenericInstance {
-                definition: d1,
-                arguments: g1,
-            },
-            GenericInstance {
-                definition: d2,
-                arguments: g2,
-            },
+            GenericInstance { definition: d1, arguments: g1 },
+            GenericInstance { definition: d2, arguments: g2 },
         ) => {
             g1.len() == g2.len()
                 && are_same(m_a, d1, m_b, d2)
-                && g1
-                    .iter()
-                    .zip(g2.iter())
-                    .all(|(x, y)| are_same(m_a, x, m_b, y))
+                && g1.iter().zip(g2.iter()).all(|(x, y)| are_same(m_a, x, m_b, y))
         }
         (FnPtr(s1), FnPtr(s2)) => fnptr_signatures_same(m_a, s1, m_b, s2),
         (
-            CMod {
-                required: r1,
-                modifier: m1,
-                unmodified: u1,
-            },
-            CMod {
-                required: r2,
-                modifier: m2,
-                unmodified: u2,
-            },
+            CMod { required: r1, modifier: m1, unmodified: u1 },
+            CMod { required: r2, modifier: m2, unmodified: u2 },
         ) => r1 == r2 && are_same(m_a, m1, m_b, m2) && are_same(m_a, u1, m_b, u2),
         (Sentinel, Sentinel) | (TypedByRef, TypedByRef) => true,
         (Internal(s1), Internal(s2)) => s1 == s2,
@@ -718,11 +675,7 @@ fn fnptr_signatures_same(
         && a.generic_count == b.generic_count
         && are_same(m_a, &a.return_type, m_b, &b.return_type)
         && a.parameters.len() == b.parameters.len()
-        && a
-            .parameters
-            .iter()
-            .zip(b.parameters.iter())
-            .all(|(x, y)| are_same(m_a, x, m_b, y))
+        && a.parameters.iter().zip(b.parameters.iter()).all(|(x, y)| are_same(m_a, x, m_b, y))
 }
 
 /// Namespace + outermost-to-innermost name chain of a nominal reference;
@@ -741,8 +694,7 @@ fn nominal_identity(m: &Module, ty: &TypeDesc) -> Option<(String, Vec<String>)> 
             Some((m.type_def(*id).namespace.clone(), names))
         }
         TypeDesc::External(ext) => {
-            let mut names: Vec<String> =
-                ext.nesting.iter().map(|b| b.name.clone()).collect();
+            let mut names: Vec<String> = ext.nesting.iter().map(|b| b.name.clone()).collect();
             names.push(ext.name.clone());
             Some((ext.namespace.clone(), names))
         }
@@ -759,11 +711,11 @@ fn nominal_identity(m: &Module, ty: &TypeDesc) -> Option<(String, Vec<String>)> 
 mod tests {
     use super::*;
     use crate::assembly::AssemblyDefinition;
+    use crate::model::types::{AssemblyNameReference, Version};
     use crate::model::types::{
         ExternalField, ExternalMethod, ExternalType, FieldDefinition, FieldSignature,
         MethodDefinition, ScopeRef, TypeDefinition,
     };
-    use crate::model::types::{AssemblyNameReference, Version};
     use cecli_core::flags::{AssemblyAttributes, AssemblyHashAlgorithm, MethodAttributes};
 
     fn anr(name: &str, major: u16) -> AssemblyNameReference {
@@ -781,7 +733,12 @@ mod tests {
         }))
     }
 
-    fn named_ext(ns: &str, name: &str, nesting: Vec<Box<ExternalType>>, scope: ScopeRef) -> TypeDesc {
+    fn named_ext(
+        ns: &str,
+        name: &str,
+        nesting: Vec<Box<ExternalType>>,
+        scope: ScopeRef,
+    ) -> TypeDesc {
         TypeDesc::External(Box::new(ExternalType {
             namespace: ns.to_string(),
             name: name.to_string(),
@@ -1019,10 +976,7 @@ mod tests {
     struct StubLoader(Vec<u8>);
 
     impl AssemblyBytesLoader for StubLoader {
-        fn load(
-            &mut self,
-            reference: &AssemblyNameReference,
-        ) -> Result<Option<Cow<'_, [u8]>>> {
+        fn load(&mut self, reference: &AssemblyNameReference) -> Result<Option<Cow<'_, [u8]>>> {
             if reference.name == "mscorlib" {
                 Ok(Some(Cow::Borrowed(&self.0)))
             } else {
@@ -1057,9 +1011,7 @@ mod tests {
             .unwrap());
 
         // Stripping: SZARRAY of Int32 is still a value type element-wise.
-        assert!(engine
-            .is_value_type(&TypeDesc::SzArray(Box::new(int32.clone())))
-            .unwrap());
+        assert!(engine.is_value_type(&TypeDesc::SzArray(Box::new(int32.clone()))).unwrap());
 
         // The loader is consulted once per reference: a second query hits the
         // cache (same result, no growth).

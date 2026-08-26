@@ -18,7 +18,10 @@ mod writer;
 pub(crate) mod testutil;
 
 pub use buffer::ByteBuffer;
-pub use image::{CliHeader, Image, ImageDebugDirectory, ImageDebugEntry, MetadataStream, ModuleKind, TargetArchitecture};
+pub use image::{
+    CliHeader, Image, ImageDebugDirectory, ImageDebugEntry, MetadataStream, ModuleKind,
+    TargetArchitecture,
+};
 pub use section::{DataDirectory, Range, Section};
 pub use writer::{compute_pe_checksum, EmitParts, ImageWriter, TextMap, TextSegment};
 

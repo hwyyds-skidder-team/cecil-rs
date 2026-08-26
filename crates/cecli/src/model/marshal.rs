@@ -47,9 +47,7 @@ pub fn parse_marshal_spec(blob: &[u8], r: &mut TdorResolver) -> Result<MarshalIn
     let mut rd = ByteReader::new(blob);
     let spec = parse_native_type(&mut rd, r)?;
     if !rd.is_empty() {
-        return Err(Error::bad_image(
-            "marshal spec has trailing bytes after the native type",
-        ));
+        return Err(Error::bad_image("marshal spec has trailing bytes after the native type"));
     }
     Ok(MarshalInfo { spec })
 }
@@ -141,31 +139,20 @@ fn parse_native_type(rd: &mut ByteReader, r: &mut TdorResolver) -> Result<Native
                 let param_num = opt_compressed(rd)?;
                 let num_elem = opt_compressed(rd)?;
                 let elem_mult = opt_compressed(rd)?;
-                NativeTypeSpec::NativeArray {
-                    element,
-                    param_num,
-                    elem_mult,
-                    num_elem,
-                }
+                NativeTypeSpec::NativeArray { element, param_num, elem_mult, num_elem }
             }
         }
         0x0f => NativeTypeSpec::Currency,
         0x13 => NativeTypeSpec::BStr,
         0x15 => NativeTypeSpec::LPWStr,
         0x16 => NativeTypeSpec::LPTStr,
-        0x17 => NativeTypeSpec::FixedSysString {
-            size_count: opt_compressed(rd)?,
-        },
+        0x17 => NativeTypeSpec::FixedSysString { size_count: opt_compressed(rd)? },
         0x19 => NativeTypeSpec::IUnknown,
         0x1a => NativeTypeSpec::IDispatch,
         0x1b => NativeTypeSpec::Struct,
         0x1c => NativeTypeSpec::IntF {
             // Optional compressed index; Mono.Cecil reads it as signed.
-            iid_param_index: if rd.is_empty() {
-                0
-            } else {
-                rd.compressed_i32()?
-            },
+            iid_param_index: if rd.is_empty() { 0 } else { rd.compressed_i32()? },
         },
         0x1d => NativeTypeSpec::SafeArray {
             // Raw VARENUM byte (Mono.Cecil ReadVariantType), omitted when
@@ -183,10 +170,9 @@ fn parse_native_type(rd: &mut ByteReader, r: &mut TdorResolver) -> Result<Native
             // element type (mirrors COM VT_USERDEFINED descriptors).
             element_desc: opt_tdor(rd, r)?,
         },
-        0x1e => NativeTypeSpec::FixedArray {
-            size: opt_compressed(rd)?,
-            element: opt_native(rd, r)?,
-        },
+        0x1e => {
+            NativeTypeSpec::FixedArray { size: opt_compressed(rd)?, element: opt_native(rd, r)? }
+        }
         0x22 => NativeTypeSpec::ByValStr,
         0x23 => NativeTypeSpec::ANSIBStr,
         0x24 => NativeTypeSpec::TBStr,
@@ -197,29 +183,17 @@ fn parse_native_type(rd: &mut ByteReader, r: &mut TdorResolver) -> Result<Native
             // Cecil order: GUID string, unmanaged type name, managed
             // marshaller type name, cookie — all SerStrings.
             let guid_text = read_ser_string(rd)?.unwrap_or_default();
-            let guid = if guid_text.is_empty() {
-                [0u8; GUID_LEN]
-            } else {
-                guid_from_string(&guid_text)?
-            };
+            let guid =
+                if guid_text.is_empty() { [0u8; GUID_LEN] } else { guid_from_string(&guid_text)? };
             let unmarshaller_ty = read_ser_string(rd)?.unwrap_or_default();
             let managed_ty = read_ser_string(rd)?.unwrap_or_default();
             let cookie = read_ser_string(rd)?.unwrap_or_default();
-            NativeTypeSpec::CustomMarshaler {
-                guid,
-                unmarshaller_ty,
-                managed_ty,
-                cookie,
-            }
+            NativeTypeSpec::CustomMarshaler { guid, unmarshaller_ty, managed_ty, cookie }
         }
         0x2d => NativeTypeSpec::Error,
         // NativeType.Max - nested array element sentinel (see native_code).
         0x50 => NativeTypeSpec::Max,
-        other => {
-            return Err(Error::bad_image(format!(
-                "unknown native type 0x{other:02X}"
-            )))
-        }
+        other => return Err(Error::bad_image(format!("unknown native type 0x{other:02X}"))),
     })
 }
 
@@ -239,10 +213,7 @@ fn write_native_type(w: &mut ByteWriter, spec: &NativeTypeSpec, e: &mut TdorEnco
                 write_native_type(w, elem, e)?;
             }
         }
-        NativeTypeSpec::SafeArray {
-            element_variant,
-            element_desc,
-        } => {
+        NativeTypeSpec::SafeArray { element_variant, element_desc } => {
             if element_variant.is_some() || element_desc.is_some() {
                 w.u8(match element_variant {
                     Some(v) => variant_to_wire(*v)?,
@@ -254,17 +225,12 @@ fn write_native_type(w: &mut ByteWriter, spec: &NativeTypeSpec, e: &mut TdorEnco
                 w.compressed_u32(e(desc)?);
             }
         }
-        NativeTypeSpec::NativeArray {
-            element,
-            param_num,
-            elem_mult,
-            num_elem,
-        } => {
+        NativeTypeSpec::NativeArray { element, param_num, elem_mult, num_elem } => {
             // ECMA-335 II 25.4.4 / Cecil ArrayMarshalInfo: a parameterised
             // ARRAY always carries its element type on the wire.
-            let elem = element.as_deref().ok_or_else(|| {
-                Error::argument("NATIVE_TYPE_ARRAY requires an element type")
-            })?;
+            let elem = element
+                .as_deref()
+                .ok_or_else(|| Error::argument("NATIVE_TYPE_ARRAY requires an element type"))?;
             write_native_type(w, elem, e)?;
             // Wire order is ParamNum, NumElem, ElemMult; trim trailing
             // zeros (they default to 0 on read).
@@ -279,12 +245,7 @@ fn write_native_type(w: &mut ByteWriter, spec: &NativeTypeSpec, e: &mut TdorEnco
                 w.compressed_i32(*iid_param_index);
             }
         }
-        NativeTypeSpec::CustomMarshaler {
-            guid,
-            unmarshaller_ty,
-            managed_ty,
-            cookie,
-        } => {
+        NativeTypeSpec::CustomMarshaler { guid, unmarshaller_ty, managed_ty, cookie } => {
             if *guid == [0u8; GUID_LEN] {
                 // Matches Cecil: Guid.Empty serialises as "".
                 write_ser_string(w, Some(""))?;
@@ -460,8 +421,22 @@ fn guid_to_string(guid: &[u8; GUID_LEN]) -> String {
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-\
          {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        guid[3], guid[2], guid[1], guid[0], guid[5], guid[4], guid[7], guid[6], guid[8], guid[9],
-        guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]
+        guid[3],
+        guid[2],
+        guid[1],
+        guid[0],
+        guid[5],
+        guid[4],
+        guid[7],
+        guid[6],
+        guid[8],
+        guid[9],
+        guid[10],
+        guid[11],
+        guid[12],
+        guid[13],
+        guid[14],
+        guid[15]
     )
 }
 
@@ -590,14 +565,8 @@ mod tests {
             // Zero collapses onto the bare tag; still equal after a round
             // trip because absent == 0.
             NativeTypeSpec::FixedSysString { size_count: 0 },
-            NativeTypeSpec::FixedArray {
-                size: 8,
-                element: Some(Box::new(NativeTypeSpec::U1)),
-            },
-            NativeTypeSpec::FixedArray {
-                size: 3,
-                element: None,
-            },
+            NativeTypeSpec::FixedArray { size: 8, element: Some(Box::new(NativeTypeSpec::U1)) },
+            NativeTypeSpec::FixedArray { size: 3, element: None },
             NativeTypeSpec::SafeArray {
                 element_variant: Some(VariantType::Dispatch),
                 element_desc: Some(Box::new(ext_ty("ElemTy"))),
@@ -610,10 +579,7 @@ mod tests {
                 element_variant: Some(VariantType::BStr),
                 element_desc: None,
             },
-            NativeTypeSpec::SafeArray {
-                element_variant: None,
-                element_desc: None,
-            },
+            NativeTypeSpec::SafeArray { element_variant: None, element_desc: None },
             // Nested FixedArray-in-Array.
             NativeTypeSpec::NativeArray {
                 element: Some(Box::new(NativeTypeSpec::FixedArray {
@@ -634,9 +600,7 @@ mod tests {
                 num_elem: 0,
             },
             NativeTypeSpec::IntF { iid_param_index: 2 },
-            NativeTypeSpec::IntF {
-                iid_param_index: -1,
-            },
+            NativeTypeSpec::IntF { iid_param_index: -1 },
             NativeTypeSpec::CustomMarshaler {
                 guid: [
                     0x2f, 0x1d, 0x5a, 0x9b, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
@@ -660,9 +624,7 @@ mod tests {
         let mut res = resolver();
         let mut enc = enc_cell();
         for spec in all_variants() {
-            let info = MarshalInfo {
-                spec: spec.clone(),
-            };
+            let info = MarshalInfo { spec: spec.clone() };
             let blob = write_marshal_spec(&info, &mut enc)
                 .unwrap_or_else(|err| panic!("write {info:?}: {err:?}"));
             let back = parse_marshal_spec(&blob, &mut res)
@@ -689,9 +651,7 @@ mod tests {
             Err(Error::Argument(_)) => {}
             other => panic!("element-less NATIVE_ARRAY must be Error::argument, got {other:?}"),
         }
-        let bare_array = MarshalInfo {
-            spec: NativeTypeSpec::Array,
-        };
+        let bare_array = MarshalInfo { spec: NativeTypeSpec::Array };
         assert_eq!(
             write_marshal_spec(&bare_array, &mut enc).expect("write bare Array"),
             vec![0x2a]
@@ -700,33 +660,19 @@ mod tests {
         // iid_param_index -1 uses the single-byte signed form (0x7F) under
         // the Cecil-exact compressed-int codec, and round-trips negative.
         let neg = write_marshal_spec(
-            &MarshalInfo {
-                spec: NativeTypeSpec::IntF {
-                    iid_param_index: -1,
-                },
-            },
+            &MarshalInfo { spec: NativeTypeSpec::IntF { iid_param_index: -1 } },
             &mut enc,
         )
         .expect("write IntF(-1)");
         assert_eq!(neg, vec![0x1c, 0x7f]);
-        assert_eq!(
-            parse_ok(&neg).spec,
-            NativeTypeSpec::IntF {
-                iid_param_index: -1
-            }
-        );
+        assert_eq!(parse_ok(&neg).spec, NativeTypeSpec::IntF { iid_param_index: -1 });
     }
 
     #[test]
     fn simple_specs_are_single_byte() {
         assert_eq!(
-            write_marshal_spec(
-                &MarshalInfo {
-                    spec: NativeTypeSpec::LPWStr,
-                },
-                &mut enc_cell()
-            )
-            .unwrap(),
+            write_marshal_spec(&MarshalInfo { spec: NativeTypeSpec::LPWStr }, &mut enc_cell())
+                .unwrap(),
             vec![0x15]
         );
         assert_eq!(parse_ok(&[0x07]).spec, NativeTypeSpec::I4);
@@ -756,10 +702,7 @@ mod tests {
         for (raw, vt) in flat {
             assert_eq!(
                 parse_ok(&[0x1d, raw]).spec,
-                NativeTypeSpec::SafeArray {
-                    element_variant: Some(vt),
-                    element_desc: None,
-                },
+                NativeTypeSpec::SafeArray { element_variant: Some(vt), element_desc: None },
                 "wire {raw:#04x} must decode to {vt:?}"
             );
             assert_eq!(
@@ -809,10 +752,7 @@ mod tests {
     #[test]
     fn fixture_blobs_decode_like_cecil() {
         // Field a: FIXEDSYSSTRING(42) -> `17 2a`.
-        assert_eq!(
-            parse_ok(&[0x17, 0x2a]).spec,
-            NativeTypeSpec::FixedSysString { size_count: 42 }
-        );
+        assert_eq!(parse_ok(&[0x17, 0x2a]).spec, NativeTypeSpec::FixedSysString { size_count: 42 });
         // Field b: FIXEDARRAY(12, Boolean) -> `1e 0c 02`.
         assert_eq!(
             parse_ok(&[0x1e, 0x0c, 0x02]).spec,
@@ -851,8 +791,8 @@ mod tests {
     #[test]
     fn custom_marshaler_record_parses_without_desync() {
         let mut res = resolver();
-        let blob: &[u8] = &[0x2c, 0x00, 0x00, 0x03, b'B', b'o', b'c', 0x06, b'n', b'o', b'm',
-                            b'n', b'o', b'm'];
+        let blob: &[u8] =
+            &[0x2c, 0x00, 0x00, 0x03, b'B', b'o', b'c', 0x06, b'n', b'o', b'm', b'n', b'o', b'm'];
         let info = parse_marshal_spec(blob, &mut res).expect("fixture custom marshaler");
         assert_eq!(
             info.spec,
@@ -914,7 +854,8 @@ mod tests {
         assert!(guid_from_string("9b5a1d2f-2211-4433-5566").is_err());
 
         // Mid-compressed-integer cuts are hard errors everywhere.
-        for tagged in [&[0x1eu8, 0x80][..], &[0x2a, 0x09, 0x80][..], &[0x2a, 0x09, 0x02, 0x80][..]] {
+        for tagged in [&[0x1eu8, 0x80][..], &[0x2a, 0x09, 0x80][..], &[0x2a, 0x09, 0x02, 0x80][..]]
+        {
             assert!(
                 parse_marshal_spec(tagged, &mut res).is_err(),
                 "mid-compressed cut {tagged:?} decoded"
@@ -936,17 +877,8 @@ mod tests {
     #[test]
     fn truncated_optional_tails_yield_shorter_specs() {
         let cases: [(Vec<u8>, NativeTypeSpec); 3] = [
-            (
-                vec![0x17],
-                NativeTypeSpec::FixedSysString { size_count: 0 },
-            ),
-            (
-                vec![0x1e, 0x0c],
-                NativeTypeSpec::FixedArray {
-                    size: 12,
-                    element: None,
-                },
-            ),
+            (vec![0x17], NativeTypeSpec::FixedSysString { size_count: 0 }),
+            (vec![0x1e, 0x0c], NativeTypeSpec::FixedArray { size: 12, element: None }),
             (
                 vec![0x2a, 0x09, 0x02, 0x42],
                 NativeTypeSpec::NativeArray {

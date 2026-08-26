@@ -43,7 +43,7 @@ use cecli_pe::Image;
 use crate::model::signature::parse_local_var_sig;
 use crate::model::types::{
     ExceptionHandlerIL, ExceptionKind, FieldRef, LocalVariable, MethodDefinition, MethodRef,
-    ResolvedBody, RInstruction, ROperand,
+    RInstruction, ROperand, ResolvedBody,
 };
 use crate::read::context::{MemberRefRow, ReadContext};
 use crate::Module;
@@ -79,7 +79,7 @@ pub fn resolve_bodies_opts(
         // Arena order == MethodDef table row order; the RVA is read straight
         // from the metadata row (column 0), the object model does not keep it.
         let rid = (index + 1) as u32;
-        let rva = md.column(TableIndex::MethodDef, rid, 0)? as u64;
+        let rva = md.column(TableIndex::MethodDef, rid, 0)?;
         let Some(rva) = il_body_rva(rva, &module.methods[index]) else {
             continue;
         };
@@ -144,11 +144,7 @@ fn decode_resolved_body(
             cecli_cil::OperandType::InlineString => resolve_user_string(ctx, md, &ins.operand),
             _ => plain_operand(ins.operand),
         };
-        rinstructions.push(RInstruction {
-            offset: ins.offset,
-            opcode: ins.opcode,
-            operand,
-        });
+        rinstructions.push(RInstruction { offset: ins.offset, opcode: ins.opcode, operand });
     }
 
     let locals = decode_locals(header.locals_token, ctx, md)?;
@@ -398,10 +394,7 @@ mod tests {
             name: "ToString".into(),
             signature: Default::default(),
         };
-        ReadContext {
-            member_refs: vec![MemberRefRow::Method(em)],
-            ..Default::default()
-        }
+        ReadContext { member_refs: vec![MemberRefRow::Method(em)], ..Default::default() }
     }
     /// Handcrafted tiny body:
     /// `IL_0000 ldstr`, `IL_0005 switch(2)`, `IL_0012 br.s`,
@@ -417,8 +410,8 @@ mod tests {
         w.u32(0x7000_0000 | us_hello);
         w.u8(opcodes::SWITCH.byte2); // IL_0005: switch (count, d1, d2)
         w.i32(2);
-        w.i32(0);  // -> IL_0012 (base 18 + 0)
-        w.i32(7);  // -> IL_0019 (base 18 + 7)
+        w.i32(0); // -> IL_0012 (base 18 + 0)
+        w.i32(7); // -> IL_0019 (base 18 + 7)
         w.u8(opcodes::BR_S.byte2); // IL_0012: br.s +5 -> IL_0019
         w.i8(5);
         w.u8(opcodes::CALLVIRT.byte2); // IL_0014: callvirt <memberref>
@@ -488,7 +481,7 @@ mod tests {
         code.u16(2); // handler offset
         code.u8(2); // handler length
         code.u32(0x0100_0001); // TypeRef rid 1
-        // Clause B: finally over [0,2) handler [4,4).
+                               // Clause B: finally over [0,2) handler [4,4).
         code.u16(2); // kind = Finally
         code.u16(0);
         code.u8(2);
@@ -576,5 +569,4 @@ mod tests {
 
         assert_eq!(il_body_rva(0, &m), None);
     }
-
 }

@@ -5,7 +5,6 @@
 use cecli_core::io::{ByteReader, ByteWriter};
 use cecli_core::{Error, Result, Token};
 
-
 use crate::exceptions::{parse_sections, requires_fat_section, write_section};
 use crate::instruction::{Instruction, Operand};
 use crate::opcode::{OpCode, OperandType};
@@ -110,9 +109,7 @@ pub fn parse_body_header(data: &[u8]) -> Result<ParsedHeader> {
                 more_sects: flags & MORE_SECTS_FLAG != 0,
             })
         }
-        other => Err(Error::bad_image(format!(
-            "invalid method header format bits {other:#x}"
-        ))),
+        other => Err(Error::bad_image(format!("invalid method header format bits {other:#x}"))),
     }
 }
 
@@ -199,11 +196,7 @@ fn read_opcode(reader: &mut ByteReader<'_>) -> Result<OpCode> {
         .ok_or_else(|| Error::bad_image(format!("unknown two-byte opcode fe {second:#04x}")))
 }
 
-fn read_operand(
-    reader: &mut ByteReader<'_>,
-    opcode: OpCode,
-    offset: i32,
-) -> Result<Operand> {
+fn read_operand(reader: &mut ByteReader<'_>, opcode: OpCode, offset: i32) -> Result<Operand> {
     // Offset just past the fixed-size operand; branch targets are relative
     // to it (Cecil's `Offset` inside `ReadOperand`).
     let next_offset = offset + instruction_fixed_size(opcode) as i32;
@@ -227,7 +220,9 @@ fn read_operand(
         OperandType::InlineI8 => Ok(Operand::Int64(reader.i64()?)),
         OperandType::ShortInlineR => Ok(Operand::Float32(reader.f32()?)),
         OperandType::InlineR => Ok(Operand::Float64(reader.f64()?)),
-        OperandType::ShortInlineVar | OperandType::ShortInlineArg => Ok(Operand::Var(reader.u8()? as u16)),
+        OperandType::ShortInlineVar | OperandType::ShortInlineArg => {
+            Ok(Operand::Var(reader.u8()? as u16))
+        }
         OperandType::InlineVar | OperandType::InlineArg => Ok(Operand::Var(reader.u16()?)),
         OperandType::InlineString => Ok(Operand::UserString(reader.u32()? & 0x00FF_FFFF)),
         OperandType::InlineSig
@@ -296,11 +291,7 @@ pub fn write_code(instructions: &[Instruction]) -> Result<Vec<u8>> {
     Ok(writer.into_vec())
 }
 
-fn write_simple_operand(
-    writer: &mut ByteWriter,
-    operand: &Operand,
-    ot: OperandType,
-) -> Result<()> {
+fn write_simple_operand(writer: &mut ByteWriter, operand: &Operand, ot: OperandType) -> Result<()> {
     macro_rules! expect {
         ($pat:pat => $val:expr, $what:expr) => {
             match operand {
@@ -318,12 +309,25 @@ fn write_simple_operand(
     match ot {
         OperandType::InlineNone => Ok(()),
         OperandType::ShortInlineI => {
-            Ok(writer.i8(expect!(Operand::Int8(v) => *v, "an Int8")))
+            writer.i8(expect!(Operand::Int8(v) => *v, "an Int8"));
+            Ok(())
         }
-        OperandType::InlineI => Ok(writer.i32(expect!(Operand::Int32(v) => *v, "an Int32"))),
-        OperandType::InlineI8 => Ok(writer.i64(expect!(Operand::Int64(v) => *v, "an Int64"))),
-        OperandType::ShortInlineR => Ok(writer.f32(expect!(Operand::Float32(v) => *v, "a Float32"))),
-        OperandType::InlineR => Ok(writer.f64(expect!(Operand::Float64(v) => *v, "a Float64"))),
+        OperandType::InlineI => {
+            writer.i32(expect!(Operand::Int32(v) => *v, "an Int32"));
+            Ok(())
+        }
+        OperandType::InlineI8 => {
+            writer.i64(expect!(Operand::Int64(v) => *v, "an Int64"));
+            Ok(())
+        }
+        OperandType::ShortInlineR => {
+            writer.f32(expect!(Operand::Float32(v) => *v, "a Float32"));
+            Ok(())
+        }
+        OperandType::InlineR => {
+            writer.f64(expect!(Operand::Float64(v) => *v, "a Float64"));
+            Ok(())
+        }
         OperandType::ShortInlineVar | OperandType::ShortInlineArg => {
             let v = expect!(Operand::Var(v) => *v, "a Var");
             if v > u8::MAX as u16 {
@@ -349,7 +353,9 @@ fn write_simple_operand(
             writer.u32(expect!(Operand::Token(t) => t.0, "a Token"));
             Ok(())
         }
-        OperandType::InlineSwitch | OperandType::ShortInlineBrTarget | OperandType::InlineBrTarget => {
+        OperandType::InlineSwitch
+        | OperandType::ShortInlineBrTarget
+        | OperandType::InlineBrTarget => {
             Err(Error::argument("branch operand handled by write_code"))
         }
     }
@@ -409,7 +415,7 @@ fn section_stream_len(data: &[u8]) -> usize {
             return pos.min(data.len());
         }
         // Chained sections start at the next 4-byte boundary.
-        while pos % 4 != 0 && pos < data.len() {
+        while !pos.is_multiple_of(4) && pos < data.len() {
             pos += 1;
         }
     }
@@ -501,7 +507,8 @@ mod tests {
     fn tiny_header_rejects_fat_only_fields() {
         assert!(encode_body_header(true, 64, 8, Token::NIL, false).is_err());
         assert!(encode_body_header(true, 10, 9, Token::NIL, false).is_err());
-        assert!(encode_body_header(true, 10, 8, Token::new(TableIndex::StandAloneSig, 1), false).is_err());
+        assert!(encode_body_header(true, 10, 8, Token::new(TableIndex::StandAloneSig, 1), false)
+            .is_err());
         assert!(encode_body_header(true, 10, 8, Token::NIL, true).is_err());
     }
 
@@ -528,11 +535,7 @@ mod tests {
             Instruction::new(1, opcodes::LDC_I4_S, Operand::Int8(5)),
             Instruction::new(3, opcodes::BR_S, Operand::Branch(16)),
             Instruction::none(5, opcodes::LDARG_1),
-            Instruction::new(
-                6,
-                opcodes::SWITCH,
-                Operand::Switch(vec![5, 16]),
-            ),
+            Instruction::new(6, opcodes::SWITCH, Operand::Switch(vec![5, 16])),
             Instruction::new(19, opcodes::LDC_I4, Operand::Int32(1000)),
             Instruction::new(24, opcodes::LEAVE, Operand::Branch(24)),
             Instruction::none(29, opcodes::RET),
@@ -561,7 +564,11 @@ mod tests {
     fn code_decode_handles_tokens_and_strings() {
         // callvirt on MethodDef 4; ldstr us-index 0x1234; ldloc 300; ret.
         let instructions = vec![
-            Instruction::new(0, opcodes::CALLVIRT, Operand::Token(Token::new(TableIndex::MethodDef, 4))),
+            Instruction::new(
+                0,
+                opcodes::CALLVIRT,
+                Operand::Token(Token::new(TableIndex::MethodDef, 4)),
+            ),
             Instruction::new(5, opcodes::LDSTR, Operand::UserString(0x1234)),
             Instruction::new(10, opcodes::LDLOC, Operand::Var(300)),
             Instruction::new(14, opcodes::STIND_I, Operand::None),

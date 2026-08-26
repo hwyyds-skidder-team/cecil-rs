@@ -67,14 +67,7 @@ pub fn column_kinds(table: TableIndex) -> Option<&'static [ColumnKind]> {
         T::FieldPtr => &[K::Simple(T::Field)],
         T::Field => &[K::U16, K::StringIdx, K::BlobIdx],
         T::MethodPtr => &[K::Simple(T::MethodDef)],
-        T::MethodDef => &[
-            K::U32,
-            K::U16,
-            K::U16,
-            K::StringIdx,
-            K::BlobIdx,
-            K::Simple(T::Param),
-        ],
+        T::MethodDef => &[K::U32, K::U16, K::U16, K::StringIdx, K::BlobIdx, K::Simple(T::Param)],
         T::ParamPtr => &[K::Simple(T::Param)],
         T::Param => &[K::U16, K::U16, K::StringIdx],
         T::InterfaceImpl => &[K::Simple(T::TypeDef), K::Coded(&coded::TYPE_DEF_OR_REF)],
@@ -105,12 +98,9 @@ pub fn column_kinds(table: TableIndex) -> Option<&'static [ColumnKind]> {
         ],
         T::ModuleRef => &[K::StringIdx],
         T::TypeSpec => &[K::BlobIdx],
-        T::ImplMap => &[
-            K::U16,
-            K::Coded(&coded::MEMBER_FORWARDED),
-            K::StringIdx,
-            K::Simple(T::ModuleRef),
-        ],
+        T::ImplMap => {
+            &[K::U16, K::Coded(&coded::MEMBER_FORWARDED), K::StringIdx, K::Simple(T::ModuleRef)]
+        }
         T::FieldRva => &[K::U32, K::Simple(T::Field)],
         T::EncLog => &[K::U32, K::U32],
         T::EncMap => &[K::U32],
@@ -143,13 +133,9 @@ pub fn column_kinds(table: TableIndex) -> Option<&'static [ColumnKind]> {
         T::AssemblyRefProcessor => &[K::U32, K::Simple(T::AssemblyRef)],
         T::AssemblyRefOS => &[K::U32, K::U32, K::U32, K::Simple(T::AssemblyRef)],
         T::File => &[K::U32, K::StringIdx, K::BlobIdx],
-        T::ExportedType => &[
-            K::U32,
-            K::U32,
-            K::StringIdx,
-            K::StringIdx,
-            K::Coded(&coded::IMPLEMENTATION),
-        ],
+        T::ExportedType => {
+            &[K::U32, K::U32, K::StringIdx, K::StringIdx, K::Coded(&coded::IMPLEMENTATION)]
+        }
         T::ManifestResource => &[K::U32, K::U32, K::StringIdx, K::Coded(&coded::IMPLEMENTATION)],
         T::NestedClass => &[K::Simple(T::TypeDef), K::Simple(T::TypeDef)],
         T::GenericParam => &[K::U16, K::U16, K::Coded(&coded::TYPE_OR_METHOD_DEF), K::StringIdx],
@@ -172,13 +158,10 @@ pub fn column_kinds(table: TableIndex) -> Option<&'static [ColumnKind]> {
         T::LocalConstant => &[K::StringIdx, K::BlobIdx],
         T::ImportScope => &[K::Simple(T::ImportScope), K::BlobIdx],
         T::StateMachineMethod => &[K::Simple(T::MethodDef), K::Simple(T::MethodDef)],
-        T::CustomDebugInformation => &[
-            K::Coded(&coded::HAS_CUSTOM_DEBUG_INFORMATION),
-            K::GuidIdx,
-            K::BlobIdx,
-        ],
-        // Every TableIndex variant is covered; the function still returns an
-        // Option for forward compatibility with unknown table numbers.
+        T::CustomDebugInformation => {
+            &[K::Coded(&coded::HAS_CUSTOM_DEBUG_INFORMATION), K::GuidIdx, K::BlobIdx]
+        } // Every TableIndex variant is covered; the function still returns an
+          // Option for forward compatibility with unknown table numbers.
     })
 }
 
@@ -250,12 +233,7 @@ impl TableSet {
         let mut layouts: Vec<Option<TableLayout>> = (0..TABLE_COUNT).map(|_| None).collect();
         // All counts are known before any row size is computed, so width
         // resolution for forward references (e.g. TypeDef -> Field) is exact.
-        let mut probe = TableSet {
-            layouts: Vec::new(),
-            counts: *row_counts,
-            valid,
-            heap_flags,
-        };
+        let mut probe = TableSet { layouts: Vec::new(), counts: *row_counts, valid, heap_flags };
         let mut offset = 0u64;
 
         for i in 0..TABLE_COUNT {
@@ -272,18 +250,11 @@ impl TableSet {
             let mut columns = Vec::with_capacity(kinds.len());
             let mut row_offset = 0u16;
             for &kind in kinds {
-                columns.push(ColumnDesc {
-                    kind,
-                    offset: row_offset,
-                });
+                columns.push(ColumnDesc { kind, offset: row_offset });
                 row_offset += probe.kind_width(&kind) as u16;
             }
 
-            layouts[i] = Some(TableLayout {
-                row_size: row_offset,
-                offset,
-                columns,
-            });
+            layouts[i] = Some(TableLayout { row_size: row_offset, offset, columns });
             offset += row_offset as u64 * probe.counts[i] as u64;
         }
 
@@ -304,15 +275,10 @@ impl TableSet {
             if valid >> i & 1 == 0 {
                 continue;
             }
-            let known = u8::try_from(i)
-                .ok()
-                .and_then(TableIndex::from_u8)
-                .and_then(column_kinds)
-                .is_some();
+            let known =
+                u8::try_from(i).ok().and_then(TableIndex::from_u8).and_then(column_kinds).is_some();
             if !known {
-                return Err(Error::unsupported(format!(
-                    "unknown metadata table 0x{i:02x}"
-                )));
+                return Err(Error::unsupported(format!("unknown metadata table 0x{i:02x}")));
             }
         }
         Ok(TableSet::compute(valid, row_counts, heap_flags))
@@ -409,12 +375,7 @@ impl TableSet {
                 }
             }
             ColumnKind::Coded(group) => {
-                let max = group
-                    .tables
-                    .iter()
-                    .map(|t| self.counts[*t as usize])
-                    .max()
-                    .unwrap_or(0);
+                let max = group.tables.iter().map(|t| self.counts[*t as usize]).max().unwrap_or(0);
                 if max < (1u32 << (16 - group.shift_bits())) {
                     2
                 } else {
@@ -426,12 +387,7 @@ impl TableSet {
 
     /// Locates one cell: returns its byte offset within the table-stream data
     /// plus its width in bytes.
-    pub fn cell_location(
-        &self,
-        table: TableIndex,
-        rid: u32,
-        col: usize,
-    ) -> Result<(u64, usize)> {
+    pub fn cell_location(&self, table: TableIndex, rid: u32, col: usize) -> Result<(u64, usize)> {
         let layout = self.layouts[table as usize]
             .as_ref()
             .ok_or_else(|| Error::argument(format!("table {} is absent", table.name())))?;
@@ -443,15 +399,10 @@ impl TableSet {
             )));
         }
         let desc = *layout.columns.get(col).ok_or_else(|| {
-            Error::argument(format!(
-                "column {col} out of range for table {}",
-                table.name()
-            ))
+            Error::argument(format!("column {col} out of range for table {}", table.name()))
         })?;
         let width = self.kind_width(&desc.kind);
-        let pos = layout.offset
-            + (rid as u64 - 1) * layout.row_size as u64
-            + desc.offset as u64;
+        let pos = layout.offset + (rid as u64 - 1) * layout.row_size as u64 + desc.offset as u64;
         Ok((pos, width))
     }
 }
@@ -484,7 +435,10 @@ mod tests {
                 assert!(enc <= u32::MAX as u64);
                 assert_eq!(decode_coded(g, enc), Some((*t, 42)));
             }
-            assert_eq!(encode_coded(g, TableIndex::Document, 1).is_err(), !g.tables.contains(&TableIndex::Document));
+            assert_eq!(
+                encode_coded(g, TableIndex::Document, 1).is_err(),
+                !g.tables.contains(&TableIndex::Document)
+            );
         }
     }
 

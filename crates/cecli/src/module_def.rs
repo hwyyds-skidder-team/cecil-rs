@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use cecli_pdb::document::Document;
 use crate::model::types::*;
+use cecli_pdb::document::Document;
 
 use cecli_pdb::portable_reader::{LocalScope, SequencePoint};
 
@@ -103,7 +103,6 @@ pub struct ModuleDebugInfo {
     pub scopes: BTreeMap<u32, Vec<LocalScope>>,
 }
 
-
 /// A manifest resource.
 #[derive(Debug, Clone)]
 pub enum Resource {
@@ -181,10 +180,7 @@ pub enum ExportedImpl {
 impl Module {
     /// Iterates every type in arena order (= metadata row order).
     pub fn iter_types(&self) -> impl Iterator<Item = (TypeId, &TypeDefinition)> + '_ {
-        self.types
-            .iter()
-            .enumerate()
-            .map(|(i, t)| (TypeId(i as u32), t))
+        self.types.iter().enumerate().map(|(i, t)| (TypeId(i as u32), t))
     }
 
     /// Resolves a type handle to its definition (panics on a stale handle,
@@ -200,10 +196,7 @@ impl Module {
 
     /// Iterates every method in arena order.
     pub fn iter_methods(&self) -> impl Iterator<Item = (MethodId, &MethodDefinition)> + '_ {
-        self.methods
-            .iter()
-            .enumerate()
-            .map(|(i, m)| (MethodId(i as u32), m))
+        self.methods.iter().enumerate().map(|(i, m)| (MethodId(i as u32), m))
     }
 
     /// Resolves a method handle to its definition.
@@ -218,10 +211,7 @@ impl Module {
 
     /// Iterates every field in arena order.
     pub fn iter_fields(&self) -> impl Iterator<Item = (FieldId, &FieldDefinition)> + '_ {
-        self.fields
-            .iter()
-            .enumerate()
-            .map(|(i, f)| (FieldId(i as u32), f))
+        self.fields.iter().enumerate().map(|(i, f)| (FieldId(i as u32), f))
     }
 
     /// Resolves a field handle to its definition.
@@ -236,10 +226,7 @@ impl Module {
 
     /// Iterates every property in arena order.
     pub fn iter_properties(&self) -> impl Iterator<Item = (PropertyId, &PropertyDefinition)> + '_ {
-        self.properties
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (PropertyId(i as u32), p))
+        self.properties.iter().enumerate().map(|(i, p)| (PropertyId(i as u32), p))
     }
 
     /// Resolves a property handle to its definition.
@@ -254,10 +241,7 @@ impl Module {
 
     /// Iterates every event in arena order.
     pub fn iter_events(&self) -> impl Iterator<Item = (EventId, &EventDefinition)> + '_ {
-        self.events
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (EventId(i as u32), e))
+        self.events.iter().enumerate().map(|(i, e)| (EventId(i as u32), e))
     }
 
     /// Resolves an event handle to its definition.
@@ -274,10 +258,7 @@ impl Module {
     pub fn iter_generic_parameters(
         &self,
     ) -> impl Iterator<Item = (GenericParamId, &GenericParameter)> + '_ {
-        self.generic_parameters
-            .iter()
-            .enumerate()
-            .map(|(i, g)| (GenericParamId(i as u32), g))
+        self.generic_parameters.iter().enumerate().map(|(i, g)| (GenericParamId(i as u32), g))
     }
 
     /// Resolves a generic-parameter handle to its definition.
@@ -293,9 +274,9 @@ impl Module {
     /// Finds a *top-level* type by namespace and simple name
     /// (port of `ModuleDefinition.GetType(string, string)`).
     pub fn get_type(&self, ns: &str, name: &str) -> Option<&TypeDefinition> {
-        self.types.iter().find(|t| {
-            t.declaring_type.is_none() && t.namespace == ns && t.name == name
-        })
+        self.types
+            .iter()
+            .find(|t| t.declaring_type.is_none() && t.namespace == ns && t.name == name)
     }
 
     /// Like [`Module::get_type`] but returns the handle instead.
@@ -321,10 +302,10 @@ impl Module {
             None => ("", head),
         };
 
-        let mut current =
-            self.types
-                .iter()
-                .position(|t| t.declaring_type.is_none() && t.namespace == ns && t.name == name)?;
+        let mut current = self
+            .types
+            .iter()
+            .position(|t| t.declaring_type.is_none() && t.namespace == ns && t.name == name)?;
         for part in parts {
             let parent = &self.types[current];
             let child = parent
@@ -382,7 +363,9 @@ impl Module {
         m.declaring_type = owner;
         let id = MethodId(self.methods.len() as u32);
         self.methods.push(m);
-        self.type_mut(owner).map(|t| t.methods.push(id));
+        if let Some(t) = self.type_mut(owner) {
+            t.methods.push(id)
+        }
         id
     }
 
@@ -390,7 +373,9 @@ impl Module {
     pub fn add_field(&mut self, owner: TypeId, f: FieldDefinition) -> FieldId {
         let id = FieldId(self.fields.len() as u32);
         self.fields.push(f);
-        self.type_mut(owner).map(|t| t.fields.push(id));
+        if let Some(t) = self.type_mut(owner) {
+            t.fields.push(id)
+        }
         id
     }
 
@@ -398,7 +383,9 @@ impl Module {
     pub fn add_property(&mut self, owner: TypeId, p: PropertyDefinition) -> PropertyId {
         let id = PropertyId(self.properties.len() as u32);
         self.properties.push(p);
-        self.type_mut(owner).map(|t| t.properties.push(id));
+        if let Some(t) = self.type_mut(owner) {
+            t.properties.push(id)
+        }
         id
     }
 
@@ -406,7 +393,9 @@ impl Module {
     pub fn add_event(&mut self, owner: TypeId, e: EventDefinition) -> EventId {
         let id = EventId(self.events.len() as u32);
         self.events.push(e);
-        self.type_mut(owner).map(|t| t.events.push(id));
+        if let Some(t) = self.type_mut(owner) {
+            t.events.push(id)
+        }
         id
     }
 
@@ -418,10 +407,14 @@ impl Module {
         self.generic_parameters.push(g);
         match owner {
             GenericOwner::Type(t) => {
-                self.type_mut(t).map(|ty| ty.generic_parameters.push(id));
+                if let Some(ty) = self.type_mut(t) {
+                    ty.generic_parameters.push(id)
+                }
             }
             GenericOwner::Method(m) => {
-                self.method_mut(m).map(|me| me.generic_parameters.push(id));
+                if let Some(me) = self.method_mut(m) {
+                    me.generic_parameters.push(id)
+                }
             }
         }
         id
@@ -474,7 +467,6 @@ impl std::fmt::Display for Module {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::types::*;
 
     fn named_type(ns: &str, name: &str, declaring: Option<TypeId>) -> TypeDefinition {
         let mut t = TypeDefinition::default();

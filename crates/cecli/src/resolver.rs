@@ -165,9 +165,7 @@ impl AssemblyResolver for DefaultAssemblyResolver {
 pub fn resolve_in_dirs(reference: &AssemblyNameReference, dirs: &[PathBuf]) -> Result<PathBuf> {
     // Cecil `Mixin.CheckName`: an empty reference name cannot be resolved.
     if reference.name.is_empty() {
-        return Err(Error::Argument(
-            "assembly name reference has an empty name".to_string(),
-        ));
+        return Err(Error::Argument("assembly name reference has an empty name".to_string()));
     }
 
     // Gather every candidate across all directories before ranking, so a
@@ -192,10 +190,7 @@ pub fn resolve_in_dirs(reference: &AssemblyNameReference, dirs: &[PathBuf]) -> R
         return Ok(path.clone());
     }
 
-    Err(Error::Unsupported(format!(
-        "Failed to resolve assembly: '{}'",
-        reference.full_name()
-    )))
+    Err(Error::Unsupported(format!("Failed to resolve assembly: '{}'", reference.full_name())))
 }
 
 /// Picks the winning candidate among `(path, version)` pairs.
@@ -389,8 +384,7 @@ mod tests {
     /// distinct probed versions.
     fn copy_fixture_as(dir: &Path, fixture: &str, stem: &str) -> PathBuf {
         let dest = dir.join(format!("{stem}.dll"));
-        std::fs::copy(cecli_core::fixtures_dir().join(fixture), &dest)
-            .expect("copy fixture");
+        std::fs::copy(cecli_core::fixtures_dir().join(fixture), &dest).expect("copy fixture");
         dest
     }
 
@@ -452,10 +446,7 @@ mod tests {
         let mut resolver = DefaultAssemblyResolver::new();
         resolver.add_search_directory(&dir);
         let path = resolver.resolve(&reference("mixedcase")).expect("resolved");
-        assert_eq!(
-            path.file_name().unwrap().to_string_lossy().to_lowercase(),
-            "mixedcase.exe"
-        );
+        assert_eq!(path.file_name().unwrap().to_string_lossy().to_lowercase(), "mixedcase.exe");
 
         cleanup_dir(&dir);
     }
@@ -527,9 +518,7 @@ mod tests {
         let mut resolver = DefaultAssemblyResolver::new();
         resolver.add_search_directory(&dir);
 
-        let err = resolver
-            .resolve(&reference("no_such_asm"))
-            .expect_err("must fail");
+        let err = resolver.resolve(&reference("no_such_asm")).expect_err("must fail");
         let msg = err.to_string();
         assert!(msg.contains("no_such_asm"), "message names assembly: {msg}");
 
@@ -574,9 +563,7 @@ mod tests {
         // Trait object round-trip through ReaderParameters.
         let boxed: Box<dyn AssemblyResolver> =
             Box::new(<DefaultAssemblyResolver as Default>::default());
-        boxed
-            .resolve(&reference("anything"))
-            .expect_err("no search dirs configured");
+        boxed.resolve(&reference("anything")).expect_err("no search dirs configured");
         let mut params = ReaderParameters::new();
         params.read_symbols = true;
         params.assembly_resolver = Some(boxed);
@@ -720,7 +707,7 @@ mod tests {
 
         let mut resolver = DefaultAssemblyResolver::new();
         resolver.add_framework_directory(&fw);
-        assert_eq!(resolver.get_framework_directories(), &[fw.clone()]);
+        assert_eq!(resolver.get_framework_directories(), std::slice::from_ref(&fw));
 
         // Framework directories are not consulted during resolution...
         assert!(resolver.resolve(&reference("fwonly")).is_err());

@@ -80,9 +80,7 @@ pub struct TextMap {
 
 impl Default for TextMap {
     fn default() -> Self {
-        TextMap {
-            map: [Range::default(); TEXT_SEGMENT_COUNT],
-        }
+        TextMap { map: [Range::default(); TEXT_SEGMENT_COUNT] }
     }
 }
 
@@ -339,17 +337,9 @@ impl<'a> ImageWriter<'a> {
         let mut map = TextMap::default();
         map.add(TextSegment::ImportAddressTable, if has_reloc { 8 } else { 0 });
         map.add(TextSegment::CliHeader, CLI_HEADER_CB as usize);
-        map.add_aligned(
-            TextSegment::Code,
-            parts.code.len(),
-            if pe64 { 16 } else { 4 },
-        );
+        map.add_aligned(TextSegment::Code, parts.code.len(), if pe64 { 16 } else { 4 });
         map.add_aligned(TextSegment::Resources, parts.resources.len(), 8);
-        map.add_aligned(
-            TextSegment::Data,
-            parts.data.len(),
-            parts.data_alignment.unwrap_or(8),
-        );
+        map.add_aligned(TextSegment::Data, parts.data.len(), parts.data_alignment.unwrap_or(8));
         map.add_aligned(TextSegment::StrongNameSignature, parts.strongname_size as usize, 4);
         // The whole BSJB root travels as one aligned segment.
         map.add_aligned(TextSegment::MetadataHeader, parts.metadata.len(), 8);
@@ -368,22 +358,15 @@ impl<'a> ImageWriter<'a> {
         }
 
         // Debug directory: recompute AddressOfRawData for every entry.
-        let mut debug_dirs: Vec<(crate::image::ImageDebugDirectory, Vec<u8>)> = parts
-            .debug_entries
-            .iter()
-            .map(|e| (e.directory, e.data.clone()))
-            .collect();
+        let mut debug_dirs: Vec<(crate::image::ImageDebugDirectory, Vec<u8>)> =
+            parts.debug_entries.iter().map(|e| (e.directory, e.data.clone())).collect();
         let mut debug_len = 0usize;
         if !debug_dirs.is_empty() {
             let directories_len = debug_dirs.len() * crate::image::ImageDebugDirectory::SIZE;
             let mut data_address =
                 map.get_next_rva(TextSegment::MetadataHeader) as usize + directories_len;
             for (dir, data) in &mut debug_dirs {
-                dir.address_of_raw_data = if data.is_empty() {
-                    0
-                } else {
-                    data_address as i32
-                };
+                dir.address_of_raw_data = if data.is_empty() { 0 } else { data_address as i32 };
                 data_address += data.len();
                 debug_len += data.len();
             }
@@ -398,14 +381,8 @@ impl<'a> ImageWriter<'a> {
             let import_dir_len = (import_hnt_rva - import_dir_rva) + 27;
             let startup_stub_rva = 2 + ((import_dir_rva + import_dir_len + 3) & !3);
 
-            map.add_range(
-                TextSegment::ImportDirectory,
-                Range::new(import_dir_rva, import_dir_len),
-            );
-            map.add_range(
-                TextSegment::ImportHintNameTable,
-                Range::new(import_hnt_rva, 0),
-            );
+            map.add_range(TextSegment::ImportDirectory, Range::new(import_dir_rva, import_dir_len));
+            map.add_range(TextSegment::ImportHintNameTable, Range::new(import_hnt_rva, 0));
             map.add_range(TextSegment::StartupStub, Range::new(startup_stub_rva, 6));
         } else {
             let start = map.get_next_rva(TextSegment::DebugDirectory);
@@ -416,8 +393,7 @@ impl<'a> ImageWriter<'a> {
 
         // --- sections -------------------------------------------------
         let win32_resources = parts.win32_resources.clone();
-        let sections_count: u16 =
-            1 + win32_resources.is_some() as u16 + has_reloc as u16;
+        let sections_count: u16 = 1 + win32_resources.is_some() as u16 + has_reloc as u16;
         let optsz: u32 = if pe64 { 0xF0 } else { 0xE0 };
         let header_size = align_up(
             PE_HEADER_SIZE + optsz + sections_count as u32 * SECTION_HEADER_SIZE,
@@ -475,11 +451,7 @@ impl<'a> ImageWriter<'a> {
         hw.u32(0); // SizeOfUninitializedData
 
         let startup_stub = map.get_range(TextSegment::StartupStub);
-        hw.u32(if startup_stub.length > 0 {
-            startup_stub.start
-        } else {
-            0
-        }); // AddressOfEntryPoint
+        hw.u32(if startup_stub.length > 0 { startup_stub.start } else { 0 }); // AddressOfEntryPoint
         hw.u32(TEXT_RVA); // BaseOfCode
 
         if !pe64 {
@@ -566,7 +538,8 @@ impl<'a> ImageWriter<'a> {
         out[..hw.len()].copy_from_slice(hw.as_slice());
 
         // --- text section ----------------------------------------------
-        let text_file_offset = |rva: u32| -> usize { (rva - TEXT_RVA + text.pointer_to_raw_data) as usize };
+        let text_file_offset =
+            |rva: u32| -> usize { (rva - TEXT_RVA + text.pointer_to_raw_data) as usize };
 
         if has_reloc {
             let at = text_file_offset(map.get_rva(TextSegment::ImportAddressTable));
@@ -585,9 +558,7 @@ impl<'a> ImageWriter<'a> {
         cw.u32(parts.metadata.len() as u32);
         cw.u32(image.cli_header.flags); // preserved module attributes
         cw.u32(
-            self.effective_entry_point(Some(parts))
-                .unwrap_or(image.cli_header.entry_point_token)
-                .0,
+            self.effective_entry_point(Some(parts)).unwrap_or(image.cli_header.entry_point_token).0,
         );
         write_dir(&mut cw, map.get_data_directory(TextSegment::Resources));
         write_dir(&mut cw, map.get_data_directory(TextSegment::StrongNameSignature));
@@ -599,11 +570,7 @@ impl<'a> ImageWriter<'a> {
         out[at..at + cw.len()].copy_from_slice(cw.as_slice());
 
         place(&mut out, text_file_offset(map.get_rva(TextSegment::Code)), &parts.code)?;
-        place(
-            &mut out,
-            text_file_offset(map.get_rva(TextSegment::Resources)),
-            &parts.resources,
-        )?;
+        place(&mut out, text_file_offset(map.get_rva(TextSegment::Resources)), &parts.resources)?;
         place(&mut out, text_file_offset(map.get_rva(TextSegment::Data)), &parts.data)?;
         place(
             &mut out,
@@ -670,11 +637,11 @@ impl<'a> ImageWriter<'a> {
         // --- rsrc section ----------------------------------------------
         if let (Some(section), Some(res)) = (&rsrc, &win32_resources) {
             let old = image.data_directories[DataDirectoryIndex::Resource as usize];
-            place(&mut out, section.pointer_to_raw_data as usize, &patch_win32_resources(
-                res,
-                old.virtual_address,
-                section.virtual_address,
-            )?)?;
+            place(
+                &mut out,
+                section.pointer_to_raw_data as usize,
+                &patch_win32_resources(res, old.virtual_address, section.virtual_address)?,
+            )?;
         }
 
         // --- reloc section ---------------------------------------------
@@ -699,7 +666,6 @@ impl<'a> ImageWriter<'a> {
     }
 }
 
-
 /// Copies `data` into `out` at `at`, guarding against overflow.
 fn place(out: &mut [u8], at: usize, data: &[u8]) -> Result<()> {
     let end = at + data.len();
@@ -717,7 +683,8 @@ fn place(out: &mut [u8], at: usize, data: &[u8]) -> Result<()> {
 fn create_section(name: &str, size: u32, previous: &Section) -> Section {
     Section {
         name: name.into(),
-        virtual_address: previous.virtual_address + align_up(previous.virtual_size, SECTION_ALIGNMENT),
+        virtual_address: previous.virtual_address
+            + align_up(previous.virtual_size, SECTION_ALIGNMENT),
         virtual_size: size,
         pointer_to_raw_data: previous.pointer_to_raw_data + previous.size_of_raw_data,
         size_of_raw_data: align_up(size, FILE_ALIGNMENT),
@@ -757,19 +724,17 @@ fn write_section_header(w: &mut ByteWriter, section: &Section, characteristics: 
 fn dos_header_blob() -> &'static [u8; 128] {
     const BLOB: [u8; 128] = [
         // dos header start
-        0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0xff,
-        0x00, 0x00, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
+        0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00,
+        0x00, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         // lfanew
-        0x80, 0x00, 0x00, 0x00,
-        // dos stub ("This program cannot be run in DOS mode.")
-        0x0e, 0x1f, 0xba, 0x0e, 0x00, 0xb4, 0x09, 0xcd, 0x21, 0xb8, 0x01, 0x4c, 0xcd, 0x21,
-        0x54, 0x68, 0x69, 0x73, 0x20, 0x70, 0x72, 0x6f, 0x67, 0x72, 0x61, 0x6d, 0x20, 0x63,
-        0x61, 0x6e, 0x6e, 0x6f, 0x74, 0x20, 0x62, 0x65, 0x20, 0x72, 0x75, 0x6e, 0x20, 0x69,
-        0x6e, 0x20, 0x44, 0x4f, 0x53, 0x20, 0x6d, 0x6f, 0x64, 0x65, 0x2e, 0x0d, 0x0d, 0x0a,
-        0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x80, 0x00, 0x00, 0x00, // dos stub ("This program cannot be run in DOS mode.")
+        0x0e, 0x1f, 0xba, 0x0e, 0x00, 0xb4, 0x09, 0xcd, 0x21, 0xb8, 0x01, 0x4c, 0xcd, 0x21, 0x54,
+        0x68, 0x69, 0x73, 0x20, 0x70, 0x72, 0x6f, 0x67, 0x72, 0x61, 0x6d, 0x20, 0x63, 0x61, 0x6e,
+        0x6e, 0x6f, 0x74, 0x20, 0x62, 0x65, 0x20, 0x72, 0x75, 0x6e, 0x20, 0x69, 0x6e, 0x20, 0x44,
+        0x4f, 0x53, 0x20, 0x6d, 0x6f, 0x64, 0x65, 0x2e, 0x0d, 0x0d, 0x0a, 0x24, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
     ];
     &BLOB
 }
@@ -782,11 +747,7 @@ fn patch_win32_resources(resources: &[u8], old_rva: u32, new_rva: u32) -> Result
     Ok(buf.as_slice().to_vec())
 }
 
-fn patch_resource_directory_table(
-    buf: &mut ByteBuffer,
-    old_rva: u32,
-    new_rva: u32,
-) -> Result<()> {
+fn patch_resource_directory_table(buf: &mut ByteBuffer, old_rva: u32, new_rva: u32) -> Result<()> {
     buf.advance(12)?;
     // Number of entries = NamedEntries + IDEntries.
     let named = buf.u16()?;
@@ -797,11 +758,7 @@ fn patch_resource_directory_table(
     Ok(())
 }
 
-fn patch_resource_directory_entry(
-    buf: &mut ByteBuffer,
-    old_rva: u32,
-    new_rva: u32,
-) -> Result<()> {
+fn patch_resource_directory_entry(buf: &mut ByteBuffer, old_rva: u32, new_rva: u32) -> Result<()> {
     buf.advance(4)?;
     let child = buf.u32()?;
     let position = buf.position();
@@ -856,7 +813,6 @@ fn patch_checksum(out: &mut [u8], pe: usize) -> Result<()> {
     out[checksum_at..checksum_at + 4].copy_from_slice(&checksum.to_le_bytes());
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -958,10 +914,7 @@ mod tests {
         assert_eq!(&out[at..at + 4], b"BSJB");
 
         // Code is present in .text.
-        assert!(
-            out.iter().any(|&b| b == 0x90),
-            "code segment should appear in the emitted image"
-        );
+        assert!(out.contains(&0x90), "code segment should appear in the emitted image");
 
         // Checksum was recomputed.
         let pe = image.pe_offset();

@@ -87,14 +87,7 @@ impl OpCode {
         byte2: u8,
         operand_type: OperandType,
     ) -> Self {
-        OpCode {
-            code,
-            name,
-            operand_type,
-            size: if byte1 == 0xFF { 1 } else { 2 },
-            byte1,
-            byte2,
-        }
+        OpCode { code, name, operand_type, size: if byte1 == 0xFF { 1 } else { 2 }, byte1, byte2 }
     }
 
     /// Full two-byte encoding as `(byte1 << 8) | byte2`.

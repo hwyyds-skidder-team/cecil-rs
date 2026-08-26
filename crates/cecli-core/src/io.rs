@@ -23,7 +23,10 @@ impl<'a> ByteReader<'a> {
 
     pub fn seek(&mut self, pos: usize) -> Result<()> {
         if pos > self.data.len() {
-            return Err(Error::bad_image(format!("seek {pos} beyond {len}", len = self.data.len())));
+            return Err(Error::bad_image(format!(
+                "seek {pos} beyond {len}",
+                len = self.data.len()
+            )));
         }
         self.pos = pos;
         Ok(())
@@ -117,12 +120,10 @@ impl<'a> ByteReader<'a> {
         if first & 0x40 == 0 {
             return Ok((((first & !0x80) as u32) << 8) | self.u8()? as u32);
         }
-        Ok(
-            (((first & !0xC0) as u32) << 24)
-                | (self.u8()? as u32) << 16
-                | (self.u8()? as u32) << 8
-                | self.u8()? as u32,
-        )
+        Ok((((first & !0xC0) as u32) << 24)
+            | (self.u8()? as u32) << 16
+            | (self.u8()? as u32) << 8
+            | self.u8()? as u32)
     }
 
     /// Compressed signed integer, bit-exact port of Mono.Cecil's
@@ -144,7 +145,6 @@ impl<'a> ByteReader<'a> {
             _ => v.wrapping_sub(0x10000000),
         })
     }
-
 
     pub fn align(&mut self, alignment: usize) -> Result<()> {
         let rem = self.pos % alignment;
@@ -280,7 +280,7 @@ impl ByteWriter {
     }
 
     pub fn align(&mut self, alignment: usize) {
-        while self.buf.len() % alignment != 0 {
+        while !self.buf.len().is_multiple_of(alignment) {
             self.u8(0);
         }
     }
@@ -292,7 +292,19 @@ mod tests {
 
     #[test]
     fn compressed_uint_roundtrip() {
-        let cases = [0u32, 1, 0x7F, 0x80, 0xFF, 0x100, 0x3FFF, 0x4000, 0xFFFF, 0x1FFF_FFFF - 1, 0x1FFF_FFFF];
+        let cases = [
+            0u32,
+            1,
+            0x7F,
+            0x80,
+            0xFF,
+            0x100,
+            0x3FFF,
+            0x4000,
+            0xFFFF,
+            0x1FFF_FFFF - 1,
+            0x1FFF_FFFF,
+        ];
         for &c in &cases {
             let mut w = ByteWriter::new();
             w.compressed_u32(c);
@@ -305,7 +317,19 @@ mod tests {
 
     #[test]
     fn compressed_int_roundtrip() {
-        let cases = [0i32, 1, -1, 63, -64, 8191, -8192, 268_435_455, -268_435_456, 134_217_727, -134_217_728];
+        let cases = [
+            0i32,
+            1,
+            -1,
+            63,
+            -64,
+            8191,
+            -8192,
+            268_435_455,
+            -268_435_456,
+            134_217_727,
+            -134_217_728,
+        ];
         for &c in &cases {
             let mut w = ByteWriter::new();
             w.compressed_i32(c);

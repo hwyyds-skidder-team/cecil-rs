@@ -32,7 +32,7 @@ use cecli_cil::opcode_table as op;
 use cecli_cil::{Code, OpCode, OperandType};
 use cecli_core::Token;
 
-use crate::model::types::{MethodRef, ResolvedBody, RInstruction, ROperand};
+use crate::model::types::{MethodRef, RInstruction, ROperand, ResolvedBody};
 
 // ---------------------------------------------------------------------------
 // Offset / target maintenance
@@ -104,10 +104,8 @@ fn shift_targets(body: &mut ResolvedBody, from: i32, delta: i32, skip: Option<us
 /// body.
 pub fn renumber(body: &mut ResolvedBody) {
     let old_offsets: Vec<i32> = body.instructions.iter().map(|i| i.offset).collect();
-    let old_end = body
-        .instructions
-        .last()
-        .map_or(0, |last| last.offset + encoded_size(last) as i32);
+    let old_end =
+        body.instructions.last().map_or(0, |last| last.offset + encoded_size(last) as i32);
 
     let mut offset = 0i32;
     for instr in &mut body.instructions {
@@ -174,76 +172,44 @@ impl<'a> BodyEditor<'a> {
 
     /// Creates a no-operand instruction (`offset` is assigned on insertion).
     pub fn create(opcode: OpCode) -> RInstruction {
-        RInstruction {
-            offset: 0,
-            opcode,
-            operand: ROperand::None,
-        }
+        RInstruction { offset: 0, opcode, operand: ROperand::None }
     }
 
     /// Creates `ldc.i4 <value>` (long form; see [`BodyEditor::ldc_i4`] for the
     /// smart opcode pick).
     pub fn create_i32(value: i32) -> RInstruction {
-        RInstruction {
-            offset: 0,
-            opcode: op::LDC_I4,
-            operand: ROperand::Int32(value),
-        }
+        RInstruction { offset: 0, opcode: op::LDC_I4, operand: ROperand::Int32(value) }
     }
 
     /// Creates `ldc.i8 <value>`.
     pub fn create_i64(value: i64) -> RInstruction {
-        RInstruction {
-            offset: 0,
-            opcode: op::LDC_I8,
-            operand: ROperand::Int64(value),
-        }
+        RInstruction { offset: 0, opcode: op::LDC_I8, operand: ROperand::Int64(value) }
     }
 
     /// Creates `ldc.r4 <value>`.
     pub fn create_r32(value: f32) -> RInstruction {
-        RInstruction {
-            offset: 0,
-            opcode: op::LDC_R4,
-            operand: ROperand::Float32(value),
-        }
+        RInstruction { offset: 0, opcode: op::LDC_R4, operand: ROperand::Float32(value) }
     }
 
     /// Creates `ldc.r8 <value>`.
     pub fn create_r64(value: f64) -> RInstruction {
-        RInstruction {
-            offset: 0,
-            opcode: op::LDC_R8,
-            operand: ROperand::Float64(value),
-        }
+        RInstruction { offset: 0, opcode: op::LDC_R8, operand: ROperand::Float64(value) }
     }
 
     /// Creates an unconditional branch (long form) to the absolute IL offset
     /// `target`; [`optimize_macros`] shortens it when possible.
     pub fn create_branch(target: i32) -> RInstruction {
-        RInstruction {
-            offset: 0,
-            opcode: op::BR,
-            operand: ROperand::Branch(target),
-        }
+        RInstruction { offset: 0, opcode: op::BR, operand: ROperand::Branch(target) }
     }
 
     /// Creates a jump-table `switch` over absolute target IL offsets.
     pub fn create_switch(targets: Vec<i32>) -> RInstruction {
-        RInstruction {
-            offset: 0,
-            opcode: op::SWITCH,
-            operand: ROperand::Switch(targets),
-        }
+        RInstruction { offset: 0, opcode: op::SWITCH, operand: ROperand::Switch(targets) }
     }
 
     /// Creates an instruction carrying a raw metadata token operand.
     pub fn create_token(opcode: OpCode, token: Token) -> RInstruction {
-        RInstruction {
-            offset: 0,
-            opcode,
-            operand: ROperand::Token(token),
-        }
+        RInstruction { offset: 0, opcode, operand: ROperand::Token(token) }
     }
 
     // -- mutation -----------------------------------------------------------
@@ -272,10 +238,7 @@ impl<'a> BodyEditor<'a> {
         let pos = if index < len {
             self.body.instructions[index].offset
         } else {
-            self.body
-                .instructions
-                .last()
-                .map_or(0, |last| last.offset + encoded_size(last) as i32)
+            self.body.instructions.last().map_or(0, |last| last.offset + encoded_size(last) as i32)
         };
         let at = index.min(len);
         self.body.instructions.insert(at, instr.clone());
@@ -323,10 +286,8 @@ impl<'a> BodyEditor<'a> {
         }
         let end = range.end.min(len);
         let start_pos = self.body.instructions[range.start].offset;
-        let removed: i32 = self.body.instructions[range.start..end]
-            .iter()
-            .map(|i| encoded_size(i) as i32)
-            .sum();
+        let removed: i32 =
+            self.body.instructions[range.start..end].iter().map(|i| encoded_size(i) as i32).sum();
         self.body.instructions.drain(range.start..end);
         shift_targets(self.body, start_pos + removed, -removed, None);
         self.relayout();
@@ -371,11 +332,7 @@ impl<'a> BodyEditor<'a> {
     /// Emits `call <method>`; the reference is stored unresolved and mapped to
     /// a metadata token by the writer.
     pub fn call(&mut self, method: MethodRef) -> &mut Self {
-        self.append(RInstruction {
-            offset: 0,
-            opcode: op::CALL,
-            operand: ROperand::Method(method),
-        })
+        self.append(RInstruction { offset: 0, opcode: op::CALL, operand: ROperand::Method(method) })
     }
 
     /// Emits an unconditional branch (long form) to the absolute IL offset
@@ -602,7 +559,7 @@ fn optimize_branches(body: &mut ResolvedBody) {
         }
         // Displacement of the long (5-byte) form.
         let displacement = target - (offset + opcode.size as i32 + 4);
-        if !(displacement >= -128 && displacement <= 127) {
+        if !(-128..=127).contains(&displacement) {
             index += 1;
             continue;
         }
@@ -653,9 +610,7 @@ fn optimize_longs(body: &mut ResolvedBody) {
     let mut index = 0;
     while index < body.instructions.len() {
         let value = match body.instructions[index].operand {
-            ROperand::Int64(value) if body.instructions[index].opcode.code == Code::Ldc_I8 => {
-                value
-            }
+            ROperand::Int64(value) if body.instructions[index].opcode.code == Code::Ldc_I8 => value,
             _ => {
                 index += 1;
                 continue;
@@ -667,7 +622,8 @@ fn optimize_longs(body: &mut ResolvedBody) {
             continue;
         }
 
-        let old_end = body.instructions[index].offset + encoded_size(&body.instructions[index]) as i32;
+        let old_end =
+            body.instructions[index].offset + encoded_size(&body.instructions[index]) as i32;
         let instr = &mut body.instructions[index];
         instr.opcode = op::LDC_I4;
         instr.operand = ROperand::Int32(value as i32);
@@ -678,11 +634,7 @@ fn optimize_longs(body: &mut ResolvedBody) {
         let pos = old_end - 4;
         body.instructions.insert(
             index + 1,
-            RInstruction {
-                offset: 0,
-                opcode: op::CONV_I8,
-                operand: ROperand::None,
-            },
+            RInstruction { offset: 0, opcode: op::CONV_I8, operand: ROperand::None },
         );
         shift_targets(body, pos, 1, Some(index + 1));
         recompute_offsets(body);
@@ -700,26 +652,15 @@ mod tests {
     use crate::model::types::{LocalVariable, TypeDesc};
 
     fn make_body(instructions: Vec<RInstruction>) -> ResolvedBody {
-        ResolvedBody {
-            instructions,
-            ..Default::default()
-        }
+        ResolvedBody { instructions, ..Default::default() }
     }
 
     fn instr(offset: i32, opcode: OpCode, operand: ROperand) -> RInstruction {
-        RInstruction {
-            offset,
-            opcode,
-            operand,
-        }
+        RInstruction { offset, opcode, operand }
     }
 
     fn local(index: u16) -> LocalVariable {
-        LocalVariable {
-            index,
-            ty: TypeDesc::Internal("int32".into()),
-            pinned: false,
-        }
+        LocalVariable { index, ty: TypeDesc::Internal("int32".into()), pinned: false }
     }
 
     fn nop() -> RInstruction {
@@ -893,16 +834,7 @@ mod tests {
         optimize_macros(&mut b);
 
         let codes: Vec<Code> = b.instructions.iter().map(|i| i.opcode.code).collect();
-        assert_eq!(
-            codes,
-            [
-                Code::Ldc_I4_7,
-                Code::Stloc_0,
-                Code::Ldloc_0,
-                Code::Br_S,
-                Code::Ret,
-            ]
-        );
+        assert_eq!(codes, [Code::Ldc_I4_7, Code::Stloc_0, Code::Ldloc_0, Code::Br_S, Code::Ret,]);
         // After collapsing: br.s sits at 3, ret lands at 5: 5 - (3 + 2) = 0.
         assert_eq!(b.instructions[3].operand, ROperand::Branch(5));
         assert_eq!(b.instructions[4].offset, 5);
@@ -939,16 +871,7 @@ mod tests {
 
         // Collapsed to the shortest deterministic forms...
         let codes: Vec<Code> = optimized.instructions.iter().map(|i| i.opcode.code).collect();
-        assert_eq!(
-            codes,
-            [
-                Code::Ldc_I4_5,
-                Code::Stloc_0,
-                Code::Ldloc_0,
-                Code::Br_S,
-                Code::Ret,
-            ]
-        );
+        assert_eq!(codes, [Code::Ldc_I4_5, Code::Stloc_0, Code::Ldloc_0, Code::Br_S, Code::Ret,]);
 
         // ...and simplify(optimize(x)) restores the original stream exactly
         // (opcodes, operands and offsets - i.e. byte-identical IL).
@@ -1024,10 +947,8 @@ mod tests {
         assert_eq!(d.instructions[0].operand, ROperand::Branch(0));
 
         // Inserting a branch into an existing body keeps the target verbatim.
-        let mut c = make_body(vec![
-            instr(0, op::NOP, ROperand::None),
-            instr(1, op::RET, ROperand::None),
-        ]);
+        let mut c =
+            make_body(vec![instr(0, op::NOP, ROperand::None), instr(1, op::RET, ROperand::None)]);
         let mut editor = BodyEditor::new(&mut c);
         editor.insert_at(1, &BodyEditor::create_branch(6));
         assert_eq!(c.instructions[1].operand, ROperand::Branch(6));
@@ -1038,23 +959,11 @@ mod tests {
     fn factories_cover_operand_kinds() {
         let token = Token(0x06000001);
         assert_eq!(BodyEditor::create(op::NOP).operand, ROperand::None);
-        assert_eq!(
-            BodyEditor::create_i64(-2).operand,
-            ROperand::Int64(-2)
-        );
-        assert_eq!(
-            BodyEditor::create_r32(1.5).operand,
-            ROperand::Float32(1.5)
-        );
-        assert_eq!(
-            BodyEditor::create_r64(2.5).operand,
-            ROperand::Float64(2.5)
-        );
+        assert_eq!(BodyEditor::create_i64(-2).operand, ROperand::Int64(-2));
+        assert_eq!(BodyEditor::create_r32(1.5).operand, ROperand::Float32(1.5));
+        assert_eq!(BodyEditor::create_r64(2.5).operand, ROperand::Float64(2.5));
         assert_eq!(BodyEditor::create_branch(9).operand, ROperand::Branch(9));
-        assert_eq!(
-            BodyEditor::create_switch(vec![3, 4]).operand,
-            ROperand::Switch(vec![3, 4])
-        );
+        assert_eq!(BodyEditor::create_switch(vec![3, 4]).operand, ROperand::Switch(vec![3, 4]));
         let tok_instr = BodyEditor::create_token(op::CALL, token);
         assert_eq!(tok_instr.opcode, op::CALL);
         assert_eq!(tok_instr.operand, ROperand::Token(token));
@@ -1074,10 +983,7 @@ mod tests {
         // collapses the load and shortens the branch, whose absolute target
         // keeps tracking ret through every relayout.
         let codes: Vec<Code> = b.instructions.iter().map(|i| i.opcode.code).collect();
-        assert_eq!(
-            codes,
-            [Code::Ldc_I4_S, Code::Conv_I8, Code::Br_S, Code::Ret]
-        );
+        assert_eq!(codes, [Code::Ldc_I4_S, Code::Conv_I8, Code::Br_S, Code::Ret]);
         assert_eq!(b.instructions[0].operand, ROperand::Int8(42));
         assert_eq!(b.instructions[2].opcode.code, Code::Br_S);
         assert_eq!(b.instructions[2].operand, ROperand::Branch(5));

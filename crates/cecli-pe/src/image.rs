@@ -243,10 +243,7 @@ impl Image {
         if self.cli_header.metadata_rva == 0 {
             return Err(Error::bad_image("image has no metadata root"));
         }
-        Ok((
-            self.cli_header.metadata_rva,
-            self.cli_header.metadata_size as usize,
-        ))
+        Ok((self.cli_header.metadata_rva, self.cli_header.metadata_size as usize))
     }
 
     /// The section containing `rva`, if any.
@@ -259,9 +256,8 @@ impl Image {
     pub fn section_at_virtual_address(&self, rva: u64) -> Option<&Section> {
         let rva = rva.min(u32::MAX as u64) as u32;
         self.sections.iter().find(|s| {
-            let mapped_end = s
-                .virtual_address
-                .saturating_add(s.virtual_size.max(s.size_of_raw_data));
+            let mapped_end =
+                s.virtual_address.saturating_add(s.virtual_size.max(s.size_of_raw_data));
             rva >= s.virtual_address && rva < mapped_end
         })
     }
@@ -297,14 +293,13 @@ impl Image {
         let raw_size = section.size_of_raw_data as u64;
         let mapped_size = (section.virtual_size as u64).max(raw_size);
         if off >= mapped_size {
-            return Err(Error::bad_image(format!(
-                "rva {rva:#x} maps past the end of its section"
-            )));
+            return Err(Error::bad_image(format!("rva {rva:#x} maps past the end of its section")));
         }
         let len = (mapped_size - off) as usize;
         let start = section.pointer_to_raw_data as u64 + off;
         let raw_start = start.min(self.raw.len() as u64) as usize;
-        let raw_end = ((section.pointer_to_raw_data as u64 + raw_size) as usize).min(self.raw.len());
+        let raw_end =
+            ((section.pointer_to_raw_data as u64 + raw_size) as usize).min(self.raw.len());
         if raw_start >= raw_end {
             // Entirely inside the zero-filled tail.
             return Ok(Cow::Owned(vec![0u8; len]));

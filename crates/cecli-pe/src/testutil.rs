@@ -122,7 +122,14 @@ pub fn tiny_image() -> Vec<u8> {
     w.into_vec()
 }
 
-fn write_section_header(w: &mut ByteWriter, name: &[u8; 4], va: u32, vsize: u32, srd: u32, ptr: u32) {
+fn write_section_header(
+    w: &mut ByteWriter,
+    name: &[u8; 4],
+    va: u32,
+    vsize: u32,
+    srd: u32,
+    ptr: u32,
+) {
     w.bytes(name);
     w.zeros(4); // name padding
     w.u32(vsize);

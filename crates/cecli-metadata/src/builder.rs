@@ -22,10 +22,7 @@ struct StringHeapBuffer {
 
 impl StringHeapBuffer {
     fn new() -> Self {
-        StringHeapBuffer {
-            data: vec![0],
-            map: HashMap::new(),
-        }
+        StringHeapBuffer { data: vec![0], map: HashMap::new() }
     }
 
     fn insert(&mut self, s: &str) -> u32 {
@@ -53,10 +50,7 @@ struct UserStringHeapBuffer {
 
 impl UserStringHeapBuffer {
     fn new() -> Self {
-        UserStringHeapBuffer {
-            data: Vec::new(),
-            map: HashMap::new(),
-        }
+        UserStringHeapBuffer { data: Vec::new(), map: HashMap::new() }
     }
 
     fn insert(&mut self, s: &str) -> u32 {
@@ -78,15 +72,14 @@ impl UserStringHeapBuffer {
                 break;
             }
             let v = c as u32;
-            if v < 0x20 || v > 0x7e {
-                if v > 0x7e
+            if (!(0x20..=0x7e).contains(&v))
+                && (v > 0x7e
                     || (0x01..=0x08).contains(&v)
                     || (0x0e..=0x1f).contains(&v)
                     || v == 0x27
-                    || v == 0x2d
-                {
-                    special = 1;
-                }
+                    || v == 0x2d)
+            {
+                special = 1;
             }
         }
         w.u8(special);
@@ -105,10 +98,7 @@ struct BlobHeapBuffer {
 
 impl BlobHeapBuffer {
     fn new() -> Self {
-        BlobHeapBuffer {
-            data: vec![0],
-            map: HashMap::new(),
-        }
+        BlobHeapBuffer { data: vec![0], map: HashMap::new() }
     }
 
     fn insert(&mut self, blob: &[u8]) -> u32 {
@@ -243,14 +233,15 @@ impl MetadataBuilder {
     /// module entry point token, and `type_system_counts` the
     /// `(table byte, row count)` pairs recorded in ascending table order,
     /// exactly like Mono.Cecil's `PortablePdbWriter.WritePdbHeap`.
-    pub fn set_pdb_heap(&mut self, id: [u8; 20], entry_point: Token, type_system_counts: &[(u8, u32)]) {
+    pub fn set_pdb_heap(
+        &mut self,
+        id: [u8; 20],
+        entry_point: Token,
+        type_system_counts: &[(u8, u32)],
+    ) {
         let mut counts = type_system_counts.to_vec();
         counts.sort_by_key(|&(table, _)| table);
-        self.pdb = Some(PdbHeapBuffer {
-            id,
-            entry_point,
-            table_counts: counts,
-        });
+        self.pdb = Some(PdbHeapBuffer { id, entry_point, table_counts: counts });
     }
 
     /// Serializes the complete BSJB root.
@@ -320,10 +311,8 @@ impl MetadataBuilder {
             pw.into_vec()
         });
         let tables = tw.into_vec();
-        let mut streams: Vec<(&str, &[u8])> = vec![
-            ("#~", tables.as_slice()),
-            ("#Strings", self.strings.data.as_slice()),
-        ];
+        let mut streams: Vec<(&str, &[u8])> =
+            vec![("#~", tables.as_slice()), ("#Strings", self.strings.data.as_slice())];
         if !self.user_strings.data.is_empty() {
             streams.push(("#US", self.user_strings.data.as_slice()));
         }
@@ -391,30 +380,14 @@ mod tests {
         // Rows across eight tables.
         let module = [0u64, s_mod as u64, g_mvid as u64, 0, 0];
         // ResolutionScope: Module tag 0, rid 1.
-        let typeref_1 = [
-            (1u64 << coded::RESOLUTION_SCOPE.shift_bits()) | 0,
-            s_obj as u64,
-            s_ns as u64,
-        ];
+        let typeref_1 = [(1u64 << coded::RESOLUTION_SCOPE.shift_bits()), s_obj as u64, s_ns as u64];
         // ResolutionScope: TypeRef tag 3, rid 1 (forward reference is fine).
-        let typeref_2 = [
-            (1u64 << coded::RESOLUTION_SCOPE.shift_bits()) | 3,
-            s_my as u64,
-            0,
-        ];
+        let typeref_2 = [(1u64 << coded::RESOLUTION_SCOPE.shift_bits()) | 3, s_my as u64, 0];
         // BaseType: TypeRef tag 1 rid 1 / TypeDef tag 0 rid 1.
-        let typedef_1 = [
-            0x0010_0001,
-            s_obj as u64,
-            s_ns as u64,
-            (1u64 << 2) | 1,
-            1,
-            1,
-        ];
-        let typedef_2 = [0x0000_0001, s_my as u64, 0, (0u64 << 2) | 1, 1, 1];
-        let methoddef: Vec<[u64; 6]> = (0..3)
-            .map(|i| [0x6000 + i, 0, 0x0096, s_m as u64, blob_small as u64, 1])
-            .collect();
+        let typedef_1 = [0x0010_0001, s_obj as u64, s_ns as u64, (1u64 << 2) | 1, 1, 1];
+        let typedef_2 = [0x0000_0001, s_my as u64, 0, 1, 1, 1];
+        let methoddef: Vec<[u64; 6]> =
+            (0..3).map(|i| [0x6000 + i, 0, 0x0096, s_m as u64, blob_small as u64, 1]).collect();
         // MemberRefParent: TypeRef tag 1 rid 1.
         let memberref = [(1u64 << 3) | 1, s_obj as u64, blob_big as u64];
         // HasCustomAttribute: TypeDef tag 3, rid 1 (shift 5). Type:
@@ -476,12 +449,7 @@ mod tests {
         for (table, row) in &expected {
             let rid = per_table.entry(*table).or_insert(0);
             *rid += 1;
-            assert_eq!(
-                r.column_count(*table),
-                row.len(),
-                "column count of {}",
-                table.name()
-            );
+            assert_eq!(r.column_count(*table), row.len(), "column count of {}", table.name());
             for (col, want) in row.iter().enumerate() {
                 assert_eq!(
                     r.column(*table, *rid, col).expect("cell"),
@@ -512,24 +480,15 @@ mod tests {
         let t = r.tables();
         assert!(!t.large_string());
         assert!(t.large_blob());
-        assert_eq!(
-            t.kind_width(&ColumnKind::BlobIdx),
-            4
-        );
-        assert_eq!(
-            t.kind_width(&ColumnKind::StringIdx),
-            2
-        );
+        assert_eq!(t.kind_width(&ColumnKind::BlobIdx), 4);
+        assert_eq!(t.kind_width(&ColumnKind::StringIdx), 2);
         let mr_cols = t.columns(TableIndex::MemberRef).unwrap();
         assert_eq!(mr_cols[2].kind, ColumnKind::BlobIdx);
         assert_eq!(mr_cols[2].offset, 4, "coded parent widened to 4? no: max(TypeDef)=2");
 
         // Coded decode of what we encoded: MemberRef.Class -> (TypeRef, 1).
         let class = r.column(TableIndex::MemberRef, 1, 0).unwrap();
-        assert_eq!(
-            decode_coded(&coded::MEMBER_REF_PARENT, class),
-            Some((TableIndex::TypeRef, 1))
-        );
+        assert_eq!(decode_coded(&coded::MEMBER_REF_PARENT, class), Some((TableIndex::TypeRef, 1)));
         let parent = r.column(TableIndex::CustomAttribute, 1, 0).unwrap();
         assert_eq!(
             decode_coded(&coded::HAS_CUSTOM_ATTRIBUTE, parent),
@@ -558,11 +517,7 @@ mod tests {
         // No rows at all: only heaps are emitted.
         let bytes = b.finalize();
         let r = MetadataReader::parse(&bytes).expect("parses");
-        for t in [
-            TableIndex::Module,
-            TableIndex::TypeDef,
-            TableIndex::CustomDebugInformation,
-        ] {
+        for t in [TableIndex::Module, TableIndex::TypeDef, TableIndex::CustomDebugInformation] {
             assert_eq!(r.row_count(t), 0);
         }
 
@@ -594,11 +549,9 @@ mod tests {
         // max(Field)=20000 >= 1 << (16-2).
         let sig = b.insert_blob(&[1, 2]);
         for _i in 0..20_000u32 {
-            b.add_row(TableIndex::Field, &[0, name as u64, sig as u64])
-                .expect("field row");
+            b.add_row(TableIndex::Field, &[0, name as u64, sig as u64]).expect("field row");
         }
-        b.add_row(TableIndex::Constant, &[0x08, 0, 1u64 << 2, sig as u64])
-            .expect("constant row");
+        b.add_row(TableIndex::Constant, &[0x08, 0, 1u64 << 2, sig as u64]).expect("constant row");
 
         let bytes = b.finalize();
         let r = MetadataReader::parse(&bytes).expect("parses");
@@ -607,10 +560,7 @@ mod tests {
 
         // Spot-check deep rows on both sides of the 0xFFFF boundary.
         assert_eq!(r.column(TableIndex::Param, 1, 2).unwrap(), name as u64);
-        assert_eq!(
-            r.column(TableIndex::Param, 65_538, 2).unwrap(),
-            name as u64
-        );
+        assert_eq!(r.column(TableIndex::Param, 65_538, 2).unwrap(), name as u64);
 
         // Constant's parent coded column must have widened to 4 bytes.
         let t = r.tables();
@@ -647,14 +597,10 @@ mod tests {
     #[test]
     fn pdb_heap_stream_roundtrips() {
         let mut b = MetadataBuilder::new("v4.0.30319");
-        b.add_row(
-            TableIndex::Document,
-            &[0, 1, 0, 2],
-        )
-        .expect("document row");
+        b.add_row(TableIndex::Document, &[0, 1, 0, 2]).expect("document row");
         let id = [
-            0x01u8, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
-            0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14,
+            0x01u8, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+            0x0F, 0x10, 0x11, 0x12, 0x13, 0x14,
         ];
         // Counts intentionally out of order; set_pdb_heap must sort them.
         b.set_pdb_heap(id, Token::new(TableIndex::MethodDef, 7), &[(0x32, 3), (0x30, 1)]);

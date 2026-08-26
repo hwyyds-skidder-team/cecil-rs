@@ -607,12 +607,7 @@ mod tests {
                 _ => op.size as usize + op.operand_type.size().unwrap(),
             };
             let size = instruction_size(*op);
-            assert!(
-                (1..=11).contains(&size),
-                "{} size {} outside 1..=11",
-                op.name,
-                size
-            );
+            assert!((1..=11).contains(&size), "{} size {} outside 1..=11", op.name, size);
             assert_eq!(size, expected, "{}", op.name);
         }
         assert_eq!(instruction_size(NOP), 1);

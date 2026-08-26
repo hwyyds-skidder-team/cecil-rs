@@ -458,11 +458,7 @@ mod tests {
             (12, SecurityAction::PreJitDeny, "PreJitDeny"),
             (13, SecurityAction::NonCasDemand, "NonCasDemand"),
             (14, SecurityAction::NonCasLinkDemand, "NonCasLinkDemand"),
-            (
-                15,
-                SecurityAction::NonCasInheritance,
-                "NonCasInheritance",
-            ),
+            (15, SecurityAction::NonCasInheritance, "NonCasInheritance"),
         ];
         for (code, action, name) in actions {
             assert_eq!(action as u16, code);

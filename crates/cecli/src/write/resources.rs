@@ -60,7 +60,7 @@ pub struct ResourcesBlob {
 
 fn align_up(value: usize, alignment: usize) -> usize {
     debug_assert!(alignment.is_power_of_two());
-    (value + alignment - 1) / alignment * alignment
+    value.div_ceil(alignment) * alignment
 }
 
 /// Builds the managed-resources blob for a module's resources, in arena order.
@@ -90,15 +90,14 @@ pub fn build_resources_blob(resources: &[crate::module_def::Resource]) -> Result
             }
         };
 
-        let len =
-            i32::try_from(data.len()).map_err(|_| {
-                Error::argument(format!(
-                    "embedded resource {:?} is {} bytes; maximum is {}",
-                    resource.name(),
-                    data.len(),
-                    i32::MAX
-                ))
-            })?;
+        let len = i32::try_from(data.len()).map_err(|_| {
+            Error::argument(format!(
+                "embedded resource {:?} is {} bytes; maximum is {}",
+                resource.name(),
+                data.len(),
+                i32::MAX
+            ))
+        })?;
 
         // Start of this entry's i32 length prefix, 8-aligned within the blob.
         let offset = align_up(bytes.len(), RESOURCE_ALIGNMENT);
@@ -139,9 +138,7 @@ pub fn read_embedded_resource(blob: &[u8], offset: usize) -> Result<Vec<u8>> {
     })?;
 
     if rest.len() < 4 {
-        return Err(Error::bad_image(format!(
-            "truncated resource header at offset {offset}"
-        )));
+        return Err(Error::bad_image(format!("truncated resource header at offset {offset}")));
     }
 
     let mut len_bytes = [0u8; 4];
@@ -149,20 +146,16 @@ pub fn read_embedded_resource(blob: &[u8], offset: usize) -> Result<Vec<u8>> {
     let len = i32::from_le_bytes(len_bytes);
 
     if len < 0 {
-        return Err(Error::bad_image(format!(
-            "negative resource length {len} at offset {offset}"
-        )));
+        return Err(Error::bad_image(format!("negative resource length {len} at offset {offset}")));
     }
 
     let len = len as usize;
-    let payload = rest
-        .get(4..4 + len)
-        .ok_or_else(|| {
-            Error::bad_image(format!(
-                "resource at offset {offset} claims {len} bytes but only {} remain",
-                rest.len() - 4
-            ))
-        })?;
+    let payload = rest.get(4..4 + len).ok_or_else(|| {
+        Error::bad_image(format!(
+            "resource at offset {offset} claims {len} bytes but only {} remain",
+            rest.len() - 4
+        ))
+    })?;
 
     Ok(payload.to_vec())
 }
@@ -180,7 +173,7 @@ pub fn validate_dotnet_resources(data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module_def::{Resource as Res};
+    use crate::module_def::Resource as Res;
     use cecli_core::flags::ManifestResourceAttributes;
 
     fn attrs() -> ManifestResourceAttributes {
@@ -195,21 +188,13 @@ mod tests {
         let payload_c: Vec<u8> = (0..300u16).map(|i| (i % 251) as u8).collect();
 
         let resources = vec![
-            Res::Embedded {
-                name: "A".to_string(),
-                attributes: attrs(),
-                data: payload_a.clone(),
-            },
+            Res::Embedded { name: "A".to_string(), attributes: attrs(), data: payload_a.clone() },
             Res::Linked {
                 name: "B".to_string(),
                 attributes: attrs(),
                 file: "data.bin".to_string(),
             },
-            Res::Embedded {
-                name: "C".to_string(),
-                attributes: attrs(),
-                data: payload_c.clone(),
-            },
+            Res::Embedded { name: "C".to_string(), attributes: attrs(), data: payload_c.clone() },
         ];
 
         let blob = build_resources_blob(&resources).expect("blob builds");
@@ -229,7 +214,7 @@ mod tests {
         // alignment gap must have been inserted: everything between the end
         // of A's payload and C's entry start is zero padding.
         let gap_start = blob.offsets[0] + 4 + payload_a.len();
-        assert_eq!(blob.offsets[2], (gap_start + 7) / 8 * 8);
+        assert_eq!(blob.offsets[2], gap_start.div_ceil(8) * 8);
         assert!(blob.bytes[gap_start..blob.offsets[2]].iter().all(|&b| b == 0));
 
         // Walk every entry through our own reader and compare against the
@@ -242,16 +227,18 @@ mod tests {
                         .unwrap_or_else(|e| panic!("read {name} failed: {e}"));
                     assert_eq!(&got, data, "payload mismatch for {name}");
                     // Length prefix matches the declared size.
-                    let prefix = i32::from_le_bytes(
-                        blob.bytes[offset..offset + 4].try_into().unwrap(),
-                    );
+                    let prefix =
+                        i32::from_le_bytes(blob.bytes[offset..offset + 4].try_into().unwrap());
                     assert_eq!(prefix as usize, data.len(), "size mismatch for {name}");
                 }
                 Res::Linked { name, .. } => {
                     assert_eq!(offset, 0, "linked resource {name} must carry placeholder 0");
                 }
                 Res::AssemblyLinked { name, .. } => {
-                    assert_eq!(offset, 0, "assembly-linked resource {name} must carry placeholder 0");
+                    assert_eq!(
+                        offset, 0,
+                        "assembly-linked resource {name} must carry placeholder 0"
+                    );
                 }
             }
         }
@@ -352,21 +339,9 @@ mod tests {
     fn offsets_are_deterministic_across_runs() {
         let mk = || {
             vec![
-                Res::Embedded {
-                    name: "A".into(),
-                    attributes: attrs(),
-                    data: vec![7u8; 13],
-                },
-                Res::Linked {
-                    name: "B".into(),
-                    attributes: attrs(),
-                    file: "f".into(),
-                },
-                Res::Embedded {
-                    name: "C".into(),
-                    attributes: attrs(),
-                    data: vec![9u8; 300],
-                },
+                Res::Embedded { name: "A".into(), attributes: attrs(), data: vec![7u8; 13] },
+                Res::Linked { name: "B".into(), attributes: attrs(), file: "f".into() },
+                Res::Embedded { name: "C".into(), attributes: attrs(), data: vec![9u8; 300] },
             ]
         };
         let a = build_resources_blob(&mk()).unwrap();

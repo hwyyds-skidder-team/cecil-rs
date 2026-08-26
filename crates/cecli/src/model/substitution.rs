@@ -32,7 +32,9 @@ pub fn substitute(
         TypeDesc::MVar(pos) => map_m(*pos).unwrap_or_else(|| ty.clone()),
 
         // Composite nodes: recurse structurally.
-        TypeDesc::SzArray(element) => TypeDesc::SzArray(Box::new(substitute(element, map_v, map_m))),
+        TypeDesc::SzArray(element) => {
+            TypeDesc::SzArray(Box::new(substitute(element, map_v, map_m)))
+        }
         TypeDesc::Array { element, sizes, lobounds } => TypeDesc::Array {
             element: Box::new(substitute(element, map_v, map_m)),
             sizes: sizes.clone(),
@@ -42,10 +44,7 @@ pub fn substitute(
         TypeDesc::ByRef(element) => TypeDesc::ByRef(Box::new(substitute(element, map_v, map_m))),
         TypeDesc::Pinned(element) => TypeDesc::Pinned(Box::new(substitute(element, map_v, map_m))),
         TypeDesc::GenericInstance { definition, arguments } => {
-            let arguments = arguments
-                .iter()
-                .map(|arg| substitute(arg, map_v, map_m))
-                .collect();
+            let arguments = arguments.iter().map(|arg| substitute(arg, map_v, map_m)).collect();
             TypeDesc::GenericInstance {
                 definition: Box::new(substitute(definition, map_v, map_m)),
                 arguments,
@@ -77,11 +76,7 @@ pub fn substitute_signature(
     map_m: &mut dyn Fn(u16) -> Option<TypeDesc>,
 ) -> MethodSignature {
     MethodSignature {
-        parameters: sig
-            .parameters
-            .iter()
-            .map(|p| substitute(p, map_v, map_m))
-            .collect(),
+        parameters: sig.parameters.iter().map(|p| substitute(p, map_v, map_m)).collect(),
         return_type: substitute(&sig.return_type, map_v, map_m),
         ..sig.clone()
     }
@@ -198,10 +193,7 @@ mod tests {
         match out {
             TypeDesc::FnPtr(sig) => {
                 assert_eq!(sig.parameters.len(), 2);
-                assert_eq!(
-                    sig.parameters[0],
-                    TypeDesc::SzArray(Box::new(ext("System", "Byte")))
-                );
+                assert_eq!(sig.parameters[0], TypeDesc::SzArray(Box::new(ext("System", "Byte"))));
                 assert_eq!(sig.parameters[1], ext("System", "Int64"));
                 assert_eq!(sig.return_type, ext("System", "Void"));
                 assert_eq!(sig.vararg_start, 2);
@@ -281,11 +273,7 @@ mod tests {
                 ..GenericParameter::default()
             })
             .collect();
-        let args = vec![
-            ext("System", "Int32"),
-            ext("System", "String"),
-            ext("System", "Boolean"),
-        ];
+        let args = vec![ext("System", "Int32"), ext("System", "String"), ext("System", "Boolean")];
 
         let ctx = build_generic_context(&defs, &args);
         assert_eq!(ctx(0), Some(ext("System", "Int32")));
@@ -336,10 +324,13 @@ mod tests {
             explicit_this: false,
             convention: SignatureCallingConvention::Default,
             generic_count: 1,
-            parameters: vec![TypeDesc::Var(0), TypeDesc::GenericInstance {
-                definition: Box::new(ext("System.Collections.Generic", "List`1")),
-                arguments: vec![TypeDesc::Var(0)],
-            }],
+            parameters: vec![
+                TypeDesc::Var(0),
+                TypeDesc::GenericInstance {
+                    definition: Box::new(ext("System.Collections.Generic", "List`1")),
+                    arguments: vec![TypeDesc::Var(0)],
+                },
+            ],
             return_type: TypeDesc::Var(0),
             vararg_start: 2,
         };

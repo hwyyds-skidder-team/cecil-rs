@@ -63,22 +63,14 @@ pub struct Instruction {
 impl Instruction {
     /// Creates an instruction at `offset`.
     pub fn new(offset: i32, opcode: OpCode, operand: Operand) -> Self {
-        Instruction {
-            offset,
-            opcode,
-            operand,
-        }
+        Instruction { offset, opcode, operand }
     }
 
     /// Creates a zero-operand instruction at `offset`; panics in debug builds
     /// if the opcode expects an operand.
     pub fn none(offset: i32, opcode: OpCode) -> Self {
         debug_assert_eq!(opcode.operand_type, OperandType::InlineNone);
-        Instruction {
-            offset,
-            opcode,
-            operand: Operand::None,
-        }
+        Instruction { offset, opcode, operand: Operand::None }
     }
 
     /// Full encoded length of this instruction in bytes, including the

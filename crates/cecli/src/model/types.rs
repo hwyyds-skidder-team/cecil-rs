@@ -185,9 +185,17 @@ impl AssemblyNameReference {
 
     /// Full name like `System.Runtime, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a`.
     pub fn full_name(&self) -> String {
-        let mut s = format!("{}, Version={}, Culture={}", self.name, self.version, self.culture.as_deref().unwrap_or("neutral"));
+        let mut s = format!(
+            "{}, Version={}, Culture={}",
+            self.name,
+            self.version,
+            self.culture.as_deref().unwrap_or("neutral")
+        );
         if !self.public_key_or_token.is_empty() {
-            s.push_str(&format!(", PublicKeyToken={}", hex_upper_or_empty(&self.public_key_or_token)));
+            s.push_str(&format!(
+                ", PublicKeyToken={}",
+                hex_upper_or_empty(&self.public_key_or_token)
+            ));
         } else {
             s.push_str(", PublicKeyToken=null");
         }
@@ -492,7 +500,11 @@ impl Default for PropertyDefinition {
         PropertyDefinition {
             name: String::new(),
             attributes: PropertyAttributes::empty(),
-            signature: PropertySignature { has_this: false, parameters: Vec::new(), property_type: TypeDesc::Sentinel },
+            signature: PropertySignature {
+                has_this: false,
+                parameters: Vec::new(),
+                property_type: TypeDesc::Sentinel,
+            },
             get_method: None,
             set_method: None,
             other_methods: Vec::new(),

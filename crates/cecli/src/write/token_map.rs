@@ -246,11 +246,7 @@ impl<'b> TokenMap<'b> {
         self.register_row(idx, |s| &mut s.generic_param_rows)
     }
 
-    fn register_row(
-        &mut self,
-        idx: usize,
-        pick: impl FnOnce(&mut State) -> &mut Vec<u32>,
-    ) -> u32 {
+    fn register_row(&mut self, idx: usize, pick: impl FnOnce(&mut State) -> &mut Vec<u32>) -> u32 {
         let rid = idx + 1;
         let mut guard = self.state.borrow_mut();
         let rows = pick(&mut guard);
@@ -262,10 +258,7 @@ impl<'b> TokenMap<'b> {
     }
 
     fn rid_of(rows: &[u32], idx: u32) -> u32 {
-        rows.get(idx as usize)
-            .copied()
-            .filter(|r| *r != 0)
-            .unwrap_or(idx + 1) // arena order == table row order fallback
+        rows.get(idx as usize).copied().filter(|r| *r != 0).unwrap_or(idx + 1) // arena order == table row order fallback
     }
 
     // -- type cells --------------------------------------------------------
@@ -287,7 +280,7 @@ impl<'b> TokenMap<'b> {
     /// `box !0`, `sizeof int[]`, catch-clause types, ...).
     pub fn tdor_cell(&self, ty: &TypeDesc, m: &Module) -> Result<u32> {
         match ty {
-            TypeDesc::Def(id) => Ok((Self::rid_of(&self.state.borrow().type_rows, id.0) << 2) | 0),
+            TypeDesc::Def(id) => Ok(Self::rid_of(&self.state.borrow().type_rows, id.0) << 2),
             TypeDesc::External(_) => Ok((self.intern_external(ty, m)? << 2) | 1),
             ty => Ok((self.intern_type_spec(ty, m)? << 2) | 2),
         }
@@ -511,9 +504,9 @@ impl<'b> TokenMap<'b> {
             TypeDesc::Def(id) => Ok(def_is_value_type(m, *id)),
             TypeDesc::External(e) => Ok(external_is_value_type(e)),
             TypeDesc::GenericInstance { definition, .. } => self.is_value_type(definition, m),
-            _ => Err(Error::argument(format!(
-                "type shape {ty:?} carries no CLASS/VALUETYPE marker"
-            ))),
+            _ => {
+                Err(Error::argument(format!("type shape {ty:?} carries no CLASS/VALUETYPE marker")))
+            }
         }
     }
 
@@ -564,11 +557,7 @@ impl<'b> TokenMap<'b> {
             })
             .collect();
 
-        let standalone_sigs = st
-            .ssigs
-            .iter()
-            .map(|blob| self.builder.insert_blob(blob))
-            .collect();
+        let standalone_sigs = st.ssigs.iter().map(|blob| self.builder.insert_blob(blob)).collect();
 
         (
             self.builder,
@@ -635,7 +624,7 @@ impl<'m, 'x, 't> SigContext for SigBridge<'m, 'x, 't> {
 /// Encodes a `ResolutionScope` cell for a top-level external type.
 fn scope_cell(scope: &ScopeRef, m: &Module) -> Result<u32> {
     match scope {
-        ScopeRef::ThisModule => Ok((1 << 2) | 0), // Module row 1
+        ScopeRef::ThisModule => Ok(1 << 2), // Module row 1
         ScopeRef::OtherModule(name) => {
             let pos = m.module_refs.iter().position(|s| s == name).ok_or_else(|| {
                 Error::argument(format!("module ref `{name}` missing from module.module_refs"))
@@ -643,22 +632,17 @@ fn scope_cell(scope: &ScopeRef, m: &Module) -> Result<u32> {
             Ok((((pos + 1) as u32) << 2) | 1)
         }
         ScopeRef::Assembly(anr) => {
-            let pos = m
-                .assembly_refs
-                .iter()
-                .position(|a| a == anr)
-                .ok_or_else(|| {
-                    Error::argument(format!(
-                        "assembly ref `{}` missing from module.assembly_refs",
-                        anr.name
-                    ))
-                })?;
+            let pos = m.assembly_refs.iter().position(|a| a == anr).ok_or_else(|| {
+                Error::argument(format!(
+                    "assembly ref `{}` missing from module.assembly_refs",
+                    anr.name
+                ))
+            })?;
             Ok((((pos + 1) as u32) << 2) | 2)
         }
         ScopeRef::Moduleless => Ok(0), // nil scope
     }
 }
-
 
 impl TokenMap<'_> {
     /// Encodes a `MemberRefParent` cell for any supported parent shape:
@@ -668,18 +652,12 @@ impl TokenMap<'_> {
         // MEMBER_REF_PARENT spans five tables => three tag bits.
         let shift = coded::MEMBER_REF_PARENT.shift_bits();
         match ty {
-            TypeDesc::Def(id) => Ok(
-                (Self::rid_of(&self.state.borrow().type_rows, id.0) << shift) | 0,
-            ),
-            TypeDesc::External(_) => {
-                Ok((self.intern_external(ty, m)? << shift) | 1)
-            }
+            TypeDesc::Def(id) => Ok(Self::rid_of(&self.state.borrow().type_rows, id.0) << shift),
+            TypeDesc::External(_) => Ok((self.intern_external(ty, m)? << shift) | 1),
             TypeDesc::GenericInstance { .. } => {
                 Ok((self.intern_type_spec(ty, m)? << shift) | 4) // TypeSpec tag
             }
-            _ => Err(Error::argument(format!(
-                "unsupported MemberRefParent shape {ty:?}"
-            ))),
+            _ => Err(Error::argument(format!("unsupported MemberRefParent shape {ty:?}"))),
         }
     }
 }
@@ -756,7 +734,9 @@ fn external_is_value_type(et: &ExternalType) -> bool {
 mod tests {
     use super::*;
     use crate::model::signature::parse_field_signature;
-    use crate::model::types::{AssemblyNameReference, ExternalMethod, FieldSignature, MethodSignature, Version};
+    use crate::model::types::{
+        AssemblyNameReference, ExternalMethod, FieldSignature, MethodSignature, Version,
+    };
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -784,10 +764,7 @@ mod tests {
     }
 
     fn assembly_ref() -> AssemblyNameReference {
-        AssemblyNameReference {
-            version: ver(4, 0, 0, 0),
-            ..AssemblyNameReference::new("mscorlib")
-        }
+        AssemblyNameReference { version: ver(4, 0, 0, 0), ..AssemblyNameReference::new("mscorlib") }
     }
 
     #[test]
@@ -911,11 +888,7 @@ mod tests {
         };
 
         // Encode a field signature: 0x06 + List`1<Int32> + Foo.
-        let ctx = RoundtripCtx {
-            tm: &tm,
-            m: &m,
-            seen: RefCell::new(HashMap::new()),
-        };
+        let ctx = RoundtripCtx { tm: &tm, m: &m, seen: RefCell::new(HashMap::new()) };
         // Pre-record every named ref so parse-time lookups cover each cell
         // appearing in the blobs (this order fixes the rid assignment).
         let _ = ctx.record(false, 0, &list);
@@ -952,9 +925,9 @@ mod tests {
         let id = TypeId(7);
         let ty = TypeDesc::Def(id);
         // Fallback (unregistered): arena order == table row order.
-        assert_eq!(tm.tdor_cell(&ty, &m).unwrap(), (8 << 2) | 0);
+        assert_eq!(tm.tdor_cell(&ty, &m).unwrap(), (8 << 2));
         assert_eq!(tm.register_type_row(7), 8);
-        assert_eq!(tm.tdor_cell(&ty, &m).unwrap(), (8 << 2) | 0);
+        assert_eq!(tm.tdor_cell(&ty, &m).unwrap(), (8 << 2));
     }
 
     #[test]
@@ -1020,9 +993,7 @@ mod tests {
         assert_eq!(t1.table(), TableIndex::MemberRef);
 
         assert_eq!(tm.register_field_row(0), 1);
-        let d = tm
-            .field_ref(&FieldRef::Def(crate::model::types::FieldId(0)), &m)
-            .unwrap();
+        let d = tm.field_ref(&FieldRef::Def(crate::model::types::FieldId(0)), &m).unwrap();
         assert_eq!(d.table(), TableIndex::Field);
 
         let (_, pending) = tm.into_parts();

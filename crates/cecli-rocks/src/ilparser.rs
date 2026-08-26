@@ -19,9 +19,9 @@
 //! on malformed input.
 
 use cecli::model::types::{
-    ExceptionHandlerIL, ExceptionKind, ResolvedBody, RInstruction, ROperand,
+    ExceptionHandlerIL, ExceptionKind, RInstruction, ROperand, ResolvedBody,
 };
-use cecli_cil::opcode::{OperandType, OpCode};
+use cecli_cil::opcode::{OpCode, OperandType};
 use cecli_core::{Error, Result};
 
 /// Encoded size in bytes of one decoded instruction (opcode bytes plus
@@ -42,10 +42,7 @@ pub fn encoded_size(ins: &RInstruction) -> i32 {
 /// Total code size in bytes implied by the instruction list: end offset of
 /// the last instruction (`0` for an empty body).
 pub fn code_size(body: &ResolvedBody) -> i32 {
-    body.instructions
-        .last()
-        .map(|ins| ins.offset + encoded_size(ins))
-        .unwrap_or(0)
+    body.instructions.last().map(|ins| ins.offset + encoded_size(ins)).unwrap_or(0)
 }
 
 /// True when `operand` has exactly the shape demanded by `opcode.operand_type`.
@@ -152,10 +149,7 @@ pub fn validate_body_for(body: &ResolvedBody, param_count: usize) -> Result<()> 
         match &ins.operand {
             ROperand::Branch(target) => {
                 if !(0..=end).contains(target) {
-                    return Err(invalid(
-                        idx,
-                        format!("branch target {target} outside [0, {end}]"),
-                    ));
+                    return Err(invalid(idx, format!("branch target {target} outside [0, {end}]")));
                 }
             }
             ROperand::Switch(targets) => {
@@ -217,13 +211,13 @@ fn validate_clause(clause: &ExceptionHandlerIL, end: i32) -> Result<()> {
         Ok(())
     };
     check_range("try", clause.try_offset, clause.try_length)?;
-    if clause.kind == ExceptionKind::Filter {
-        if clause.filter_offset < 0 || clause.filter_offset > end {
-            return Err(Error::invalid_op(format!(
-                "filter offset {} outside [0, {end}]",
-                clause.filter_offset
-            )));
-        }
+    if clause.kind == ExceptionKind::Filter
+        && (clause.filter_offset < 0 || clause.filter_offset > end)
+    {
+        return Err(Error::invalid_op(format!(
+            "filter offset {} outside [0, {end}]",
+            clause.filter_offset
+        )));
     }
     check_range("handler", clause.handler_offset, clause.handler_length)?;
     Ok(())
@@ -255,9 +249,7 @@ pub fn collect_branch_targets(body: &ResolvedBody) -> Vec<i32> {
 /// Returns the index of the instruction starting exactly at `offset`
 /// (binary search; bodies keep instructions ordered by offset).
 pub fn find_by_offset(body: &ResolvedBody, offset: i32) -> Option<usize> {
-    body.instructions
-        .binary_search_by(|ins| ins.offset.cmp(&offset))
-        .ok()
+    body.instructions.binary_search_by(|ins| ins.offset.cmp(&offset)).ok()
 }
 
 #[cfg(test)]
@@ -291,11 +283,7 @@ mod tests {
                 ins(6, opcodes::RET, ROperand::None),
                 // switch with two arms, encoded at offset 7:
                 // 1 byte opcode + 4 byte count + 2*4 targets = 13 bytes.
-                ins(
-                    7,
-                    opcodes::SWITCH,
-                    ROperand::Switch(vec![20, 12]),
-                ),
+                ins(7, opcodes::SWITCH, ROperand::Switch(vec![20, 12])),
                 ins(20, opcodes::LDLOC_0, ROperand::None),
                 ins(21, opcodes::RET, ROperand::None),
             ],
@@ -425,10 +413,7 @@ mod tests {
         let body = ok_body();
         let mut seen = Vec::new();
         visit(&body, &mut |idx, i| seen.push((idx, i.offset)));
-        assert_eq!(
-            seen,
-            vec![(0, 0), (1, 1), (2, 3), (3, 4), (4, 6), (5, 7), (6, 20), (7, 21)]
-        );
+        assert_eq!(seen, vec![(0, 0), (1, 1), (2, 3), (3, 4), (4, 6), (5, 7), (6, 20), (7, 21)]);
     }
 
     #[test]

@@ -32,11 +32,7 @@ fn every_fixture_roundtrips_with_stable_counts() {
         return;
     };
     let files = roundtrip_fixtures(&dir);
-    assert!(
-        !files.is_empty(),
-        "no *.exe|dll|netmodule fixtures found in {}",
-        dir.display()
-    );
+    assert!(!files.is_empty(), "no *.exe|dll|netmodule fixtures found in {}", dir.display());
 
     let out_dir = temp_output_dir("roundtrip");
     let mut attribute_names: BTreeSet<String> = BTreeSet::new();
@@ -53,36 +49,22 @@ fn every_fixture_roundtrips_with_stable_counts() {
         attribute_names.extend(collect_attribute_type_names(asm.main_module()));
 
         let out_path = out_dir.join(&label);
-        asm.write_file(&out_path)
-            .unwrap_or_else(|e| panic!("{label}: write failed: {e:?}"));
+        asm.write_file(&out_path).unwrap_or_else(|e| panic!("{label}: write failed: {e:?}"));
 
         let reparsed = AssemblyDefinition::read_file(&out_path)
             .unwrap_or_else(|e| panic!("{label}: re-parse of written image failed: {e:?}"));
         let after = Counts::snapshot(reparsed.main_module());
+        assert_eq!(before, after, "{label}: member counts changed across write -> re-parse");
+        assert_eq!(asm.main.kind, reparsed.main.kind, "{label}: module kind changed");
         assert_eq!(
-            before, after,
-            "{label}: member counts changed across write -> re-parse"
-        );
-        assert_eq!(
-            asm.main.kind,
-            reparsed.main.kind,
-            "{label}: module kind changed"
-        );
-        assert_eq!(
-            asm.main.architecture,
-            reparsed.main.architecture,
+            asm.main.architecture, reparsed.main.architecture,
             "{label}: PE architecture changed"
         );
         assert_eq!(
-            asm.main.entry_point_token,
-            reparsed.main.entry_point_token,
+            asm.main.entry_point_token, reparsed.main.entry_point_token,
             "{label}: entry point token changed"
         );
-        assert_eq!(
-            asm.entry_point,
-            reparsed.entry_point,
-            "{label}: resolved entry point changed"
-        );
+        assert_eq!(asm.entry_point, reparsed.entry_point, "{label}: resolved entry point changed");
     }
 
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -113,17 +95,10 @@ fn hello_entry_point_body_decodes() {
 
     let asm = AssemblyDefinition::read_file(&path)
         .unwrap_or_else(|e| panic!("hello.exe: parse failed: {e:?}"));
-    let entry = asm
-        .entry_point_method()
-        .expect("hello.exe: CLI entry token resolves to a MethodDef");
-    let body = entry
-        .body
-        .as_ref()
-        .expect("hello.exe: entry point has an IL body");
-    assert!(
-        !body.instructions.is_empty(),
-        "hello.exe: entry point decoded zero instructions"
-    );
+    let entry =
+        asm.entry_point_method().expect("hello.exe: CLI entry token resolves to a MethodDef");
+    let body = entry.body.as_ref().expect("hello.exe: entry point has an IL body");
+    assert!(!body.instructions.is_empty(), "hello.exe: entry point decoded zero instructions");
 }
 
 /// `xattr.dll` assembly-level custom attributes surface through
@@ -180,10 +155,7 @@ fn varargs_and_fptr_parse() {
         }
         let asm = AssemblyDefinition::read_file(&path)
             .unwrap_or_else(|e| panic!("{name}: parse failed: {e:?}"));
-        assert!(
-            !asm.main.types.is_empty(),
-            "{name}: parsed but no types decoded"
-        );
+        assert!(!asm.main.types.is_empty(), "{name}: parsed but no types decoded");
     }
 }
 
@@ -234,25 +206,13 @@ fn line_symbols_attach() {
         return;
     }
 
-    let params = cecli::resolver::ReaderParameters {
-        read_symbols: true,
-        ..Default::default()
-    };
+    let params = cecli::resolver::ReaderParameters { read_symbols: true, ..Default::default() };
     let asm = AssemblyDefinition::read_file_with(&exe, &params)
         .unwrap_or_else(|e| panic!("line.exe: parse with symbols failed: {e:?}"));
-    let debug = asm
-        .main
-        .debug
-        .as_ref()
-        .expect("line.exe: symbols not attached despite same-stem .pdb");
-    assert!(
-        !debug.documents.is_empty(),
-        "line.exe: no documents attached from portable pdb"
-    );
-    assert!(
-        !debug.points.is_empty(),
-        "line.exe: no sequence points attached from portable pdb"
-    );
+    let debug =
+        asm.main.debug.as_ref().expect("line.exe: symbols not attached despite same-stem .pdb");
+    assert!(!debug.documents.is_empty(), "line.exe: no documents attached from portable pdb");
+    assert!(!debug.points.is_empty(), "line.exe: no sequence points attached from portable pdb");
 }
 
 /// `simplemdb.exe.mdb` opens through the Mono MDB reader and yields at least
@@ -269,10 +229,6 @@ fn simplemdb_mdb_opens() {
     }
     let bytes = std::fs::read(&mdb_path)
         .unwrap_or_else(|e| panic!("simplemdb.exe.mdb: read failed: {e:?}"));
-    let mdb =
-        cecli_mdb::reader::MdbReader::open(&bytes).expect("simplemdb.exe.mdb: open failed");
-    assert!(
-        !mdb.methods().is_empty(),
-        "simplemdb.exe.mdb: opened but contains no method entries"
-    );
+    let mdb = cecli_mdb::reader::MdbReader::open(&bytes).expect("simplemdb.exe.mdb: open failed");
+    assert!(!mdb.methods().is_empty(), "simplemdb.exe.mdb: opened but contains no method entries");
 }

@@ -19,10 +19,12 @@ pub mod tables;
 pub use builder::MetadataBuilder;
 pub use heaps::{BlobHeap, GuidHeap, Heaps, PdbHeap, StringHeap, UserStringHeap};
 pub use reader::MetadataReader;
-pub use root::{parse_root, stream_slice, write_root, RootHeader, StreamHeader, METADATA_SIGNATURE};
+pub use root::{
+    parse_root, stream_slice, write_root, RootHeader, StreamHeader, METADATA_SIGNATURE,
+};
 pub use tables::{
-    column_kinds, decode_coded, encode_coded, ColumnDesc, ColumnKind, TableSet, SORTED_MASK_DEFAULT,
-    TABLE_COUNT,
+    column_kinds, decode_coded, encode_coded, ColumnDesc, ColumnKind, TableSet,
+    SORTED_MASK_DEFAULT, TABLE_COUNT,
 };
 
 #[cfg(test)]
@@ -47,10 +49,7 @@ mod smoke_tests {
         assert_eq!(r.version_string(), "v4.0.30319");
         assert_eq!(r.row_count(TableIndex::Module), 1);
         assert_eq!(r.column(TableIndex::Module, 1, 1).unwrap(), name as u64);
-        assert_eq!(
-            r.heaps().strings.get(name).unwrap(),
-            "tiny.exe"
-        );
+        assert_eq!(r.heaps().strings.get(name).unwrap(), "tiny.exe");
         assert_eq!(r.heaps().guid.get(mvid).unwrap(), [7u8; 16]);
     }
 }

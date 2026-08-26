@@ -9,8 +9,8 @@
 
 use cecli::model::security::{decode_security_xml, encode_security_xml};
 use cecli::model::types::{
-    ExternalType, FieldId, MethodDefinition, MethodId, MethodSignature, Parameter,
-    RInstruction, ScopeRef, SecurityDeclaration, TypeDesc, TypeId,
+    ExternalType, MethodDefinition, MethodId, MethodSignature, Parameter, RInstruction, ScopeRef,
+    SecurityDeclaration, TypeDesc, TypeId,
 };
 use cecli::module_def::Module;
 use cecli_core::flags::{FieldAttributes, MethodAttributes, SecurityAction};
@@ -132,17 +132,12 @@ pub trait TypeDefinitionRocks {
 
     /// Builds a `GENERICINST` over this type. Fails unless `args.len()`
     /// matches the declared generic-parameter count.
-    fn make_generic_instance(
-        &self,
-        m: &Module,
-        args: Vec<TypeDesc>,
-    ) -> Result<TypeDesc>;
+    fn make_generic_instance(&self, m: &Module, args: Vec<TypeDesc>) -> Result<TypeDesc>;
 }
 
 fn is_constructor(md: &MethodDefinition) -> bool {
-    md.attributes.contains(
-        MethodAttributes::SPECIAL_NAME | MethodAttributes::RTSPECIAL_NAME,
-    ) && (md.name == ".ctor" || md.name == ".cctor")
+    md.attributes.contains(MethodAttributes::SPECIAL_NAME | MethodAttributes::RTSPECIAL_NAME)
+        && (md.name == ".ctor" || md.name == ".cctor")
 }
 
 impl TypeDefinitionRocks for TypeId {
@@ -178,11 +173,9 @@ impl TypeDefinitionRocks for TypeId {
     }
 
     fn get_static_constructor(&self, m: &Module) -> Option<MethodId> {
-        self.get_constructors(m).into_iter().find(|mid| {
-            m.methods[mid.index()]
-                .attributes
-                .contains(MethodAttributes::STATIC)
-        })
+        self.get_constructors(m)
+            .into_iter()
+            .find(|mid| m.methods[mid.index()].attributes.contains(MethodAttributes::STATIC))
     }
 
     fn get_default_constructor(&self, m: &Module) -> Option<MethodId> {
@@ -259,14 +252,10 @@ pub trait MethodDefinitionRocks {
 
 fn find_matching_method(m: &Module, ty: TypeId, needle: &MethodDefinition) -> Option<MethodId> {
     // MetadataResolver.GetMethod compares name plus full signature.
-    m.types[ty.index()]
-        .methods
-        .iter()
-        .copied()
-        .find(|mid| {
-            let cand = &m.methods[mid.index()];
-            cand.name == needle.name && cand.signature == needle.signature
-        })
+    m.types[ty.index()].methods.iter().copied().find(|mid| {
+        let cand = &m.methods[mid.index()];
+        cand.name == needle.name && cand.signature == needle.signature
+    })
 }
 
 impl MethodDefinitionRocks for MethodId {
@@ -278,10 +267,7 @@ impl MethodDefinitionRocks for MethodId {
     }
 
     fn get_parameter(&self, m: &Module, name: &str) -> Option<usize> {
-        m.methods[self.index()]
-            .parameters
-            .iter()
-            .position(|p| p.name == name)
+        m.methods[self.index()].parameters.iter().position(|p| p.name == name)
     }
 
     fn get_base_method(&self, m: &Module) -> MethodId {
@@ -374,10 +360,7 @@ pub trait TypeReferenceRocks {
 
 fn def_full_name(id: TypeId, m: &Module) -> String {
     let mut chain = vec![id];
-    while let Some(parent) = chain
-        .last()
-        .and_then(|cur| m.types[cur.index()].declaring_type)
-    {
+    while let Some(parent) = chain.last().and_then(|cur| m.types[cur.index()].declaring_type) {
         chain.push(parent);
     }
     chain.reverse();
@@ -387,10 +370,7 @@ fn def_full_name(id: TypeId, m: &Module) -> String {
         s.push_str(outer_ns);
         s.push('.');
     }
-    let names: Vec<&str> = chain
-        .iter()
-        .map(|cur| m.types[cur.index()].name.as_str())
-        .collect();
+    let names: Vec<&str> = chain.iter().map(|cur| m.types[cur.index()].name.as_str()).collect();
     s.push_str(&names.join("/"));
     s
 }
@@ -440,22 +420,13 @@ fn full_name(ty: &TypeDesc, m: &Module) -> String {
         TypeDesc::Def(id) => def_full_name(*id, m),
         TypeDesc::External(ext) => external_full_name(ext, m),
         TypeDesc::SzArray(element) => format!("{}[]", full_name(element, m)),
-        TypeDesc::Array {
-            element,
-            sizes,
-            lobounds,
-        } => {
+        TypeDesc::Array { element, sizes, lobounds } => {
             let rank = sizes.len().max(lobounds.len());
             let inner = if rank == 0 {
                 String::new()
             } else {
                 (0..rank)
-                    .map(|i| {
-                        lobounds
-                            .get(i)
-                            .map(|lo| format!("{lo}.."))
-                            .unwrap_or_default()
-                    })
+                    .map(|i| lobounds.get(i).map(|lo| format!("{lo}..")).unwrap_or_default())
                     .collect::<Vec<_>>()
                     .join(",")
             };
@@ -464,21 +435,14 @@ fn full_name(ty: &TypeDesc, m: &Module) -> String {
         TypeDesc::Ptr(element) => format!("{}*", full_name(element, m)),
         TypeDesc::ByRef(element) => format!("{}&", full_name(element, m)),
         TypeDesc::Pinned(element) => format!("{} pinned", full_name(element, m)),
-        TypeDesc::GenericInstance {
-            definition,
-            arguments,
-        } => {
+        TypeDesc::GenericInstance { definition, arguments } => {
             let args: Vec<String> = arguments.iter().map(|a| full_name(a, m)).collect();
             format!("{}[{}]", full_name(definition, m), args.join(","))
         }
         TypeDesc::Var(n) => format!("!{n}"),
         TypeDesc::MVar(n) => format!("!!{n}"),
         TypeDesc::FnPtr(sig) => signature_full_name(sig, m),
-        TypeDesc::CMod {
-            required,
-            modifier,
-            unmodified,
-        } => format!(
+        TypeDesc::CMod { required, modifier, unmodified } => format!(
             "{} {}({})",
             full_name(unmodified, m),
             if *required { "modreq" } else { "modopt" },
@@ -494,10 +458,9 @@ impl TypeReferenceRocks for TypeDesc {
     fn resolve_in(&self, m: &Module) -> Option<TypeId> {
         match self {
             TypeDesc::Def(id) => Some(*id),
-            TypeDesc::SzArray(e)
-            | TypeDesc::Ptr(e)
-            | TypeDesc::ByRef(e)
-            | TypeDesc::Pinned(e) => e.resolve_in(m),
+            TypeDesc::SzArray(e) | TypeDesc::Ptr(e) | TypeDesc::ByRef(e) | TypeDesc::Pinned(e) => {
+                e.resolve_in(m)
+            }
             TypeDesc::Array { element, .. } => element.resolve_in(m),
             TypeDesc::GenericInstance { definition, .. } => definition.resolve_in(m),
             TypeDesc::CMod { unmodified, .. } => unmodified.resolve_in(m),
@@ -558,10 +521,7 @@ impl TypeReferenceRocks for TypeDesc {
         if args.is_empty() {
             return Err(Error::argument("generic instantiation needs arguments"));
         }
-        Ok(TypeDesc::GenericInstance {
-            definition: Box::new(self.clone()),
-            arguments: args,
-        })
+        Ok(TypeDesc::GenericInstance { definition: Box::new(self.clone()), arguments: args })
     }
 
     fn make_sentinel_type(&self) -> TypeDesc {
@@ -596,7 +556,7 @@ impl ParameterReferenceRocks for Parameter {
 
 // ---------------------------------------------------------------------------
 // SecurityDeclarationRocks
-// ---------------------------------------------------------------------------
+// (no type imports needed here)
 
 /// Port of `SecurityDeclarationRocks.cs`, re-based on the XML codec in
 /// `cecli::model::security` (the BCL `PermissionSetAttribute` machinery the C#
@@ -625,10 +585,7 @@ impl SecurityDeclarationRocks for SecurityDeclaration {
     }
 
     fn from_xml_with_action(xml: &str, action: SecurityAction) -> Result<SecurityDeclaration> {
-        Ok(SecurityDeclaration {
-            action,
-            blob: encode_security_xml(xml)?,
-        })
+        Ok(SecurityDeclaration { action, blob: encode_security_xml(xml)? })
     }
 }
 
@@ -639,10 +596,10 @@ impl SecurityDeclarationRocks for SecurityDeclaration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cecli_cil::opcodes;
     use cecli::model::types::{
-        GenericOwner, GenericParamId, GenericParameter, TypeDefinition,
+        FieldId, GenericOwner, GenericParamId, GenericParameter, TypeDefinition,
     };
+    use cecli_cil::opcodes;
     use cecli_core::flags::TypeAttributes;
 
     fn add_type(m: &mut Module, td: TypeDefinition) -> TypeId {
@@ -666,11 +623,7 @@ mod tests {
     }
 
     fn method(name: &str, attrs: MethodAttributes) -> MethodDefinition {
-        MethodDefinition {
-            name: name.to_string(),
-            attributes: attrs,
-            ..Default::default()
-        }
+        MethodDefinition { name: name.to_string(), attributes: attrs, ..Default::default() }
     }
 
     /// Synthetic module layout:
@@ -706,24 +659,12 @@ mod tests {
                 owner: GenericOwner::Type(func),
                 ..Default::default()
             });
-            let gid =
-                GenericParamId((m.generic_parameters.len() - 1) as u32);
+            let gid = GenericParamId((m.generic_parameters.len() - 1) as u32);
             m.types[func.index()].generic_parameters.push(gid);
         }
-        let deeper = add_type(
-            &mut m,
-            TypeDefinition {
-                name: "Deeper".into(),
-                ..Default::default()
-            },
-        );
-        let inner = add_type(
-            &mut m,
-            TypeDefinition {
-                name: "Inner".into(),
-                ..Default::default()
-            },
-        );
+        let deeper =
+            add_type(&mut m, TypeDefinition { name: "Deeper".into(), ..Default::default() });
+        let inner = add_type(&mut m, TypeDefinition { name: "Inner".into(), ..Default::default() });
         let outer = add_type(
             &mut m,
             TypeDefinition {
@@ -775,11 +716,8 @@ mod tests {
             ],
             ..Default::default()
         });
-        do_work.parameters = vec![Parameter {
-            name: "amount".into(),
-            sequence: 1,
-            ..Default::default()
-        }];
+        do_work.parameters =
+            vec![Parameter { name: "amount".into(), sequence: 1, ..Default::default() }];
         let dowork_id = add_method(&mut m, do_work);
         attach(&mut m, widget, dowork_id);
 
@@ -820,10 +758,7 @@ mod tests {
     fn get_all_types_yields_declaring_type_before_nested() {
         let m = sample_module();
         let ids = m.get_all_types();
-        let names: Vec<&str> = ids
-            .iter()
-            .map(|id| m.types[id.index()].name.as_str())
-            .collect();
+        let names: Vec<&str> = ids.iter().map(|id| m.types[id.index()].name.as_str()).collect();
         // Cecil pre-order DFS: each declaring type precedes its nested
         // descendants; top-level roots follow arena order.
         assert_eq!(names, vec!["Widget", "Func`2", "Outer", "Inner", "Deeper"]);
@@ -832,15 +767,9 @@ mod tests {
     #[test]
     fn get_type_with_generics_matches_namespace_name_and_arity() {
         let m = sample_module();
-        assert_eq!(
-            m.get_type_with_generics("System", "Func", 2),
-            Some(TypeId(1))
-        );
+        assert_eq!(m.get_type_with_generics("System", "Func", 2), Some(TypeId(1)));
         // Backtick spelling works too.
-        assert_eq!(
-            m.get_type_with_generics("System", "Func`2", 2),
-            Some(TypeId(1))
-        );
+        assert_eq!(m.get_type_with_generics("System", "Func`2", 2), Some(TypeId(1)));
         assert_eq!(m.get_type_with_generics("System", "Func", 1), None);
         assert_eq!(m.get_type_with_generics("System", "Widget", 2), None);
         assert_eq!(m.get_type_with_generics("Missing", "Func", 2), None);
@@ -861,11 +790,8 @@ mod tests {
         assert!(widget.get_methods_named(&m, "nope").is_empty());
 
         // Non-constructor view skips both ctors.
-        let plain: Vec<&str> = widget
-            .get_methods(&m)
-            .iter()
-            .map(|mid| m.methods[mid.index()].name.as_str())
-            .collect();
+        let plain: Vec<&str> =
+            widget.get_methods(&m).iter().map(|mid| m.methods[mid.index()].name.as_str()).collect();
         assert_eq!(plain, vec!["DoWork"]);
 
         let outer = TypeId(4);
@@ -914,11 +840,7 @@ mod tests {
         let mut m = Module::default();
         let enum_ty = add_type(
             &mut m,
-            TypeDefinition {
-                namespace: "NS".into(),
-                name: "Color".into(),
-                ..Default::default()
-            },
+            TypeDefinition { namespace: "NS".into(), name: "Color".into(), ..Default::default() },
         );
         let value_field = cecli::model::types::FieldDefinition {
             name: "value__".into(),
@@ -930,7 +852,9 @@ mod tests {
         m.types[enum_ty.index()].fields.push(FieldId((m.fields.len() - 1) as u32));
         let static_field = cecli::model::types::FieldDefinition {
             name: "Red".into(),
-            attributes: FieldAttributes::PUBLIC | FieldAttributes::STATIC | FieldAttributes::LITERAL,
+            attributes: FieldAttributes::PUBLIC
+                | FieldAttributes::STATIC
+                | FieldAttributes::LITERAL,
             signature: cecli::model::types::FieldSignature(TypeDesc::Def(enum_ty)),
             ..Default::default()
         };
@@ -943,13 +867,8 @@ mod tests {
         assert_eq!(underlying, TypeDesc::Internal("int32".into()));
 
         // A type with only static fields has no underlying type.
-        let empty = add_type(
-            &mut m,
-            TypeDefinition {
-                name: "NotAnEnum".into(),
-                ..Default::default()
-            },
-        );
+        let empty =
+            add_type(&mut m, TypeDefinition { name: "NotAnEnum".into(), ..Default::default() });
         assert!(empty.get_enum_underlying_type(&m).is_err());
     }
 
@@ -959,16 +878,10 @@ mod tests {
         let func = TypeId(1);
         let string_t = string_external();
         let ok = func
-            .make_generic_instance(
-                &m,
-                vec![string_t.clone(), string_t],
-            )
+            .make_generic_instance(&m, vec![string_t.clone(), string_t])
             .expect("arity matches");
         match ok {
-            TypeDesc::GenericInstance {
-                definition,
-                arguments,
-            } => {
+            TypeDesc::GenericInstance { definition, arguments } => {
                 assert_eq!(*definition, TypeDesc::Def(func));
                 assert_eq!(arguments.len(), 2);
             }
@@ -1024,7 +937,6 @@ mod tests {
         cecli::model::types::AssemblyNameReference::new(name)
     }
 
-
     #[test]
     fn resolve_in_defers_specifications_to_element() {
         let m = sample_module();
@@ -1048,10 +960,7 @@ mod tests {
     fn full_names_match_cecil_spelling() {
         let m = sample_module();
         // Nested definitions join declaring types with '/' under the outermost namespace.
-        assert_eq!(
-            TypeDesc::Def(TypeId(2)).full_name_td(&m),
-            "NS.Outer/Inner/Deeper"
-        );
+        assert_eq!(TypeDesc::Def(TypeId(2)).full_name_td(&m), "NS.Outer/Inner/Deeper");
         assert_eq!(TypeDesc::Def(TypeId(0)).full_name_td(&m), "NS.Widget");
         // External references carry the scope in brackets.
         assert_eq!(string_external().full_name_td(&m), "[mscorlib]System.String");
@@ -1060,23 +969,11 @@ mod tests {
             definition: Box::new(TypeDesc::Def(TypeId(1))),
             arguments: vec![string_external(), TypeDesc::Def(TypeId(0))],
         };
-        assert_eq!(
-            inst.full_name_td(&m),
-            "System.Func`2[[mscorlib]System.String,NS.Widget]"
-        );
+        assert_eq!(inst.full_name_td(&m), "System.Func`2[[mscorlib]System.String,NS.Widget]");
         // Specifications.
-        assert_eq!(
-            TypeDesc::Def(TypeId(0)).make_array_type().full_name_td(&m),
-            "NS.Widget[]"
-        );
-        assert_eq!(
-            TypeDesc::Def(TypeId(0)).make_pointer_type().full_name_td(&m),
-            "NS.Widget*"
-        );
-        assert_eq!(
-            TypeDesc::Def(TypeId(0)).make_by_ref_type().full_name_td(&m),
-            "NS.Widget&"
-        );
+        assert_eq!(TypeDesc::Def(TypeId(0)).make_array_type().full_name_td(&m), "NS.Widget[]");
+        assert_eq!(TypeDesc::Def(TypeId(0)).make_pointer_type().full_name_td(&m), "NS.Widget*");
+        assert_eq!(TypeDesc::Def(TypeId(0)).make_by_ref_type().full_name_td(&m), "NS.Widget&");
         assert_eq!(TypeDesc::Var(0).full_name_td(&m), "!0");
         assert_eq!(TypeDesc::MVar(1).full_name_td(&m), "!!1");
     }
@@ -1112,14 +1009,8 @@ mod tests {
     #[test]
     fn parameter_sequence_helpers() {
         use cecli::model::types::Parameter;
-        let ret = Parameter {
-            sequence: 0,
-            ..Default::default()
-        };
-        let third = Parameter {
-            sequence: 3,
-            ..Default::default()
-        };
+        let ret = Parameter { sequence: 0, ..Default::default() };
+        let third = Parameter { sequence: 3, ..Default::default() };
         assert_eq!(ret.index(), 0);
         assert_eq!(ret.get_sequence(), 0);
         assert_eq!(third.index(), 2);
@@ -1147,5 +1038,4 @@ mod tests {
         .expect("encode");
         assert_eq!(explicit.action, SecurityAction::RequestMinimum);
     }
-
 }

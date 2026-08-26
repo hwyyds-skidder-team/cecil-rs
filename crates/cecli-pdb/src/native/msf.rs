@@ -128,20 +128,15 @@ impl<'a> MsfImage<'a> {
         // Detect byte order via the page size: it must be a sane power of two.
         let (byte_order, page_size) = match Self::detect_order(data) {
             Some(found) => found,
-            None => {
-                return Err(Error::bad_image(
-                    "invalid MSF page size field (neither endianness decodes to a power of two >= 128)",
-                ))
-            }
+            None => return Err(Error::bad_image(
+                "invalid MSF page size field (neither endianness decodes to a power of two >= 128)",
+            )),
         };
 
         let sb = Superblock::parse(data, byte_order, page_size)?;
         let directory = Directory::parse(data, &sb)?;
 
-        Ok(MsfImage {
-            page_size,
-            streams: directory.streams,
-        })
+        Ok(MsfImage { page_size, streams: directory.streams })
     }
 
     fn detect_order(data: &[u8]) -> Option<(ByteOrder, u32)> {
@@ -177,20 +172,17 @@ impl<'a> MsfImage<'a> {
 
     /// Iterator over present streams as `(index, bytes)` pairs.
     pub fn streams(&self) -> impl Iterator<Item = (usize, &[u8])> {
-        self.streams
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| s.as_ref().map(|s| (i, s.as_slice())))
+        self.streams.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| (i, s.as_slice())))
     }
 }
 
 fn is_valid_page_size(size: u32) -> bool {
-    size.is_power_of_two() && size >= 128 && size <= 1 << 20
+    size.is_power_of_two() && (128..=1 << 20).contains(&size)
 }
 
 /// `ceil(a / b)` for positive integers.
 fn div_ceil_usize(a: usize, b: usize) -> usize {
-    (a + b - 1) / b
+    a.div_ceil(b)
 }
 
 impl Superblock {
@@ -265,14 +257,7 @@ impl<'b> BitSet<'b> {
         if data.len() < consumed {
             return Err(Error::bad_image("truncated MSF bit set words"));
         }
-        Ok((
-            BitSet {
-                words: &data[4..consumed],
-                word_count,
-                byte_order,
-            },
-            consumed,
-        ))
+        Ok((BitSet { words: &data[4..consumed], word_count, byte_order }, consumed))
     }
 
     /// Whether block `index` is marked set (free).
@@ -283,9 +268,7 @@ impl<'b> BitSet<'b> {
         }
         let off = word * 4;
         let w = match self.byte_order {
-            ByteOrder::Little => {
-                u32::from_le_bytes(self.words[off..off + 4].try_into().unwrap())
-            }
+            ByteOrder::Little => u32::from_le_bytes(self.words[off..off + 4].try_into().unwrap()),
             ByteOrder::Big => u32::from_be_bytes(self.words[off..off + 4].try_into().unwrap()),
         };
         w & (1 << (index % 32)) != 0
@@ -299,9 +282,7 @@ impl<'b> BitSet<'b> {
 
 impl std::fmt::Debug for BitSet<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BitSet")
-            .field("word_count", &self.word_count)
-            .finish()
+        f.debug_struct("BitSet").field("word_count", &self.word_count).finish()
     }
 }
 
@@ -360,9 +341,7 @@ impl<'a> Directory<'a> {
                 pages.push(page as usize);
             }
             pos += npages * 4;
-            streams.push(Some(MsfStream {
-                data: materialize(data, &pages, page_size, size)?,
-            }));
+            streams.push(Some(MsfStream { data: materialize(data, &pages, page_size, size)? }));
         }
 
         Ok(Directory { streams })
@@ -466,9 +445,7 @@ fn materialize<'a>(
         let start = page * page_size;
         let end = start + todo;
         if end > data.len() {
-            return Err(Error::bad_image(format!(
-                "MSF stream page {page} extends past image end"
-            )));
+            return Err(Error::bad_image(format!("MSF stream page {page} extends past image end")));
         }
         out.extend_from_slice(&data[start..end]);
         left -= todo;
@@ -493,11 +470,7 @@ mod tests {
     /// - page 7:   free.
     fn build_msf(be: bool) -> Vec<u8> {
         let put_u32 = |buf: &mut [u8], off: usize, v: u32| {
-            let b = if be {
-                v.to_be_bytes()
-            } else {
-                v.to_le_bytes()
-            };
+            let b = if be { v.to_be_bytes() } else { v.to_le_bytes() };
             buf[off..off + 4].copy_from_slice(&b);
         };
 
@@ -511,11 +484,7 @@ mod tests {
         // Directory: count=3, sizes=[0,1000,300], then block lists [2,4] and [3].
         let mut dir = Vec::new();
         for v in [3u32, 0, 1000, 300, 2, 4, 3] {
-            dir.extend_from_slice(&if be {
-                v.to_be_bytes()
-            } else {
-                v.to_le_bytes()
-            });
+            dir.extend_from_slice(&if be { v.to_be_bytes() } else { v.to_le_bytes() });
         }
         assert_eq!(dir.len(), 28);
         img[6 * PAGE..6 * PAGE + dir.len()].copy_from_slice(&dir);

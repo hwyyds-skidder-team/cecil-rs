@@ -46,9 +46,7 @@ pub struct StrongNameError {
 
 impl StrongNameError {
     fn new(message: impl Into<String>) -> Self {
-        StrongNameError {
-            message: message.into(),
-        }
+        StrongNameError { message: message.into() }
     }
 }
 
@@ -71,13 +69,7 @@ pub type Result<T, E = StrongNameError> = std::result::Result<T, E>;
 
 fn sha1_digest(data: &[u8]) -> [u8; 20] {
     const K: [u32; 4] = [0x5A82_7999, 0x6ED9_EBA1, 0x8F1B_BCDC, 0xCA62_C1D6];
-    let mut h: [u32; 5] = [
-        0x6745_2301,
-        0xEFCD_AB89,
-        0x98BA_DCFE,
-        0x1032_5476,
-        0xC3D2_E1F0,
-    ];
+    let mut h: [u32; 5] = [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
 
     let bit_len = (data.len() as u64).wrapping_mul(8);
     let mut msg = Vec::with_capacity(data.len() + 72);
@@ -110,12 +102,8 @@ fn sha1_digest(data: &[u8]) -> [u8; 20] {
                 40..=59 => ((b & c) | (b & d) | (c & d), K[2]),
                 _ => (b ^ c ^ d, K[3]),
             };
-            let tmp = a
-                .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
-                .wrapping_add(k)
-                .wrapping_add(wi);
+            let tmp =
+                a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(wi);
             e = d;
             d = c;
             c = b.rotate_left(30);
@@ -203,12 +191,7 @@ fn u32_at(data: &[u8], offset: usize) -> Result<u32> {
     if offset + 4 > data.len() {
         return Err(StrongNameError::new("invalid blob: truncated header"));
     }
-    Ok(u32::from_le_bytes([
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-    ]))
+    Ok(u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]))
 }
 
 fn slice_at(data: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
@@ -236,7 +219,6 @@ fn le_field(be: &[u8], len: usize) -> Vec<u8> {
     out.reverse();
     out
 }
-
 
 fn from_capi_private_blob(data: &[u8], offset: usize) -> Result<CapiKey> {
     if slice_at(data, offset, 20).is_err()
@@ -318,11 +300,7 @@ fn from_capi_public_blob(data: &[u8], offset: usize) -> Result<CapiKey> {
 
     // DWORD public exponent; CryptoConvert keeps exactly three big-endian
     // bytes ([18], [17], [16]).
-    let exponent = vec![
-        data[offset + 18],
-        data[offset + 17],
-        data[offset + 16],
-    ];
+    let exponent = vec![data[offset + 18], data[offset + 17], data[offset + 16]];
 
     let byte_len = (bit_len >> 3) as usize;
     let modulus = to_be(slice_at(data, offset + 20, byte_len)?);
@@ -394,14 +372,10 @@ pub fn to_capi_public_blob(modulus_be: &[u8], exponent_be: &[u8]) -> Vec<u8> {
 pub fn to_capi_private_blob(key: &CapiKey) -> Result<Vec<u8>> {
     use rsa::BigUint;
 
-    let p_be = key
-        .prime1
-        .as_deref()
-        .ok_or_else(|| StrongNameError::new("key lacks private material"))?;
-    let q_be = key
-        .prime2
-        .as_deref()
-        .ok_or_else(|| StrongNameError::new("key lacks private material"))?;
+    let p_be =
+        key.prime1.as_deref().ok_or_else(|| StrongNameError::new("key lacks private material"))?;
+    let q_be =
+        key.prime2.as_deref().ok_or_else(|| StrongNameError::new("key lacks private material"))?;
     let d_be = key
         .d
         .as_deref()
@@ -483,14 +457,13 @@ pub fn ecma_public_key(modulus_be: &[u8], exponent_be: &[u8]) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// DER `DigestInfo` prefix for SHA-1.
-const DIGEST_INFO_SHA1: &[u8] = &[
-    0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
-];
+const DIGEST_INFO_SHA1: &[u8] =
+    &[0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14];
 
 /// DER `DigestInfo` prefix for SHA-256.
 const DIGEST_INFO_SHA256: &[u8] = &[
-    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-    0x05, 0x00, 0x04, 0x20,
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+    0x00, 0x04, 0x20,
 ];
 
 fn digest_info_prefix(alg: SignatureHashAlgorithm) -> &'static [u8] {
@@ -594,9 +567,7 @@ fn pe_layout(data: &[u8]) -> Result<PeLayout> {
     }
     let pe_offset = u32_at(data, 0x3c)? as usize;
     if pe_offset + 24 > data.len() || &data[pe_offset..pe_offset + 4] != b"PE\0\0" {
-        return Err(StrongNameError::new(
-            "not a PE image: missing PE signature",
-        ));
+        return Err(StrongNameError::new("not a PE image: missing PE signature"));
     }
 
     let coff = pe_offset + 4;
@@ -625,9 +596,7 @@ fn pe_layout(data: &[u8]) -> Result<PeLayout> {
 
     let section_table = opt + opt_size;
     if section_table + 40 * sections > data.len() {
-        return Err(StrongNameError::new(
-            "section table extends past end of file",
-        ));
+        return Err(StrongNameError::new("section table extends past end of file"));
     }
     // Section header: Name(0..8) VirtualSize(8) VirtualAddress(12)
     // SizeOfRawData(16) PointerToRawData(20).
@@ -635,9 +604,7 @@ fn pe_layout(data: &[u8]) -> Result<PeLayout> {
     let text_pointer = u32_at(data, section_table + 20)? as usize;
     let header_size = section_table + 40 * sections;
     if text_pointer >= data.len() {
-        return Err(StrongNameError::new(
-            "text section starts past end of file",
-        ));
+        return Err(StrongNameError::new("text section starts past end of file"));
     }
 
     // RVA → file offset through the first section, exactly like Cecil's
@@ -659,24 +626,14 @@ fn pe_layout(data: &[u8]) -> Result<PeLayout> {
     let sn_rva = u32_at(data, cli_offset + 32)?;
     let sn_size = u32_at(data, cli_offset + 36)? as usize;
     if sn_rva == 0 || sn_size == 0 {
-        return Err(StrongNameError::new(
-            "image has no strong-name signature directory",
-        ));
+        return Err(StrongNameError::new("image has no strong-name signature directory"));
     }
     let sn_pointer = rva_offset(sn_rva)?;
     if sn_pointer + sn_size > data.len() {
-        return Err(StrongNameError::new(
-            "strong-name signature extends past end of file",
-        ));
+        return Err(StrongNameError::new("strong-name signature extends past end of file"));
     }
 
-    Ok(PeLayout {
-        header_size,
-        text_pointer,
-        sn_pointer,
-        sn_size,
-        checksum_offset: opt + 64,
-    })
+    Ok(PeLayout { header_size, text_pointer, sn_pointer, sn_size, checksum_offset: opt + 64 })
 }
 
 /// Recomputes and patches the PE `CheckSum` field (the field itself is
@@ -752,9 +709,7 @@ impl StrongNameKeyPair {
     /// validated up front; signing fails later for public-only keys.
     pub fn new(snk: &[u8]) -> Result<Self> {
         from_capi_key_blob(snk)?;
-        Ok(StrongNameKeyPair {
-            bytes: snk.to_vec(),
-        })
+        Ok(StrongNameKeyPair { bytes: snk.to_vec() })
     }
 
     /// The original `.snk` bytes.
@@ -764,9 +719,7 @@ impl StrongNameKeyPair {
 
     /// True when the blob carries no private key material.
     pub fn is_public_only(&self) -> bool {
-        !from_capi_key_blob(&self.bytes)
-            .map(|key| key.is_private())
-            .unwrap_or(false)
+        !from_capi_key_blob(&self.bytes).map(|key| key.is_private()).unwrap_or(false)
     }
 
     /// The hash algorithm implied by the blob's `ALG_ID`: SHA-1 unless the
@@ -811,9 +764,7 @@ impl StrongNameKeyPair {
     pub fn sign_image_with(&self, image: &mut Vec<u8>, alg: SignatureHashAlgorithm) -> Result<()> {
         let key = from_capi_key_blob(&self.bytes)?;
         if !key.is_private() {
-            return Err(StrongNameError::new(
-                "cannot sign with a public-only strong-name key",
-            ));
+            return Err(StrongNameError::new("cannot sign with a public-only strong-name key"));
         }
         let (n, d) = private_key_parts(&key)?;
 
@@ -925,8 +876,7 @@ mod tests {
 
     /// Generates a deterministic 1024-bit RSA key.
     fn generate_key() -> rsa::RsaPrivateKey {
-        rsa::RsaPrivateKey::new(&mut TestRng(0x5eed_1234_abcd_ef01), 1024)
-            .expect("keygen failed")
+        rsa::RsaPrivateKey::new(&mut TestRng(0x5eed_1234_abcd_ef01), 1024).expect("keygen failed")
     }
 
     /// Serializes a full key pair as an `RSA2` private `.snk` blob, mirroring
@@ -945,9 +895,7 @@ mod tests {
         // dp = d mod (p-1), dq = d mod (q-1), qinv = q^(p-2) mod p.
         let dp = (key.d() % (&primes[0] - 1u32)).to_bytes_be();
         let dq = (key.d() % (&primes[1] - 1u32)).to_bytes_be();
-        let qinv = primes[1]
-            .modpow(&(&primes[0] - 2u32), &primes[0])
-            .to_bytes_be();
+        let qinv = primes[1].modpow(&(&primes[0] - 2u32), &primes[0]).to_bytes_be();
 
         let mut blob = Vec::with_capacity(20 + 4 * byte_len);
         blob.push(0x07); // PRIVATEKEYBLOB
@@ -1025,10 +973,7 @@ mod tests {
         pe[cli + 36..cli + 40].copy_from_slice(&(sn_size as u32).to_le_bytes()); // SN size
 
         // Some pseudo-metadata noise so the hashed payload is non-trivial.
-        for (i, byte) in b"cecli synthetic metadata root BSJB v1"
-            .iter()
-            .enumerate()
-        {
+        for (i, byte) in b"cecli synthetic metadata root BSJB v1".iter().enumerate() {
             pe[TEXT_RAW + 0x100 + i] = *byte;
         }
 
@@ -1042,20 +987,11 @@ mod tests {
 
     #[test]
     fn sha1_known_vectors() {
-        assert_eq!(
-            hex(&sha1_digest(b"")),
-            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-        );
-        assert_eq!(
-            hex(&sha1_digest(b"abc")),
-            "a9993e364706816aba3e25717850c26c9cd0d89d"
-        );
+        assert_eq!(hex(&sha1_digest(b"")), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(hex(&sha1_digest(b"abc")), "a9993e364706816aba3e25717850c26c9cd0d89d");
         // 100 bytes forces multi-block padding past the 55-byte boundary.
         let long = vec![b'a'; 100];
-        assert_eq!(
-            hex(&sha1_digest(&long)),
-            "7f9000257a4918d7072655ea468540cdcbd42e0c"
-        );
+        assert_eq!(hex(&sha1_digest(&long)), "7f9000257a4918d7072655ea468540cdcbd42e0c");
     }
 
     #[test]
@@ -1131,9 +1067,7 @@ mod tests {
         copy[layout.sn_pointer..layout.sn_pointer + layout.sn_size].fill(0);
         let digest = hash_image(&copy, &layout, SignatureHashAlgorithm::Sha1).unwrap();
         let stored_checksum = u32::from_le_bytes(
-            image[layout.checksum_offset..layout.checksum_offset + 4]
-                .try_into()
-                .unwrap(),
+            image[layout.checksum_offset..layout.checksum_offset + 4].try_into().unwrap(),
         );
         (layout, digest, stored_checksum)
     }
@@ -1153,13 +1087,7 @@ mod tests {
         let (layout, digest, _checksum) = verifier_digest(&image);
         let signature = &image[sn_offset..sn_offset + 128];
         assert!(
-            pkcs1_v15_verify(
-                &key.n(),
-                &key.e(),
-                SignatureHashAlgorithm::Sha1,
-                &digest,
-                signature
-            ),
+            pkcs1_v15_verify(&key.n(), &key.e(), SignatureHashAlgorithm::Sha1, &digest, signature),
             "signature must verify against the generated public key"
         );
 
@@ -1209,7 +1137,13 @@ mod tests {
 
         let signature = &image[sn_offset..sn_offset + 128];
         assert!(
-            pkcs1_v15_verify(&key.n(), &key.e(), SignatureHashAlgorithm::Sha256, &digest256, signature),
+            pkcs1_v15_verify(
+                &key.n(),
+                &key.e(),
+                SignatureHashAlgorithm::Sha256,
+                &digest256,
+                signature
+            ),
             "sha256 signature must verify"
         );
         // ...and must NOT verify under SHA-1.

@@ -28,16 +28,10 @@ pub struct DataDirectory {
 }
 
 impl DataDirectory {
-    pub const ZERO: DataDirectory = DataDirectory {
-        virtual_address: 0,
-        size: 0,
-    };
+    pub const ZERO: DataDirectory = DataDirectory { virtual_address: 0, size: 0 };
 
     pub fn new(virtual_address: u32, size: u32) -> Self {
-        DataDirectory {
-            virtual_address,
-            size,
-        }
+        DataDirectory { virtual_address, size }
     }
 
     /// True when both the address and the size are zero.

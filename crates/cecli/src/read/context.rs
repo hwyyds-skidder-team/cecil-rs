@@ -184,9 +184,9 @@ impl ReadContext {
         // ModuleRef: Name.
         for rid in 1..=md.row_count(TableIndex::ModuleRef) {
             match md.column(TableIndex::ModuleRef, rid, 0) {
-                Ok(idx) => ctx
-                    .mod_refs
-                    .push(md.heaps().strings.get(idx as u32).unwrap_or("").to_owned()),
+                Ok(idx) => {
+                    ctx.mod_refs.push(md.heaps().strings.get(idx as u32).unwrap_or("").to_owned())
+                }
                 Err(_) => ctx.mod_refs.push(String::new()),
             }
         }
@@ -218,7 +218,7 @@ impl ReadContext {
                 };
                 let payload = r.position();
                 let len = (raw & !1) as usize;
-                if len % 2 != 0 || payload + len > data.len() {
+                if !len.is_multiple_of(2) || payload + len > data.len() {
                     break;
                 }
                 let s = md.heaps().user_strings.get(pos as u32).unwrap_or_default();
@@ -261,9 +261,12 @@ impl ReadContext {
         };
         match table {
             TableIndex::TypeDef => Ok(TypeDesc::Def(self.type_def_handle(rid)?)),
-            TableIndex::TypeRef => Ok(TypeDesc::External(Box::new(
-                self.type_ref_external(md, rid, 0, &mut Default::default())?,
-            ))),
+            TableIndex::TypeRef => Ok(TypeDesc::External(Box::new(self.type_ref_external(
+                md,
+                rid,
+                0,
+                &mut Default::default(),
+            )?))),
             TableIndex::TypeSpec => self.type_spec_at(md, rid, 0),
             other => Err(Error::bad_image(format!(
                 "unexpected table {} in TypeDefOrRef cell",
@@ -281,8 +284,8 @@ impl ReadContext {
     pub fn resolve_member_ref(&self, md: &MetadataReader, cell: u32) -> Result<MemberRefRow> {
         // Serve from the cache filled by resolve_lazy_tables when available.
         let idx =
-            cell.checked_sub(1)
-                .ok_or_else(|| Error::argument("MemberRef rid must be 1-based"))? as usize;
+            cell.checked_sub(1).ok_or_else(|| Error::argument("MemberRef rid must be 1-based"))?
+                as usize;
         if let Some(row) = self.member_refs.get(idx) {
             if !matches!(row, MemberRefRow::Pending) {
                 return Ok(row.clone());
@@ -311,11 +314,12 @@ impl ReadContext {
         };
         match table {
             TableIndex::MethodDef => {
-                let id = self.method_of(Token::new(TableIndex::MethodDef, rid)).ok_or_else(|| {
-                    Error::bad_image(format!(
-                        "MethodDef rid {rid} outside populated method arena"
-                    ))
-                })?;
+                let id =
+                    self.method_of(Token::new(TableIndex::MethodDef, rid)).ok_or_else(|| {
+                        Error::bad_image(format!(
+                            "MethodDef rid {rid} outside populated method arena"
+                        ))
+                    })?;
                 Ok(MethodRef::Def(id))
             }
             TableIndex::MemberRef => match self.resolve_member_ref(md, rid)? {
@@ -337,9 +341,7 @@ impl ReadContext {
     /// into a [`MethodRef::Spec`].
     pub fn method_spec_ref(&self, md: &MetadataReader, rid: u32) -> Result<MethodRef> {
         if rid == 0 || rid > md.row_count(TableIndex::MethodSpec) {
-            return Err(Error::argument(format!(
-                "MethodSpec rid {rid} out of range"
-            )));
+            return Err(Error::argument(format!("MethodSpec rid {rid} out of range")));
         }
         let base_cell = md.column(TableIndex::MethodSpec, rid, 0)? as u32;
         let blob_idx = md.column(TableIndex::MethodSpec, rid, 1)? as u32;
@@ -361,10 +363,7 @@ impl ReadContext {
             r.seek(r.position() + consumed)?;
             arguments.push(ty);
         }
-        Ok(MethodRef::Spec {
-            method: Box::new(base),
-            arguments,
-        })
+        Ok(MethodRef::Spec { method: Box::new(base), arguments })
     }
 
     /// Maps a `MethodDef` token to its arena handle.
@@ -396,14 +395,16 @@ impl ReadContext {
     // ------------------------------------------------------------------
 
     fn type_def_handle(&self, rid: u32) -> Result<TypeId> {
-        self.type_defs.get(rid.checked_sub(1).ok_or_else(|| {
-            Error::bad_image("TypeDef rid 0 is invalid")
-        })? as usize)
+        self.type_defs
+            .get(rid.checked_sub(1).ok_or_else(|| Error::bad_image("TypeDef rid 0 is invalid"))?
+                as usize)
             .copied()
-            .ok_or_else(|| Error::bad_image(format!(
-                "TypeDef rid {rid} outside populated type arena ({} entries)",
-                self.type_defs.len()
-            )))
+            .ok_or_else(|| {
+                Error::bad_image(format!(
+                    "TypeDef rid {rid} outside populated type arena ({} entries)",
+                    self.type_defs.len()
+                ))
+            })
     }
 
     /// Resolves a TypeRef row to its external-type tree, walking the
@@ -423,8 +424,10 @@ impl ReadContext {
     ) -> Result<ExternalType> {
         let degraded = depth > MAX_TDOR_DEPTH || !visited.insert(rid);
         let scope_cell = md.column(TableIndex::TypeRef, rid, 0)? as u32;
-        let name = md.heaps().strings.get(md.column(TableIndex::TypeRef, rid, 1)? as u32)?.to_owned();
-        let namespace = md.heaps().strings.get(md.column(TableIndex::TypeRef, rid, 2)? as u32)?.to_owned();
+        let name =
+            md.heaps().strings.get(md.column(TableIndex::TypeRef, rid, 1)? as u32)?.to_owned();
+        let namespace =
+            md.heaps().strings.get(md.column(TableIndex::TypeRef, rid, 2)? as u32)?.to_owned();
 
         // Circular or pathologically deep chain: return the row's own identity
         // without further scope resolution so callers still get a usable tree.
@@ -453,15 +456,23 @@ impl ReadContext {
             Some((TableIndex::ModuleRef, mr)) => {
                 let name = self
                     .mod_refs
-                    .get(mr.checked_sub(1).ok_or_else(|| Error::bad_image("ModuleRef rid 0 is invalid"))? as usize)
+                    .get(
+                        mr.checked_sub(1)
+                            .ok_or_else(|| Error::bad_image("ModuleRef rid 0 is invalid"))?
+                            as usize,
+                    )
                     .ok_or_else(|| Error::bad_image(format!("ModuleRef rid {mr} out of range")))?
                     .clone();
                 ScopeRef::OtherModule(name)
             }
             Some((TableIndex::AssemblyRef, ar)) => {
-                let asm = self.asm_refs.get(ar.checked_sub(1).ok_or_else(|| {
-                    Error::bad_image("AssemblyRef rid 0 is invalid")
-                })? as usize)
+                let asm = self
+                    .asm_refs
+                    .get(
+                        ar.checked_sub(1)
+                            .ok_or_else(|| Error::bad_image("AssemblyRef rid 0 is invalid"))?
+                            as usize,
+                    )
                     .ok_or_else(|| Error::bad_image(format!("AssemblyRef rid {ar} out of range")))?
                     .clone();
                 ScopeRef::Assembly(asm)
@@ -479,12 +490,7 @@ impl ReadContext {
                     nesting: Vec::new(),
                     scope: scope.clone(),
                 }));
-                return Ok(ExternalType {
-                    namespace,
-                    name,
-                    nesting,
-                    scope,
-                });
+                return Ok(ExternalType { namespace, name, nesting, scope });
             }
             Some((other, _)) => {
                 return Err(Error::bad_image(format!(
@@ -494,12 +500,7 @@ impl ReadContext {
             }
         };
 
-        Ok(ExternalType {
-            namespace,
-            name,
-            nesting: Vec::new(),
-            scope,
-        })
+        Ok(ExternalType { namespace, name, nesting: Vec::new(), scope })
     }
 
     /// Decodes a TypeSpec row's signature blob on demand, directly from the
@@ -519,19 +520,17 @@ impl ReadContext {
         if let Some(Some(cached)) = self.spec_memo.borrow().get(idx) {
             return Ok(cached.clone());
         }
-        if self.spec_stack.borrow().iter().any(|&r| r == rid) {
-            return Err(Error::bad_image(format!(
-                "cyclic TypeSpec reference through rid {rid}"
-            )));
+        if self.spec_stack.borrow().contains(&rid) {
+            return Err(Error::bad_image(format!("cyclic TypeSpec reference through rid {rid}")));
         }
         let blob_idx = md.column(TableIndex::TypeSpec, rid, 0)? as u32;
         let blob = md.heaps().blob.get(blob_idx)?;
 
         self.spec_stack.borrow_mut().push(rid);
-        let decoded = (|| {
+        let decoded = {
             let sctx = CtxSigContext { ctx: self, md };
             parse_type_element(blob, 0, &sctx, false).map(|(ty, _)| ty)
-        })();
+        };
         self.spec_stack.borrow_mut().pop();
         let ty = decoded?;
 
@@ -558,11 +557,13 @@ impl ReadContext {
             return Err(Error::argument(format!("MemberRef rid {rid} out of range")));
         }
         let parent_cell = md.column(TableIndex::MemberRef, rid, 0)? as u32;
-        let name = md.heaps().strings.get(md.column(TableIndex::MemberRef, rid, 1)? as u32)?.to_owned();
+        let name =
+            md.heaps().strings.get(md.column(TableIndex::MemberRef, rid, 1)? as u32)?.to_owned();
         let sig_blob = md.heaps().blob.get(md.column(TableIndex::MemberRef, rid, 2)? as u32)?;
         let sctx = CtxSigContext { ctx: self, md };
 
-        let Some((parent_table, prid)) = decode_coded(&coded::MEMBER_REF_PARENT, parent_cell as u64)
+        let Some((parent_table, prid)) =
+            decode_coded(&coded::MEMBER_REF_PARENT, parent_cell as u64)
         else {
             return Err(Error::bad_image(format!(
                 "nil MemberRefParent cell {parent_cell:#x} in MemberRef rid {rid}"
@@ -582,19 +583,26 @@ impl ReadContext {
 
         let parent = match parent_table {
             TableIndex::TypeDef => TypeDesc::Def(self.type_def_handle(prid)?),
-            TableIndex::TypeRef => {
-                TypeDesc::External(Box::new(
-                    self.type_ref_external(md, prid, depth + 1, &mut Default::default())?,
-                ))
-            }
+            TableIndex::TypeRef => TypeDesc::External(Box::new(self.type_ref_external(
+                md,
+                prid,
+                depth + 1,
+                &mut Default::default(),
+            )?)),
             TableIndex::ModuleRef => {
                 // Members declared in the `<Module>` pseudo-type of another
                 // netmodule: the type carries the module's name.
-                let mod_name = self.mod_refs.get(prid.checked_sub(1).ok_or_else(|| {
-                    Error::bad_image("ModuleRef rid 0 is invalid")
-                })? as usize)
+                let mod_name = self
+                    .mod_refs
+                    .get(
+                        prid.checked_sub(1)
+                            .ok_or_else(|| Error::bad_image("ModuleRef rid 0 is invalid"))?
+                            as usize,
+                    )
                     .cloned()
-                    .ok_or_else(|| Error::bad_image(format!("ModuleRef rid {prid} out of range")))?;
+                    .ok_or_else(|| {
+                        Error::bad_image(format!("ModuleRef rid {prid} out of range"))
+                    })?;
                 TypeDesc::External(Box::new(ExternalType {
                     namespace: String::new(),
                     name: mod_name.clone(),
@@ -644,9 +652,7 @@ impl ReadContext {
                 return self.type_def_handle(t);
             }
         }
-        Err(Error::bad_image(format!(
-            "no TypeDef declares MethodDef rid {method_rid}"
-        )))
+        Err(Error::bad_image(format!("no TypeDef declares MethodDef rid {method_rid}")))
     }
 }
 
@@ -659,15 +665,11 @@ struct CtxSigContext<'c, 'd> {
 
 impl<'c, 'd> SigContext for CtxSigContext<'c, 'd> {
     fn tdor_cell(&self, _ty: &TypeDesc) -> Result<u32> {
-        Err(Error::unsupported(
-            "read-side SigContext never encodes TypeDefOrRef cells",
-        ))
+        Err(Error::unsupported("read-side SigContext never encodes TypeDefOrRef cells"))
     }
 
     fn is_value_type(&self, _ty: &TypeDesc) -> Result<bool> {
-        Err(Error::unsupported(
-            "read-side SigContext cannot classify value types",
-        ))
+        Err(Error::unsupported("read-side SigContext cannot classify value types"))
     }
 
     fn tdor_type(&self, _value_type: bool, cell: u32) -> Result<TypeDesc> {
@@ -688,7 +690,6 @@ mod tests {
     use crate::model::signature::parse_local_var_sig;
     use cecli_metadata::{encode_coded, MetadataBuilder};
 
-
     /// Synthetic root: Module + AssemblyRef(mscorlib) + TypeRef(System.Object)
     /// + nested TypeRef + TypeDef + MemberRef(object.ToString()) +
     /// TypeSpec(SzArray of TypeDef) + MethodSpec + StandAloneSig + #US entry.
@@ -697,8 +698,7 @@ mod tests {
 
         let mname = b.insert_string("<Module>");
         let mvid = b.insert_guid(&[9u8; 16]);
-        b.add_row(TableIndex::Module, &[0, mname as u64, mvid as u64, 0, 0])
-            .unwrap();
+        b.add_row(TableIndex::Module, &[0, mname as u64, mvid as u64, 0, 0]).unwrap();
 
         let ar_name = b.insert_string("mscorlib");
         b.add_row(
@@ -711,32 +711,22 @@ mod tests {
         let obj_ns = b.insert_string("System");
         let obj_name = b.insert_string("Object");
         let scope_asm = encode_coded(&coded::RESOLUTION_SCOPE, TableIndex::AssemblyRef, 1).unwrap();
-        b.add_row(TableIndex::TypeRef, &[scope_asm, obj_name as u64, obj_ns as u64])
-            .unwrap(); // rid 1
+        b.add_row(TableIndex::TypeRef, &[scope_asm, obj_name as u64, obj_ns as u64]).unwrap(); // rid 1
 
         // Nested TypeRef whose parent is TypeRef rid 1.
         let coll_ns = b.insert_string("System.Collections");
         let coll_name = b.insert_string("Enumerator");
-        let scope_nested =
-            encode_coded(&coded::RESOLUTION_SCOPE, TableIndex::TypeRef, 1).unwrap();
-        b.add_row(
-            TableIndex::TypeRef,
-            &[scope_nested, coll_name as u64, coll_ns as u64],
-        )
-        .unwrap(); // rid 2
+        let scope_nested = encode_coded(&coded::RESOLUTION_SCOPE, TableIndex::TypeRef, 1).unwrap();
+        b.add_row(TableIndex::TypeRef, &[scope_nested, coll_name as u64, coll_ns as u64]).unwrap(); // rid 2
 
         let def_ns = b.insert_string("TestNs");
         let def_name = b.insert_string("Mine");
-        b.add_row(
-            TableIndex::TypeDef,
-            &[0x0010_0001, def_name as u64, def_ns as u64, 0, 1, 1],
-        )
-        .unwrap(); // rid 1
+        b.add_row(TableIndex::TypeDef, &[0x0010_0001, def_name as u64, def_ns as u64, 0, 1, 1])
+            .unwrap(); // rid 1
         let tostring = b.insert_string("ToString");
         let m_sig = b.insert_blob(&[0x20, 0x00, 0x01]); // instance, 0 params, void ret
         let mr_parent = encode_coded(&coded::MEMBER_REF_PARENT, TableIndex::TypeRef, 1).unwrap();
-        b.add_row(TableIndex::MemberRef, &[mr_parent, tostring as u64, m_sig as u64])
-            .unwrap(); // rid 1
+        b.add_row(TableIndex::MemberRef, &[mr_parent, tostring as u64, m_sig as u64]).unwrap(); // rid 1
 
         // TypeSpec rid 1: SZARRAY over CLASS(TypeDef rid 1), cell = (1<<2)|0 = 4.
         let ts_blob = b.insert_blob(&[0x1D, 0x12, 0x04]);
@@ -812,7 +802,10 @@ mod tests {
         let nested_cell = (2u32 << 2) | 1;
         match ctx.tdor_to_typedesc(&md, nested_cell).unwrap() {
             TypeDesc::External(e) => {
-                assert_eq!((e.namespace.as_str(), e.name.as_str()), ("System.Collections", "Enumerator"));
+                assert_eq!(
+                    (e.namespace.as_str(), e.name.as_str()),
+                    ("System.Collections", "Enumerator")
+                );
                 assert_eq!(e.nesting.len(), 1);
                 assert_eq!(e.nesting[0].name, "Object");
                 assert!(matches!(e.scope, ScopeRef::Assembly(_)));
@@ -826,7 +819,7 @@ mod tests {
         let (bytes, _us) = build_test_md();
         let md = MetadataReader::parse(&bytes).expect("synthetic root parses");
         let ctx = setup(&bytes);
-        let cell = (1u32 << 2) | 0;
+        let cell = 1u32 << 2;
         assert_eq!(ctx.tdor_to_typedesc(&md, cell).unwrap(), TypeDesc::Def(TypeId(0)));
     }
 
@@ -862,7 +855,10 @@ mod tests {
                 assert!(em.signature.has_this);
                 assert_eq!(em.signature.parameters.len(), 0);
                 assert_eq!(em.signature.return_type, TypeDesc::Internal("void".into()));
-                assert_eq!(em.signature.convention, cecli_core::flags::SignatureCallingConvention::Default);
+                assert_eq!(
+                    em.signature.convention,
+                    cecli_core::flags::SignatureCallingConvention::Default
+                );
             }
             other => panic!("expected Method row, got {other:?}"),
         }
@@ -897,10 +893,7 @@ mod tests {
         // MemberRef tag resolves to External (METHOD_DEF_OR_REF uses 1 tag bit).
         let cell =
             encode_coded(&coded::METHOD_DEF_OR_REF, TableIndex::MemberRef, 1).unwrap() as u32;
-        assert!(matches!(
-            ctx.method_def_or_ref(&md, cell).unwrap(),
-            MethodRef::External(_)
-        ));
+        assert!(matches!(ctx.method_def_or_ref(&md, cell).unwrap(), MethodRef::External(_)));
         // method_of on non-MethodDef tokens is None.
         assert_eq!(ctx.method_of(Token::new(TableIndex::TypeDef, 1)), None);
     }
@@ -939,9 +932,6 @@ mod tests {
         assert!(ctx.tdor_to_typedesc(&md, cell).is_err());
         // TypeRef resolution is fully independent of arenas and still works.
         let tr_cell = (1u32 << 2) | 1;
-        assert!(matches!(
-            ctx.tdor_to_typedesc(&md, tr_cell).unwrap(),
-            TypeDesc::External(_)
-        ));
+        assert!(matches!(ctx.tdor_to_typedesc(&md, tr_cell).unwrap(), TypeDesc::External(_)));
     }
 }

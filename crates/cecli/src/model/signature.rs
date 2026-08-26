@@ -11,7 +11,7 @@
 //! cell back to a [`TypeDesc`] via [`SigContext::tdor_type`].
 
 use cecli_core::flags::{
-    CALL_CONVENTION_EXPLICIT_THIS, CALL_CONVENTION_HAS_THIS, SignatureCallingConvention,
+    SignatureCallingConvention, CALL_CONVENTION_EXPLICIT_THIS, CALL_CONVENTION_HAS_THIS,
 };
 use cecli_core::io::{ByteReader, ByteWriter};
 use cecli_core::{ElementType, Error, Result};
@@ -48,23 +48,17 @@ pub trait SigContext {
     fn tdor_type(&self, value_type: bool, cell: u32) -> Result<TypeDesc> {
         let _ = value_type;
         let _ = cell;
-        Err(Error::unsupported(
-            "this SigContext cannot decode TypeDefOrRef cells",
-        ))
+        Err(Error::unsupported("this SigContext cannot decode TypeDefOrRef cells"))
     }
 }
 
 impl SigContext for () {
     fn tdor_cell(&self, _ty: &TypeDesc) -> Result<u32> {
-        Err(Error::unsupported(
-            "unit SigContext cannot encode TypeDefOrRef cells",
-        ))
+        Err(Error::unsupported("unit SigContext cannot encode TypeDefOrRef cells"))
     }
 
     fn is_value_type(&self, _ty: &TypeDesc) -> Result<bool> {
-        Err(Error::unsupported(
-            "unit SigContext cannot classify TypeDefOrRef cells",
-        ))
+        Err(Error::unsupported("unit SigContext cannot classify TypeDefOrRef cells"))
     }
 }
 
@@ -160,7 +154,9 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> 
         // ELEMENT_TYPE_VOID outside return slots appears in C++/CLI mixed
         // images; Cecil tolerates it, so we map it to the canonical internal.
         ET_VOID => Ok(TypeDesc::Internal("void".into())),
-        code if primitive_name(code).is_some() => Ok(TypeDesc::Internal(primitive_name(code).unwrap().into())),
+        code if primitive_name(code).is_some() => {
+            Ok(TypeDesc::Internal(primitive_name(code).unwrap().into()))
+        }
         ET_VALUE_TYPE | ET_CLASS => ctx.tdor_type(et == ET_VALUE_TYPE, r.compressed_u32()?),
         ET_PTR => Ok(TypeDesc::Ptr(Box::new(read_type_elem(r, ctx)?))),
         ET_BYREF => Ok(TypeDesc::ByRef(Box::new(read_type_elem(r, ctx)?))),
@@ -191,19 +187,16 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> 
         ET_CMOD_REQD | ET_CMOD_OPT => {
             let modifier = Box::new(ctx.tdor_type(false, r.compressed_u32()?)?);
             let unmodified = Box::new(read_type_elem(r, ctx)?);
-            Ok(TypeDesc::CMod {
-                required: et == ET_CMOD_REQD,
-                modifier,
-                unmodified,
-            })
+            Ok(TypeDesc::CMod { required: et == ET_CMOD_REQD, modifier, unmodified })
         }
         ET_SENTINEL => Ok(TypeDesc::Sentinel),
         ET_TYPED_BYREF => Ok(TypeDesc::TypedByRef),
         ET_INTERNAL => {
             let len = r.compressed_u32()? as usize;
             let bytes = r.read_bytes(len)?;
-            let name = std::str::from_utf8(bytes)
-                .map_err(|e| Error::bad_image(format!("INTERNAL type has invalid UTF-8 name: {e}")))?;
+            let name = std::str::from_utf8(bytes).map_err(|e| {
+                Error::bad_image(format!("INTERNAL type has invalid UTF-8 name: {e}"))
+            })?;
             Ok(TypeDesc::Internal(name.to_owned()))
         }
         _ => Err(bad_element(et)),
@@ -212,7 +205,8 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> 
 
 fn compressed_index(r: &mut ByteReader) -> Result<u16> {
     let v = r.compressed_u32()?;
-    u16::try_from(v).map_err(|_| Error::bad_image(format!("generic parameter index {v} exceeds u16")))
+    u16::try_from(v)
+        .map_err(|_| Error::bad_image(format!("generic parameter index {v} exceeds u16")))
 }
 
 /// Multi-dimensional array element: rank, sizes count + sizes, lower-bound count + bounds.
@@ -237,11 +231,7 @@ fn read_array_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc>
             "array rank {rank} incompatible with {num_sizes} sizes and {num_lo} lower bounds"
         )));
     }
-    Ok(TypeDesc::Array {
-        element,
-        sizes,
-        lobounds,
-    })
+    Ok(TypeDesc::Array { element, sizes, lobounds })
 }
 
 /// Reads a method signature body starting at its convention byte
@@ -267,8 +257,7 @@ fn get_method_signature(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<Meth
     };
     let generic_count = if generic_flag {
         let n = r.compressed_u32()?;
-        u16::try_from(n)
-            .map_err(|_| Error::bad_image(format!("generic arity {n} exceeds u16")))?
+        u16::try_from(n).map_err(|_| Error::bad_image(format!("generic arity {n} exceeds u16")))?
     } else {
         0
     };
@@ -284,9 +273,7 @@ fn get_method_signature(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<Meth
         let pos = r.position();
         if pos < r.len() && r.bytes()[pos] == ET_SENTINEL {
             if convention != SignatureCallingConvention::VarArg {
-                return Err(Error::bad_image(
-                    "SENTINEL outside a vararg parameter list",
-                ));
+                return Err(Error::bad_image("SENTINEL outside a vararg parameter list"));
             }
             if vararg.is_some() {
                 return Err(Error::bad_image("duplicate SENTINEL in parameter list"));
@@ -410,16 +397,18 @@ fn write_ser_string(w: &mut ByteWriter, s: &str) {
 }
 
 /// Writes a method signature body starting at the convention byte.
-fn put_method_signature(w: &mut ByteWriter, sig: &MethodSignature, ctx: &dyn SigContext) -> Result<()> {
+fn put_method_signature(
+    w: &mut ByteWriter,
+    sig: &MethodSignature,
+    ctx: &dyn SigContext,
+) -> Result<()> {
     if sig.explicit_this && !sig.has_this {
-        return Err(Error::argument(
-            "EXPLICIT_THIS requires HAS_THIS in a method signature",
-        ));
+        return Err(Error::argument("EXPLICIT_THIS requires HAS_THIS in a method signature"));
     }
-    if sig.convention != SignatureCallingConvention::VarArg && sig.vararg_start != sig.parameters.len() {
-        return Err(Error::argument(
-            "vararg_start is only meaningful for VARARG signatures",
-        ));
+    if sig.convention != SignatureCallingConvention::VarArg
+        && sig.vararg_start != sig.parameters.len()
+    {
+        return Err(Error::argument("vararg_start is only meaningful for VARARG signatures"));
     }
 
     let generic = sig.generic_count > 0;
@@ -447,7 +436,9 @@ fn put_method_signature(w: &mut ByteWriter, sig: &MethodSignature, ctx: &dyn Sig
 
     for (i, param) in sig.parameters.iter().enumerate() {
         // The sentinel shares the slot of the first vararg parameter.
-        if sig.convention == SignatureCallingConvention::VarArg && i == sig.vararg_start && i < sig.parameters.len()
+        if sig.convention == SignatureCallingConvention::VarArg
+            && i == sig.vararg_start
+            && i < sig.parameters.len()
         {
             w.u8(ET_SENTINEL);
         }
@@ -480,9 +471,7 @@ pub fn parse_property_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<Pro
     let raw = r.u8()?;
     let has_this = raw & CALL_CONVENTION_HAS_THIS != 0;
     if raw & !(CALL_CONVENTION_HAS_THIS | CALL_CONVENTION_EXPLICIT_THIS) != ET_PROPERTY {
-        return Err(Error::bad_image(format!(
-            "expected PROPERTY prolog 0x08, found 0x{raw:02X}"
-        )));
+        return Err(Error::bad_image(format!("expected PROPERTY prolog 0x08, found 0x{raw:02X}")));
     }
     let param_count = r.compressed_u32()?;
     let property_type = read_type_elem(&mut r, ctx)?;
@@ -490,11 +479,7 @@ pub fn parse_property_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<Pro
     for _ in 0..param_count {
         parameters.push(read_type_elem(&mut r, ctx)?);
     }
-    Ok(PropertySignature {
-        has_this,
-        parameters,
-        property_type,
-    })
+    Ok(PropertySignature { has_this, parameters, property_type })
 }
 
 /// Parses a stand-alone local variable signature (`0x07` + count + elements).
@@ -643,9 +628,7 @@ pub fn parse_constant_blob(et: ElementType, blob: &[u8]) -> Result<ConstantValue
             ConstantValue::String(String::from_utf16_lossy(&units))
         }
         other => {
-            return Err(Error::unsupported(format!(
-                "{other:?} is not a constant element type"
-            )))
+            return Err(Error::unsupported(format!("{other:?} is not a constant element type")))
         }
     })
 }
@@ -963,16 +946,8 @@ mod tests {
     #[test]
     fn local_var_sig_pinned_and_byref() {
         let vars = vec![
-            LocalVariable {
-                index: 0,
-                ty: TypeDesc::Internal("bool".into()),
-                pinned: true,
-            },
-            LocalVariable {
-                index: 1,
-                ty: TypeDesc::ByRef(Box::new(i32t())),
-                pinned: false,
-            },
+            LocalVariable { index: 0, ty: TypeDesc::Internal("bool".into()), pinned: true },
+            LocalVariable { index: 1, ty: TypeDesc::ByRef(Box::new(i32t())), pinned: false },
         ];
         let blob = write_local_var_sig(&vars).expect("write");
         assert_eq!(blob, vec![0x07, 0x02, 0x45, 0x02, 0x10, 0x08]);
@@ -983,15 +958,13 @@ mod tests {
     #[test]
     fn parse_type_element_reports_consumed_bytes() {
         let blob = [ElementType::SzArray as u8, ElementType::I4 as u8];
-        let (ty, used) =
-            parse_type_element(&blob, 0, &TestCtx::new(), false).expect("parse");
+        let (ty, used) = parse_type_element(&blob, 0, &TestCtx::new(), false).expect("parse");
         assert_eq!(ty, TypeDesc::SzArray(Box::new(i32t())));
         assert_eq!(used, 2);
 
         // Offset start works too.
         let blob = [0xFF, ElementType::MVar as u8, 0x03];
-        let (ty, used) =
-            parse_type_element(&blob, 1, &TestCtx::new(), false).expect("parse");
+        let (ty, used) = parse_type_element(&blob, 1, &TestCtx::new(), false).expect("parse");
         assert_eq!(ty, TypeDesc::MVar(3));
         assert_eq!(used, 2);
     }
@@ -1051,8 +1024,12 @@ mod tests {
             assert_eq!(tag, et as u8, "element tag for {value:?}");
             let back = parse_constant_blob(et, &payload).expect("parse");
             match (&back, &value) {
-                (ConstantValue::F32(a), ConstantValue::F32(b)) => assert_eq!(a.to_bits(), b.to_bits()),
-                (ConstantValue::F64(a), ConstantValue::F64(b)) => assert_eq!(a.to_bits(), b.to_bits()),
+                (ConstantValue::F32(a), ConstantValue::F32(b)) => {
+                    assert_eq!(a.to_bits(), b.to_bits())
+                }
+                (ConstantValue::F64(a), ConstantValue::F64(b)) => {
+                    assert_eq!(a.to_bits(), b.to_bits())
+                }
                 _ => assert_eq!(back, value),
             }
         }
@@ -1077,18 +1054,14 @@ mod tests {
             let (tag, payload) = write_constant_blob(&ConstantValue::String(s.into())).unwrap();
             assert_eq!(tag, ElementType::String as u8);
             // Raw payload is UTF-16LE.
-            let expected: Vec<u8> = s
-                .encode_utf16()
-                .flat_map(u16::to_le_bytes)
-                .collect();
+            let expected: Vec<u8> = s.encode_utf16().flat_map(u16::to_le_bytes).collect();
             assert_eq!(payload, expected, "utf16le bytes for {s:?}");
             let back = parse_constant_blob(ElementType::String, &payload).unwrap();
             assert_eq!(back, ConstantValue::String(s.into()), "roundtrip {s:?}");
         }
 
         // Odd-length blob: Cecil's reader drops the trailing byte.
-        let (_, mut payload) =
-            write_constant_blob(&ConstantValue::String("abc".into())).unwrap();
+        let (_, mut payload) = write_constant_blob(&ConstantValue::String("abc".into())).unwrap();
         payload.push(0xAA);
         assert_eq!(
             parse_constant_blob(ElementType::String, &payload).unwrap(),

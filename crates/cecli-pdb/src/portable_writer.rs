@@ -247,10 +247,8 @@ impl PortablePdbBuilder {
     /// (compressed count followed by alias/GUID packages); `parent` is a rid
     /// returned by this method, or 0 for no parent.
     pub fn add_import_scope(&mut self, parent: u32, imports: &[u8]) -> u32 {
-        let row = ImportScopeRow {
-            parent_rid: parent,
-            imports_blob: self.metadata.insert_blob(imports),
-        };
+        let row =
+            ImportScopeRow { parent_rid: parent, imports_blob: self.metadata.insert_blob(imports) };
         self.import_scope_rows.push(row);
         self.import_scope_rows.len() as u32
     }
@@ -342,11 +340,11 @@ impl PortablePdbBuilder {
             self.metadata.add_row(
                 TableIndex::Module,
                 &[
-                    0,     // Generation
-                    name,  // Name
-                    guid,  // Mvid
-                    0,     // EncId
-                    0,     // EncBaseId
+                    0,    // Generation
+                    name, // Name
+                    guid, // Mvid
+                    0,    // EncId
+                    0,    // EncBaseId
                 ],
             )?;
         }
@@ -369,8 +367,7 @@ impl PortablePdbBuilder {
                     )?;
                 }
                 None => {
-                    self.metadata
-                        .add_row(TableIndex::MethodDebugInformation, &[0, 0])?;
+                    self.metadata.add_row(TableIndex::MethodDebugInformation, &[0, 0])?;
                 }
             }
         }
@@ -395,11 +392,7 @@ impl PortablePdbBuilder {
         for row in &self.variable_rows {
             self.metadata.add_row(
                 TableIndex::LocalVariable,
-                &[
-                    row.attributes as u64,
-                    row.index as u64,
-                    row.name_string as u64,
-                ],
+                &[row.attributes as u64, row.index as u64, row.name_string as u64],
             )?;
         }
         for row in &self.constant_rows {
@@ -443,9 +436,7 @@ impl PortablePdbBuilder {
 /// Extracts the 1-based `MethodDef` rid from a method token.
 fn method_rid(method: Token) -> Result<u32> {
     if method.is_nil() || method.table_byte() != TableIndex::MethodDef as u8 || method.rid() == 0 {
-        return Err(Error::argument(format!(
-            "{method} is not a MethodDef token"
-        )));
+        return Err(Error::argument(format!("{method} is not a MethodDef token")));
     }
     Ok(method.rid())
 }
@@ -463,9 +454,7 @@ fn validate_offsets(points: &[SequencePoint]) -> Result<()> {
         }
         if let Some(prev) = previous {
             if point.offset < prev {
-                return Err(Error::argument(
-                    "sequence points must be ordered by IL offset",
-                ));
+                return Err(Error::argument("sequence points must be ordered by IL offset"));
             }
         }
         previous = Some(point.offset);
@@ -569,15 +558,14 @@ fn encode_sequence_points(local_sig_rid: u32, points: &[SequencePoint]) -> Resul
 
 /// Checks a delta fits the compressed signed integer domain.
 fn fit_i32(value: i64) -> Result<i32> {
-    i32::try_from(value).map_err(|_| {
-        Error::argument(format!("sequence point delta {value} exceeds 32-bit range"))
-    })
+    i32::try_from(value)
+        .map_err(|_| Error::argument(format!("sequence point delta {value} exceeds 32-bit range")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portable_reader::{HIDDEN_LINE, PortablePdbReader};
+    use crate::portable_reader::{PortablePdbReader, HIDDEN_LINE};
 
     const SHA256_GUID: [u8; 16] = [
         0x88, 0x29, 0x85, 0xA2, 0x1F, 0x72, 0xCE, 0x46, 0xA9, 0x6B, 0x35, 0xFD, 0x0B, 0x25, 0xFA,
@@ -614,13 +602,7 @@ mod tests {
                 end_line: HIDDEN_LINE,
                 end_column: 0,
             },
-            SequencePoint {
-                offset: 5,
-                start_line: 7,
-                start_column: 2,
-                end_line: 7,
-                end_column: 9,
-            },
+            SequencePoint { offset: 5, start_line: 7, start_column: 2, end_line: 7, end_column: 9 },
         ];
         let blob = encode_sequence_points(3, &points).unwrap();
         // Leading sig rid 3, absolute offset 0, hidden sentinel 00 00,
@@ -643,54 +625,29 @@ mod tests {
 
     #[test]
     fn unsorted_or_negative_points_are_rejected() {
-        let ok = SequencePoint {
-            offset: 4,
-            start_line: 1,
-            start_column: 1,
-            end_line: 1,
-            end_column: 5,
-        };
+        let ok =
+            SequencePoint { offset: 4, start_line: 1, start_column: 1, end_line: 1, end_column: 5 };
 
         // Offset ordering and sign are validated on the public API.
         let mut b = PortablePdbBuilder::new();
         let doc = b.add_document("a.cs", [0; 16], &[], [0; 16]);
         let method = Token::new(TableIndex::MethodDef, 1);
 
-        let backwards = SequencePoint {
-            offset: 2,
-            ..ok
-        };
-        let err = b
-            .set_method_sequence_points(method, doc, &[ok, backwards])
-            .unwrap_err();
+        let backwards = SequencePoint { offset: 2, ..ok };
+        let err = b.set_method_sequence_points(method, doc, &[ok, backwards]).unwrap_err();
         assert!(matches!(err, Error::Argument(_)));
 
-        let negative = SequencePoint {
-            offset: -1,
-            ..ok
-        };
-        let err = b
-            .set_method_sequence_points(method, doc, &[negative])
-            .unwrap_err();
+        let negative = SequencePoint { offset: -1, ..ok };
+        let err = b.set_method_sequence_points(method, doc, &[negative]).unwrap_err();
         assert!(matches!(err, Error::Argument(_)));
 
         // Span inversions are caught at encode time (finalize).
-        let inverted_lines = SequencePoint {
-            offset: 0,
-            start_line: 9,
-            start_column: 0,
-            end_line: 3,
-            end_column: 0,
-        };
+        let inverted_lines =
+            SequencePoint { offset: 0, start_line: 9, start_column: 0, end_line: 3, end_column: 0 };
         assert!(encode_sequence_points(0, &[inverted_lines]).is_err());
 
-        let inverted_columns = SequencePoint {
-            offset: 0,
-            start_line: 4,
-            start_column: 9,
-            end_line: 4,
-            end_column: 3,
-        };
+        let inverted_columns =
+            SequencePoint { offset: 0, start_line: 4, start_column: 9, end_line: 4, end_column: 3 };
         assert!(encode_sequence_points(0, &[inverted_columns]).is_err());
     }
 
@@ -713,18 +670,9 @@ mod tests {
 
         // Documents: slash-separated path with an empty segment, a Windows
         // path, and a bare name (no separator).
-        let doc_cs = b.add_document(
-            "/src/lib//prog.cs",
-            SHA256_GUID,
-            &[0x11u8; 32],
-            CSHARP_GUID,
-        );
-        let doc_gen = b.add_document(
-            r"C:\gen\obj\prog.Designer.cs",
-            SHA256_GUID,
-            &[0x22u8; 32],
-            CSHARP_GUID,
-        );
+        let doc_cs = b.add_document("/src/lib//prog.cs", SHA256_GUID, &[0x11u8; 32], CSHARP_GUID);
+        let doc_gen =
+            b.add_document(r"C:\gen\obj\prog.Designer.cs", SHA256_GUID, &[0x22u8; 32], CSHARP_GUID);
         let doc_plain = b.add_document("<unknown>", SHA256_GUID, &[], CSHARP_GUID);
         // Deduplication folds identical names onto the first row.
         assert_eq!(b.add_document("/src/lib//prog.cs", [0; 16], &[], [0; 16]), doc_cs);
@@ -762,8 +710,7 @@ mod tests {
 
         // Second method registered without points keeps the MDI rid aligned
         // with MethodDef rid 2.
-        b.set_method_sequence_points(Token::new(TableIndex::MethodDef, 2), doc_gen, &[])
-            .unwrap();
+        b.set_method_sequence_points(Token::new(TableIndex::MethodDef, 2), doc_gen, &[]).unwrap();
 
         // Third method with points on the plain-named document.
         let points3 = [SequencePoint {
@@ -786,10 +733,7 @@ mod tests {
         let _s1 = b.add_local_scope(
             Token::new(TableIndex::MethodDef, 1),
             root_scope,
-            &[
-                (0u16, "name".to_owned(), 0),
-                (1u16, "count".to_owned(), 1),
-            ],
+            &[(0u16, "name".to_owned(), 0), (1u16, "count".to_owned(), 1)],
             &[("PI", &[0x0C, 0x18, 0x2D, 0x44, 0x54, 0xFB, 0x21, 0x09, 0x40])],
             0,
             4,
@@ -867,10 +811,7 @@ mod tests {
         let consts = reader.local_constants(&scopes[0]).unwrap();
         assert_eq!(consts.len(), 1);
         assert_eq!(consts[0].name, "PI");
-        assert_eq!(
-            consts[0].signature,
-            vec![0x0C, 0x18, 0x2D, 0x44, 0x54, 0xFB, 0x21, 0x09, 0x40]
-        );
+        assert_eq!(consts[0].signature, vec![0x0C, 0x18, 0x2D, 0x44, 0x54, 0xFB, 0x21, 0x09, 0x40]);
 
         // Mandatory Module row + #Pdb heap bookkeeping.
         let md = reader.metadata();
@@ -886,36 +827,24 @@ mod tests {
 
         // Unknown document handle.
         let err = b
-            .set_method_sequence_points(Token::new(TableIndex::MethodDef, 1), DocumentHandle(99), &[])
+            .set_method_sequence_points(
+                Token::new(TableIndex::MethodDef, 1),
+                DocumentHandle(99),
+                &[],
+            )
             .unwrap_err();
         assert!(matches!(err, Error::Argument(_)));
 
         // Non-method tokens.
-        let err = b
-            .set_method_sequence_points(Token::new(TableIndex::Field, 1), doc, &[])
-            .unwrap_err();
+        let err =
+            b.set_method_sequence_points(Token::new(TableIndex::Field, 1), doc, &[]).unwrap_err();
         assert!(matches!(err, Error::Argument(_)));
-        assert_eq!(
-            b.set_local_var_sig(Token::new(TableIndex::Field, 1), 1),
-            ()
-        );
+        assert_eq!(b.set_local_var_sig(Token::new(TableIndex::Field, 1), 1), ());
 
         // Unsorted points.
         let pts = [
-            SequencePoint {
-                offset: 8,
-                start_line: 1,
-                start_column: 1,
-                end_line: 1,
-                end_column: 2,
-            },
-            SequencePoint {
-                offset: 4,
-                start_line: 1,
-                start_column: 3,
-                end_line: 1,
-                end_column: 4,
-            },
+            SequencePoint { offset: 8, start_line: 1, start_column: 1, end_line: 1, end_column: 2 },
+            SequencePoint { offset: 4, start_line: 1, start_column: 3, end_line: 1, end_column: 4 },
         ];
         let err = b
             .set_method_sequence_points(Token::new(TableIndex::MethodDef, 1), doc, &pts)

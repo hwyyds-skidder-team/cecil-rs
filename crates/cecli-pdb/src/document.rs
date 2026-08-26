@@ -24,12 +24,7 @@ pub struct Document {
 impl Document {
     /// Creates an empty document with the given name.
     pub fn new(name: impl Into<String>) -> Self {
-        Document {
-            name: name.into(),
-            hash_algorithm: [0; 16],
-            hash: Vec::new(),
-            language: [0; 16],
-        }
+        Document { name: name.into(), hash_algorithm: [0; 16], hash: Vec::new(), language: [0; 16] }
     }
 }
 

@@ -26,10 +26,7 @@ pub fn require_fixtures() -> Option<PathBuf> {
     if dir.is_dir() {
         Some(dir)
     } else {
-        eprintln!(
-            "skipping: fixtures directory {} not found",
-            dir.display()
-        );
+        eprintln!("skipping: fixtures directory {} not found", dir.display());
         None
     }
 }
@@ -43,10 +40,7 @@ pub fn roundtrip_fixtures(dir: &std::path::Path) -> Vec<PathBuf> {
         .unwrap_or_else(|e| panic!("fixtures directory {}: {e:?}", dir.display()))
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| {
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_ascii_lowercase());
+            let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
             ext.is_some() && SWEEP_EXTENSIONS.contains(&ext.unwrap().as_str())
         })
         .collect();
@@ -173,10 +167,7 @@ pub fn collect_attribute_type_names(module: &Module) -> BTreeSet<String> {
     }
     for m in &module.methods {
         m.custom_attributes.iter().for_each(&mut push);
-        m.return_parameter
-            .custom_attributes
-            .iter()
-            .for_each(&mut push);
+        m.return_parameter.custom_attributes.iter().for_each(&mut push);
         for p in &m.parameters {
             p.custom_attributes.iter().for_each(&mut push);
         }

@@ -170,7 +170,6 @@ impl FieldDefinitionTreatment {
     }
 }
 
-
 /// Custom-attribute-record treatment (Treatments.cs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CustomAttributeValueTreatment {
@@ -329,12 +328,7 @@ pub static PROJECTIONS: &[ProjectionInfo] = &[
         "IReadOnlyList`1",
         "System.Runtime",
     ),
-    pi(
-        "Windows.Foundation.Collections",
-        "System.Collections.Generic",
-        "IList`1",
-        "System.Runtime",
-    ),
+    pi("Windows.Foundation.Collections", "System.Collections.Generic", "IList`1", "System.Runtime"),
     pi(
         "Windows.UI.Xaml.Media.Animation",
         "Windows.UI.Xaml.Media.Animation",
@@ -470,10 +464,7 @@ static PROJECTION_KEYS: &[&str] = &[
 /// type name.
 pub fn well_known_projection(name: &str) -> Option<&'static ProjectionInfo> {
     debug_assert_eq!(PROJECTIONS.len(), PROJECTION_KEYS.len());
-    PROJECTION_KEYS
-        .iter()
-        .position(|k| *k == name)
-        .map(|i| &PROJECTIONS[i])
+    PROJECTION_KEYS.iter().position(|k| *k == name).map(|i| &PROJECTIONS[i])
 }
 
 // ---------------------------------------------------------------------------
@@ -724,26 +715,17 @@ pub fn remove_projections(m: &mut Module) -> Result<()> {
 
 /// Whether the type definition carries an active projection record.
 pub fn is_projected_type(m: &Module, id: TypeId) -> bool {
-    lock_store()
-        .get(&m.guid)
-        .map(|st| st.types.contains_key(&id.0))
-        .unwrap_or(false)
+    lock_store().get(&m.guid).map(|st| st.types.contains_key(&id.0)).unwrap_or(false)
 }
 
 /// Whether the method definition carries an active projection record.
 pub fn is_projected_method(m: &Module, id: MethodId) -> bool {
-    lock_store()
-        .get(&m.guid)
-        .map(|st| st.methods.contains_key(&id.0))
-        .unwrap_or(false)
+    lock_store().get(&m.guid).map(|st| st.methods.contains_key(&id.0)).unwrap_or(false)
 }
 
 /// Whether the field definition carries an active projection record.
 pub fn is_projected_field(m: &Module, id: FieldId) -> bool {
-    lock_store()
-        .get(&m.guid)
-        .map(|st| st.fields.contains_key(&id.0))
-        .unwrap_or(false)
+    lock_store().get(&m.guid).map(|st| st.fields.contains_key(&id.0)).unwrap_or(false)
 }
 
 /// Whether any projection state is registered for the module.
@@ -929,7 +911,8 @@ fn walk_marshal(
     mi: &mut Option<MarshalInfo>,
     f: &mut dyn FnMut(&mut ExternalType) -> Result<()>,
 ) -> Result<()> {
-    if let Some(MarshalInfo { spec: NativeTypeSpec::SafeArray { element_desc: Some(d), .. } }) = mi {
+    if let Some(MarshalInfo { spec: NativeTypeSpec::SafeArray { element_desc: Some(d), .. } }) = mi
+    {
         walk_type_desc(d, f)?;
     }
     Ok(())
@@ -1103,7 +1086,7 @@ fn well_known_type_definition_treatment(name: &str, namespace: &str) -> TypeDefi
 
 /// Extracts the element `ExternalType` of an attribute constructor's
 /// declaring type (stripping generic instantiations).
-fn attribute_type_identity<'a>(ctor: &'a MethodRef) -> Option<&'a ExternalType> {
+fn attribute_type_identity(ctor: &MethodRef) -> Option<&ExternalType> {
     match ctor {
         MethodRef::External(em) => element_external(&em.parent),
         _ => None,
@@ -1130,9 +1113,10 @@ fn element_external(td: &TypeDesc) -> Option<&ExternalType> {
 /// `HasAttribute(customAttributes, ns, name)` — matched by the attribute
 /// constructor's declaring-type identity.
 fn has_attribute(attrs: &[CustomAttribute], namespace: &str, name: &str) -> bool {
-    attrs
-        .iter()
-        .any(|a| attribute_type_identity(&a.constructor).is_some_and(|e| e.name == name && e.namespace == namespace))
+    attrs.iter().any(|a| {
+        attribute_type_identity(&a.constructor)
+            .is_some_and(|e| e.name == name && e.namespace == namespace)
+    })
 }
 
 fn is_redirected_type(
@@ -1207,11 +1191,7 @@ fn resolve_local(m: &Module, td: &TypeDesc) -> Option<TypeId> {
 }
 
 fn nested_child(m: &Module, parent: TypeId, name: &str) -> Option<TypeId> {
-    m.type_def(parent)
-        .nested_types
-        .iter()
-        .copied()
-        .find(|id| m.type_def(*id).name == name)
+    m.type_def(parent).nested_types.iter().copied().find(|id| m.type_def(*id).name == name)
 }
 
 /// Deep-clones a type with generic-variable substitution applied.
@@ -1283,8 +1263,9 @@ fn generate_redirection_information(
     let mut pairs = Vec::new();
     for it in &t.interfaces {
         if is_redirected_type(it, refs) {
-            let unprojected = unproject_type(it, refs)
-                .ok_or_else(|| Error::invalid_op("redirected interface lost its projection record"))?;
+            let unprojected = unproject_type(it, refs).ok_or_else(|| {
+                Error::invalid_op("redirected interface lost its projection record")
+            })?;
             pairs.push((it.clone(), unprojected));
         }
     }
@@ -1526,7 +1507,7 @@ fn project_type_definition(m: &mut Module, id: TypeId, st: &mut ModuleProjection
                 added.push(mid);
             }
             let rec = st.types.get_mut(&id.0).unwrap();
-            rec.redirected_method_ids = added.iter().copied().collect();
+            rec.redirected_method_ids = added.to_vec();
             st.added_methods.extend(added.iter().map(|mid| mid.0));
         }
         _ => {}
@@ -1599,7 +1580,9 @@ fn implements_redirected_interface(
     let Some(parent) = parent else { return false };
     let element_ok = match parent {
         TypeDesc::External(_) => true,
-        TypeDesc::GenericInstance { definition, .. } => matches!(**definition, TypeDesc::External(_)),
+        TypeDesc::GenericInstance { definition, .. } => {
+            matches!(**definition, TypeDesc::External(_))
+        }
         _ => false,
     };
     if !element_ok {
@@ -1634,7 +1617,11 @@ fn method_treatment_from_attributes(attrs: &[CustomAttribute]) -> MethodDefiniti
     treatment
 }
 
-fn project_method_definition(m: &mut Module, id: MethodId, st: &mut ModuleProjections) -> Result<()> {
+fn project_method_definition(
+    m: &mut Module,
+    id: MethodId,
+    st: &mut ModuleProjections,
+) -> Result<()> {
     if st.added_methods.contains(&id.0) {
         return Ok(()); // synthesized redirected methods are never re-projected
     }
@@ -1670,8 +1657,8 @@ fn project_method_definition(m: &mut Module, id: MethodId, st: &mut ModuleProjec
             if let Some(TypeDesc::External(base)) = &dt_base {
                 match special_type_reference_treatment(&base.namespace, &base.name) {
                     TypeReferenceTreatment::SystemDelegate => {
-                        treatment = MethodDefinitionTreatment::RUNTIME
-                            | MethodDefinitionTreatment::PUBLIC;
+                        treatment =
+                            MethodDefinitionTreatment::RUNTIME | MethodDefinitionTreatment::PUBLIC;
                         other = false;
                     }
                     TypeReferenceTreatment::SystemAttribute => {
@@ -1913,11 +1900,7 @@ fn project_attribute_records(m: &mut Module, st: &mut ModuleProjections) -> Resu
 
             st.attributes.insert(
                 (tid.0, idx as u32),
-                CustomAttributeValueProjection {
-                    targets,
-                    treatment,
-                    original_blob: attr.blob,
-                },
+                CustomAttributeValueProjection { targets, treatment, original_blob: attr.blob },
             );
         }
     }
@@ -1926,10 +1909,8 @@ fn project_attribute_records(m: &mut Module, st: &mut ModuleProjections) -> Resu
 
 fn remove_attribute_records(m: &mut Module, st: &mut ModuleProjections) {
     for ((ti, idx), rec) in std::mem::take(&mut st.attributes) {
-        if let Some(attr) = m
-            .types
-            .get_mut(ti as usize)
-            .and_then(|t| t.custom_attributes.get_mut(idx as usize))
+        if let Some(attr) =
+            m.types.get_mut(ti as usize).and_then(|t| t.custom_attributes.get_mut(idx as usize))
         {
             attr.blob = rec.original_blob;
         }
@@ -2041,8 +2022,8 @@ mod tests {
     /// the boolean payload (Cecil writes `false` for AllowSingle too).
     const fn allow_multiple_tail(value: u8) -> [u8; 17] {
         [
-            0x54, 0x02, 13, b'A', b'l', b'l', b'o', b'w', b'M', b'u', b'l', b't', b'i', b'p',
-            b'l', b'e', value,
+            0x54, 0x02, 13, b'A', b'l', b'l', b'o', b'w', b'M', b'u', b'l', b't', b'i', b'p', b'l',
+            b'e', value,
         ]
     }
 
@@ -2110,11 +2091,8 @@ mod tests {
     #[test]
     fn redirect_to_clr_attribute_and_internal_variant() {
         let mut m = fixture_module(MetadataKind::WindowsMetadata, 0x12);
-        let tid = m.add_type(ty(
-            "Windows.Foundation.Metadata",
-            "AttributeUsageAttribute",
-            wr_public(),
-        ));
+        let tid =
+            m.add_type(ty("Windows.Foundation.Metadata", "AttributeUsageAttribute", wr_public()));
         // WinRT namespace spelling -> redirect + Internal (public cleared).
         let plain = m.add_type(ty("Windows.Foundation", "DateTime", wr_public()));
 
@@ -2251,11 +2229,7 @@ mod tests {
     #[test]
     fn system_delegate_reference_rescope() {
         let mut m = fixture_module(MetadataKind::WindowsMetadata, 0x19);
-        let mut del = ty(
-            "F",
-            "MyDelegate",
-            wr_public() | TypeAttributes::SEALED,
-        );
+        let mut del = ty("F", "MyDelegate", wr_public() | TypeAttributes::SEALED);
         del.base_type = Some(ext("System", "MulticastDelegate"));
         m.add_type(del);
         // Standalone delegate-typed field exercises the reference-only path.
@@ -2314,11 +2288,7 @@ mod tests {
         );
 
         // Interface method: Runtime|InternalCall.
-        let iid = m.add_type(ty(
-            "F",
-            "IFoo",
-            wr_public() | TypeAttributes::INTERFACE,
-        ));
+        let iid = m.add_type(ty("F", "IFoo", wr_public() | TypeAttributes::INTERFACE));
         let im = add_method(
             &mut m,
             iid,
@@ -2342,10 +2312,9 @@ mod tests {
         assert!(ct.impl_attributes.contains(MethodImplAttributes::INTERNAL_CALL));
 
         let ifm = m.method_def(im);
-        assert!(
-            ifm.impl_attributes
-                .contains(MethodImplAttributes::RUNTIME | MethodImplAttributes::INTERNAL_CALL)
-        );
+        assert!(ifm
+            .impl_attributes
+            .contains(MethodImplAttributes::RUNTIME | MethodImplAttributes::INTERNAL_CALL));
 
         remove_projections(&mut m).unwrap();
         assert_eq!(
@@ -2366,7 +2335,13 @@ mod tests {
         let mut t = ty("F", "C", wr_public());
         t.base_type = Some(ext("System", "Object"));
         let cid = m.add_type(t);
-        let privm = add_method(&mut m, cid, "Secret", MethodAttributes::PRIVATE, void_sig(TypeDesc::Sentinel));
+        let privm = add_method(
+            &mut m,
+            cid,
+            "Secret",
+            MethodAttributes::PRIVATE,
+            void_sig(TypeDesc::Sentinel),
+        );
 
         apply_projections(&mut m).unwrap();
         assert!(!is_projected_method(&m, privm));
@@ -2382,7 +2357,8 @@ mod tests {
         let mut t = ty("F", "C", wr_public());
         t.base_type = Some(ext("System", "Object"));
         let cid = m.add_type(t);
-        let mid = add_method(&mut m, cid, "Go", MethodAttributes::PRIVATE, void_sig(TypeDesc::Sentinel));
+        let mid =
+            add_method(&mut m, cid, "Go", MethodAttributes::PRIVATE, void_sig(TypeDesc::Sentinel));
         m.method_mut(mid)
             .unwrap()
             .custom_attributes
@@ -2417,7 +2393,9 @@ mod tests {
             eid,
             FieldDefinition {
                 name: "One".into(),
-                attributes: FieldAttributes::STATIC | FieldAttributes::LITERAL | FieldAttributes::PUBLIC,
+                attributes: FieldAttributes::STATIC
+                    | FieldAttributes::LITERAL
+                    | FieldAttributes::PUBLIC,
                 signature: FieldSignature(TypeDesc::Internal("F.MyEnum".into())),
                 ..FieldDefinition::default()
             },
@@ -2470,7 +2448,10 @@ mod tests {
         // Class implementing IIterable`1<Thing> with a metadata override.
         let mut cls = ty("Fabrikam", "Widget", wr_public());
         cls.base_type = Some(ext("System", "Object"));
-        let iface_ref = gi(ext("Windows.Foundation.Collections", "IIterable`1"), vec![ext("Fabrikam", "Thing")]);
+        let iface_ref = gi(
+            ext("Windows.Foundation.Collections", "IIterable`1"),
+            vec![ext("Fabrikam", "Thing")],
+        );
         cls.interfaces.push(iface_ref.clone());
         let wid = m.add_type(cls);
         let impl_id = add_method(
@@ -2513,11 +2494,9 @@ mod tests {
         // Existing implementation became private runtime icall.
         let impl_meth = m.method_def(impl_id);
         assert!(impl_meth.attributes.contains(MethodAttributes::PRIVATE));
-        assert!(
-            impl_meth
-                .impl_attributes
-                .contains(MethodImplAttributes::RUNTIME | MethodImplAttributes::INTERNAL_CALL)
-        );
+        assert!(impl_meth
+            .impl_attributes
+            .contains(MethodImplAttributes::RUNTIME | MethodImplAttributes::INTERNAL_CALL));
         // Override rewired to the unprojected interface.
         match &impl_meth.overrides[0].declaration {
             MethodRef::External(em) => assert_eq!(em.parent, iface_ref),
@@ -2669,11 +2648,8 @@ mod tests {
         let sr = m.assembly_refs.iter().find(|r| r.name == "System.Runtime").unwrap();
         assert_eq!(sr.version, PROJECTION_VERSION);
         assert_eq!(sr.public_key_or_token, CONTRACT_PK_TOKEN);
-        let wr = m
-            .assembly_refs
-            .iter()
-            .find(|r| r.name == "System.Runtime.WindowsRuntime")
-            .unwrap();
+        let wr =
+            m.assembly_refs.iter().find(|r| r.name == "System.Runtime.WindowsRuntime").unwrap();
         assert_eq!(wr.public_key_or_token, CONTRACT_PK_TOKEN); // inherited from corlib
 
         remove_projections(&mut m).unwrap();

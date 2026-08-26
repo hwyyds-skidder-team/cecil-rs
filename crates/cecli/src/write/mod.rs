@@ -1,6 +1,6 @@
 // writer modules
+pub mod classifier;
 pub mod emit_il;
 pub mod emit_metadata;
 pub mod resources;
 pub mod token_map;
-pub mod classifier;

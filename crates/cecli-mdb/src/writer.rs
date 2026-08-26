@@ -13,7 +13,6 @@ use cecli_core::{Error, Result, Token};
 
 use crate::reader::{OffsetTable, MAGIC, MAJOR_VERSION, MINOR_VERSION};
 
-
 /// `MethodEntry.Flags.ColumnsInfoIncluded`: this writer always emits the
 /// trailing column section, mirroring `SourceMethodBuilder.DefineMethod`.
 const FLAGS_COLUMNS_INFO_INCLUDED: u32 = 1 << 1;
@@ -67,12 +66,7 @@ impl MdbWriter {
     /// Creates a builder bound to `guid`, the module guid the resulting file
     /// belongs to (`ModuleVersionId`).
     pub fn new(guid: [u8; 16]) -> Self {
-        MdbWriter {
-            guid,
-            sources: Vec::new(),
-            compile_units: Vec::new(),
-            methods: Vec::new(),
-        }
+        MdbWriter { guid, sources: Vec::new(), compile_units: Vec::new(), methods: Vec::new() }
     }
 
     /// Registers a source document and returns its 1-based id.
@@ -110,10 +104,8 @@ impl MdbWriter {
         entries: &[(i32, i32)],
         source: u32,
     ) {
-        let points: Vec<(i32, i32, u32)> = entries
-            .iter()
-            .map(|&(offset, line)| (offset, line, source))
-            .collect();
+        let points: Vec<(i32, i32, u32)> =
+            entries.iter().map(|&(offset, line)| (offset, line, source)).collect();
         self.mark_sequence_points(method, cu, 0, &points);
     }
 
@@ -150,20 +142,10 @@ impl MdbWriter {
             match m.lines.iter_mut().rev().find(|l| l.offset == offset) {
                 Some(prev) => {
                     if (row, -1) > (prev.row, prev.column) {
-                        *prev = LineEntry {
-                            file,
-                            row,
-                            column: -1,
-                            offset,
-                        };
+                        *prev = LineEntry { file, row, column: -1, offset };
                     }
                 }
-                None => m.lines.push(LineEntry {
-                    file,
-                    row,
-                    column: -1,
-                    offset,
-                }),
+                None => m.lines.push(LineEntry { file, row, column: -1, offset }),
             }
         }
         // CheckLineNumberTable demands non-decreasing offsets; sort stably so
@@ -182,11 +164,7 @@ impl MdbWriter {
     ) -> Result<()> {
         match self.methods.iter_mut().find(|m| m.token == method) {
             Some(m) => {
-                m.locals.push(LocalVariable {
-                    index,
-                    name: name.to_owned(),
-                    block_index,
-                });
+                m.locals.push(LocalVariable { index, name: name.to_owned(), block_index });
                 Ok(())
             }
             None => Err(Error::argument(format!(
@@ -438,7 +416,7 @@ fn encode_line_number_table(w: &mut ByteWriter, lines: &[LineEntry], flags: u32)
             }
         }
 
-        if line_inc < LINE_BASE || line_inc >= LINE_BASE + LINE_RANGE {
+        if !(LINE_BASE..LINE_BASE + LINE_RANGE).contains(&line_inc) {
             w.u8(DW_LNS_ADVANCE_LINE);
             write_leb128(w, line_inc);
             if offset_inc != 0 {
@@ -497,12 +475,7 @@ mod tests {
         let m3 = method(0x06, 3);
         // Register methods out of token order to prove finalize sorts them.
         w.add_method_lines(m1, cu, &[(0, 10), (4, 11), (8, 12)], s1);
-        w.mark_sequence_points(
-            m2,
-            cu,
-            0,
-            &[(0, 20, s1), (4, 30, s2), (8, 21, s1), (12, 31, s2)],
-        );
+        w.mark_sequence_points(m2, cu, 0, &[(0, 20, s1), (4, 30, s2), (8, 21, s1), (12, 31, s2)]);
         w.add_method_lines(m3, cu, &[(0, 40), (2, 41), (100, 42)], s2);
 
         let bytes = w.finalize();
@@ -538,7 +511,7 @@ mod tests {
         assert_eq!(methods[0].token, m1);
         assert_eq!(methods[1].token, m2);
         assert_eq!(methods[2].token, m3);
-        assert!(methods.iter().all(|m| m.compile_unit == cu as u32));
+        assert!(methods.iter().all(|m| m.compile_unit == cu));
 
         let l1 = r.method_lines(1).unwrap().unwrap();
         assert_eq!(l1.il_offsets, vec![0, 4, 8]);

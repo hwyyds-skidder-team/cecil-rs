@@ -222,7 +222,7 @@ impl TableIndex {
     }
 
     pub fn is_portable_pdb_table(byte: u8) -> bool {
-        byte >= TableIndex::PORTABLE_PDB_FIRST && byte <= 0x37
+        (TableIndex::PORTABLE_PDB_FIRST..=0x37).contains(&byte)
     }
 }
 
@@ -400,7 +400,11 @@ impl CodedIndexGroup {
 
     /// Explicit tag-bit override for groups whose spec reserves unused slots.
     #[deprecated(note = "use with_layout; with_tag_bits assumes first_tag = 0")]
-    pub const fn with_tag_bits(name: &'static str, tables: &'static [TableIndex], tag_bits: u32) -> Self {
+    pub const fn with_tag_bits(
+        name: &'static str,
+        tables: &'static [TableIndex],
+        tag_bits: u32,
+    ) -> Self {
         CodedIndexGroup { name, tables, tag_bits, first_tag: 0 }
     }
 
@@ -420,21 +424,38 @@ macro_rules! group {
 pub mod coded {
     use super::{CodedIndexGroup, TableIndex};
 
-    pub const TYPE_DEF_OR_REF: CodedIndexGroup =
-        group!("TypeDefOrRef", TypeDef, TypeRef, TypeSpec);
+    pub const TYPE_DEF_OR_REF: CodedIndexGroup = group!("TypeDefOrRef", TypeDef, TypeRef, TypeSpec);
     pub const HAS_CONSTANT: CodedIndexGroup = group!("HasConstant", Field, Param, Property);
     pub const HAS_CUSTOM_ATTRIBUTE: CodedIndexGroup = group!(
-        "HasCustomAttribute", MethodDef, Field, TypeRef, TypeDef, Param, InterfaceImpl,
-        MemberRef, Module, DeclSecurity, Property, Event, StandAloneSig,
-        ModuleRef, TypeSpec, Assembly, AssemblyRef, File, ExportedType, ManifestResource,
-        GenericParam, GenericParamConstraint, MethodSpec
+        "HasCustomAttribute",
+        MethodDef,
+        Field,
+        TypeRef,
+        TypeDef,
+        Param,
+        InterfaceImpl,
+        MemberRef,
+        Module,
+        DeclSecurity,
+        Property,
+        Event,
+        StandAloneSig,
+        ModuleRef,
+        TypeSpec,
+        Assembly,
+        AssemblyRef,
+        File,
+        ExportedType,
+        ManifestResource,
+        GenericParam,
+        GenericParamConstraint,
+        MethodSpec
     );
     pub const HAS_FIELD_MARSHAL: CodedIndexGroup = group!("HasFieldMarshal", Field, Param);
     pub const HAS_DECL_SECURITY: CodedIndexGroup =
         group!("HasDeclSecurity", TypeDef, MethodDef, Assembly);
-    pub const MEMBER_REF_PARENT: CodedIndexGroup = group!(
-        "MemberRefParent", TypeDef, TypeRef, ModuleRef, MethodDef, TypeSpec
-    );
+    pub const MEMBER_REF_PARENT: CodedIndexGroup =
+        group!("MemberRefParent", TypeDef, TypeRef, ModuleRef, MethodDef, TypeSpec);
     pub const CUSTOM_ATTRIBUTE_TYPE: CodedIndexGroup = CodedIndexGroup::with_layout(
         "CustomAttributeType",
         &[TableIndex::MethodDef, TableIndex::MemberRef],
@@ -448,14 +469,36 @@ pub mod coded {
         group!("Implementation", File, AssemblyRef, ExportedType);
     pub const RESOLUTION_SCOPE: CodedIndexGroup =
         group!("ResolutionScope", Module, ModuleRef, AssemblyRef, TypeRef);
-    pub const TYPE_OR_METHOD_DEF: CodedIndexGroup =
-        group!("TypeOrMethodDef", TypeDef, MethodDef);
+    pub const TYPE_OR_METHOD_DEF: CodedIndexGroup = group!("TypeOrMethodDef", TypeDef, MethodDef);
     // Portable PDB coded indexes.
     pub const HAS_CUSTOM_DEBUG_INFORMATION: CodedIndexGroup = group!(
-        "HasCustomDebugInformation", MethodDef, Field, TypeRef, TypeDef, Param, InterfaceImpl,
-        MemberRef, Module, DeclSecurity, Property, Event, StandAloneSig, ModuleRef, TypeSpec,
-        Assembly, AssemblyRef, File, ExportedType, ManifestResource, GenericParam,
-        GenericParamConstraint, MethodSpec, Document, LocalScope, LocalVariable, LocalConstant,
+        "HasCustomDebugInformation",
+        MethodDef,
+        Field,
+        TypeRef,
+        TypeDef,
+        Param,
+        InterfaceImpl,
+        MemberRef,
+        Module,
+        DeclSecurity,
+        Property,
+        Event,
+        StandAloneSig,
+        ModuleRef,
+        TypeSpec,
+        Assembly,
+        AssemblyRef,
+        File,
+        ExportedType,
+        ManifestResource,
+        GenericParam,
+        GenericParamConstraint,
+        MethodSpec,
+        Document,
+        LocalScope,
+        LocalVariable,
+        LocalConstant,
         ImportScope
     );
 }

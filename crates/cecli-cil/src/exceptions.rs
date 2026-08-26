@@ -102,9 +102,7 @@ pub fn write_clause(out: &mut ByteWriter, handler: &ExceptionHandler, fat: bool)
         out.i32(handler.handler_length);
         match handler.handler_type {
             ExceptionHandlerType::Catch => out.u32(handler.catch_type.0),
-            ExceptionHandlerType::Filter => {
-                out.i32(handler.filter_start.unwrap_or_default())
-            }
+            ExceptionHandlerType::Filter => out.i32(handler.filter_start.unwrap_or_default()),
             ExceptionHandlerType::Finally | ExceptionHandlerType::Fault => out.u32(0),
         }
     } else {
@@ -115,23 +113,15 @@ pub fn write_clause(out: &mut ByteWriter, handler: &ExceptionHandler, fat: bool)
             return Err(Error::invalid_op("try length does not fit a small clause"));
         }
         if handler.handler_start < 0 || handler.handler_start > u16::MAX as i32 {
-            return Err(Error::invalid_op(
-                "handler offset does not fit a small clause",
-            ));
+            return Err(Error::invalid_op("handler offset does not fit a small clause"));
         }
         if handler.handler_length < 0 || handler.handler_length > u8::MAX as i32 {
-            return Err(Error::invalid_op(
-                "handler length does not fit a small clause",
-            ));
+            return Err(Error::invalid_op("handler length does not fit a small clause"));
         }
         if handler.handler_type == ExceptionHandlerType::Filter
-            && handler
-                .filter_start
-                .map_or(false, |f| f < 0 || f > u16::MAX as i32)
+            && handler.filter_start.is_some_and(|f| f < 0 || f > u16::MAX as i32)
         {
-            return Err(Error::invalid_op(
-                "filter offset does not fit a small clause",
-            ));
+            return Err(Error::invalid_op("filter offset does not fit a small clause"));
         }
         out.u16(kind as u16);
         out.u16(handler.try_start as u16);
@@ -151,29 +141,18 @@ pub fn write_clause(out: &mut ByteWriter, handler: &ExceptionHandler, fat: bool)
 
 /// Reads a single clause in the given form starting at the reader position.
 pub fn read_clause(reader: &mut ByteReader<'_>, fat: bool) -> Result<ExceptionHandler> {
-    let (kind_raw, try_start, try_len, handler_start, handler_len): (
-        u32,
-        i32,
-        i32,
-        i32,
-        i32,
-    ) = if fat {
-        (
-            reader.u32()?,
-            reader.i32()?,
-            reader.i32()?,
-            reader.i32()?,
-            reader.i32()?,
-        )
-    } else {
-        (
-            reader.u16()? as u32,
-            reader.u16()? as i32,
-            reader.u8()? as i32,
-            reader.u16()? as i32,
-            reader.u8()? as i32,
-        )
-    };
+    let (kind_raw, try_start, try_len, handler_start, handler_len): (u32, i32, i32, i32, i32) =
+        if fat {
+            (reader.u32()?, reader.i32()?, reader.i32()?, reader.i32()?, reader.i32()?)
+        } else {
+            (
+                reader.u16()? as u32,
+                reader.u16()? as i32,
+                reader.u8()? as i32,
+                reader.u16()? as i32,
+                reader.u8()? as i32,
+            )
+        };
 
     let handler_type = ExceptionHandlerType::from_discriminant(kind_raw)
         .ok_or_else(|| Error::bad_image(format!("invalid exception clause kind {kind_raw:#x}")))?;
@@ -278,7 +257,6 @@ pub fn parse_sections(data: &[u8]) -> Result<(Vec<ExceptionHandler>, bool)> {
         reader.align(4)?;
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -22,21 +22,13 @@ impl ByteBuffer {
 
     /// A zero-filled buffer of `length` bytes.
     pub fn zeroed(length: usize) -> Self {
-        ByteBuffer {
-            data: vec![0; length],
-            length,
-            position: 0,
-        }
+        ByteBuffer { data: vec![0; length], length, position: 0 }
     }
 
     /// Wraps an existing buffer; the initial length is the full slice length.
     pub fn from_vec(data: Vec<u8>) -> Self {
         let length = data.len();
-        ByteBuffer {
-            data,
-            length,
-            position: 0,
-        }
+        ByteBuffer { data, length, position: 0 }
     }
 
     /// Wraps a borrowed slice into an owned buffer.
@@ -135,9 +127,7 @@ impl ByteBuffer {
 
     pub fn u64(&mut self) -> Result<u64> {
         let b = self.take(8)?;
-        Ok(u64::from_le_bytes([
-            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-        ]))
+        Ok(u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
     }
 
     pub fn i64(&mut self) -> Result<i64> {
@@ -147,7 +137,6 @@ impl ByteBuffer {
     pub fn f32(&mut self) -> Result<f32> {
         Ok(f32::from_bits(self.u32()?))
     }
-
 
     /// Mutable access to the valid portion, for in-place patching.
     pub fn data_mut(&mut self) -> &mut [u8] {
@@ -199,7 +188,6 @@ impl ByteBuffer {
             self.data.resize(self.position + desired, 0);
         }
     }
-
 
     pub fn write_byte(&mut self, value: u8) {
         self.ensure_capacity(1);
@@ -340,7 +328,17 @@ mod tests {
     #[test]
     fn compressed_i32_matches_core() {
         let cases = [
-            0i32, 1, -1, 63, -64, 8191, -8192, 268_435_455, -268_435_456, 134_217_727, -134_217_728,
+            0i32,
+            1,
+            -1,
+            63,
+            -64,
+            8191,
+            -8192,
+            268_435_455,
+            -268_435_456,
+            134_217_727,
+            -134_217_728,
         ];
         for &c in &cases {
             let mut b = ByteBuffer::new();
@@ -354,7 +352,8 @@ mod tests {
             assert_eq!(back.compressed_i32().unwrap(), c, "decode mismatch for {c}");
             // The envelope must agree with the shared core encoder.
             assert_eq!(
-                encoded, core.as_slice(),
+                encoded,
+                core.as_slice(),
                 "envelope mismatch for {c}: ours {encoded:?} vs core {:?}",
                 core.as_slice()
             );

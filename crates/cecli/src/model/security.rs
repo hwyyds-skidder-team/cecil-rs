@@ -78,9 +78,7 @@ pub fn decode_security_xml(blob: &[u8]) -> Result<String> {
 pub fn encode_security_xml(xml: &str) -> Result<Vec<u8>> {
     let permissions = parse_ipermissions(xml)?;
     if permissions.is_empty() {
-        return Err(Error::argument(
-            "no <IPermission> elements found in permission-set XML",
-        ));
+        return Err(Error::argument("no <IPermission> elements found in permission-set XML"));
     }
 
     let mut w = ByteWriter::new();
@@ -124,15 +122,12 @@ fn compressed_len(v: u32) -> usize {
 // ---------------------------------------------------------------------------
 
 fn decode_legacy_xml(blob: &[u8]) -> Result<String> {
-    if blob.len() % 2 != 0 {
+    if !blob.len().is_multiple_of(2) {
         return Err(Error::bad_image(
             "legacy security blob must be a whole number of UTF-16 code units",
         ));
     }
-    let units: Vec<u16> = blob
-        .chunks_exact(2)
-        .map(|p| u16::from_le_bytes([p[0], p[1]]))
-        .collect();
+    let units: Vec<u16> = blob.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect();
     let mut xml = String::from_utf16(&units)
         .map_err(|_| Error::bad_image("invalid UTF-16 in legacy security blob"))?;
     while xml.ends_with('\0') {
@@ -367,7 +362,7 @@ mod tests {
         // Odd number of bytes cannot be UTF-16.
         assert!(decode_security_xml(&[0x3c]).is_err());
         // Binary marker but truncated attribute count.
-        assert!(decode_security_xml(&[b'.']).is_err());
+        assert!(decode_security_xml(b".").is_err());
         // Binary marker + count but truncated class name.
         assert!(decode_security_xml(&[b'.', 0x01, 0x05, b'A']).is_err());
         // Truncated named-argument section.
@@ -388,9 +383,7 @@ mod tests {
         assert!(encode_security_xml("<PermissionSet></PermissionSet>").is_err());
         assert!(encode_security_xml("").is_err());
         // Missing 'class' attribute.
-        assert!(encode_security_xml(
-            "<PermissionSet><IPermission version=\"1\"/></PermissionSet>"
-        )
-        .is_err());
+        assert!(encode_security_xml("<PermissionSet><IPermission version=\"1\"/></PermissionSet>")
+            .is_err());
     }
 }

@@ -110,26 +110,18 @@ impl<'a> MetadataReader<'a> {
         Ok(match width {
             1 => u64::from(bytes[0]),
             2 => u64::from(u16::from_le_bytes([bytes[0], bytes[1]])),
-            4 => u64::from(u32::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3],
-            ])),
+            4 => u64::from(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
             8 => u64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
             ]),
-            n => {
-                return Err(Error::bad_image(format!(
-                    "unsupported cell width {n}"
-                )))
-            }
+            n => return Err(Error::bad_image(format!("unsupported cell width {n}"))),
         })
     }
 
     /// All cells of row `rid` (1-based) of `table`.
     pub fn row(&self, table: TableIndex, rid: u32) -> Result<Vec<u64>> {
         let count = self.column_count(table);
-        (0..count)
-            .map(|col| self.column(table, rid, col))
-            .collect()
+        (0..count).map(|col| self.column(table, rid, col)).collect()
     }
 }
 

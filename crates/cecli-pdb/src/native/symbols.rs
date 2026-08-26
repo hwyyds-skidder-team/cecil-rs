@@ -222,7 +222,7 @@ impl<'a> BitReader<'a> {
     }
 
     fn align(&mut self, boundary: usize) {
-        self.pos = (self.pos + boundary - 1) / boundary * boundary;
+        self.pos = self.pos.div_ceil(boundary) * boundary;
     }
 
     /// Advance past a NUL-terminated UTF-8 string, returning it decoded.
@@ -234,9 +234,7 @@ impl<'a> BitReader<'a> {
                 self.pos += end + 1;
                 Ok(s)
             }
-            None => Err(Error::bad_image(
-                "native pdb: unterminated string in buffer",
-            )),
+            None => Err(Error::bad_image("native pdb: unterminated string in buffer")),
         }
     }
 }
@@ -249,10 +247,8 @@ struct BitSet {
 impl BitSet {
     fn read(bits: &mut BitReader<'_>) -> Result<BitSet> {
         let count = bits.read_i32()?;
-        if count < 0 || count > 0x0100_0000 {
-            return Err(Error::bad_image(format!(
-                "native pdb: invalid bitset word count {count}"
-            )));
+        if !(0..=0x0100_0000).contains(&count) {
+            return Err(Error::bad_image(format!("native pdb: invalid bitset word count {count}")));
         }
         let mut words = Vec::with_capacity(count as usize);
         for _ in 0..count {
@@ -700,8 +696,7 @@ impl NativePdbReader {
         let info_bytes = image
             .stream(1)
             .ok_or_else(|| Error::bad_image("native pdb: missing PDB info stream"))?;
-        let (name_index, ver, sig, age, guid) =
-            load_name_index(&mut BitReader::new(info_bytes))?;
+        let (name_index, ver, sig, age, guid) = load_name_index(&mut BitReader::new(info_bytes))?;
 
         // --- /names heap ----------------------------------------------------
         let names_idx = *name_index.get("/NAMES").ok_or_else(|| {
@@ -716,9 +711,8 @@ impl NativePdbReader {
         let (names, names_ordered) = load_name_stream(&mut BitReader::new(names_bytes))?;
 
         // --- DBI stream (stream 3) ------------------------------------------
-        let dbi_bytes = image
-            .stream(3)
-            .ok_or_else(|| Error::bad_image("native pdb: missing DBI stream"))?;
+        let dbi_bytes =
+            image.stream(3).ok_or_else(|| Error::bad_image("native pdb: missing DBI stream"))?;
         let (dbi_header, dbg_header, modules) = load_dbi_stream(&mut BitReader::new(dbi_bytes))?;
 
         // --- Functions from each module --------------------------------------
@@ -805,11 +799,7 @@ impl NativePdbReader {
 
         Ok(NativePdbReader {
             guid,
-            id: PdbId {
-                version: ver,
-                signature: sig,
-                age,
-            },
+            id: PdbId { version: ver, signature: sig, age },
             names_ordered,
             dbi_header,
             dbg_header,
@@ -824,12 +814,7 @@ impl NativePdbReader {
     /// against the PE debug directory (the version/signature fields complete
     /// the info-stream header).
     pub fn pdb_id(&self) -> ([u8; 16], u32, u32, u32) {
-        (
-            self.guid,
-            self.id.version,
-            self.id.signature,
-            self.id.age,
-        )
+        (self.guid, self.id.version, self.id.signature, self.id.age)
     }
 
     /// Source file names referenced by any module's FileChecksum subsections,
@@ -867,9 +852,7 @@ impl NativePdbReader {
                 .functions
                 .iter()
                 .find(|f| {
-                    f.ranges
-                        .iter()
-                        .any(|&(start, len)| rva >= start && rva - start < len as u64)
+                    f.ranges.iter().any(|&(start, len)| rva >= start && rva - start < len as u64)
                 })
                 .cloned(),
         };
@@ -882,7 +865,6 @@ impl NativePdbReader {
             .into_iter()
             .map(|entry| (base + entry.rva_delta as u64, entry.line, entry.file))
             .collect())
-
     }
 
     /// Public symbols as `(name, rva)` pairs, walked best-effort from the DBI
@@ -908,9 +890,7 @@ impl NativePdbReader {
 /// Port of `PdbFile.LoadDbiStream`: parses the DBI header, module list,
 /// skips the SectionContribution/SectionMap/Fileinfo/TSM/EC substreams and
 /// reads the optional debug header.
-fn load_dbi_stream(
-    bits: &mut BitReader<'_>,
-) -> Result<(DbiHeader, DbiDbgHdr, Vec<DbiModuleInfo>)> {
+fn load_dbi_stream(bits: &mut BitReader<'_>) -> Result<(DbiHeader, DbiDbgHdr, Vec<DbiModuleInfo>)> {
     let dh = DbiHeader::read(bits)?;
     let mut header = DbiDbgHdr::default();
 
@@ -930,13 +910,7 @@ fn load_dbi_stream(
             bits.position()
         )));
     }
-    for size in [
-        dh.seccon_size,
-        dh.secmap_size,
-        dh.filinf_size,
-        dh.tsmap_size,
-        dh.ecinfo_size,
-    ] {
+    for size in [dh.seccon_size, dh.secmap_size, dh.filinf_size, dh.tsmap_size, dh.ecinfo_size] {
         bits.set_position(bits.position() + positive_size(size, "DBI substream")?)?;
     }
 
@@ -954,9 +928,7 @@ fn load_dbi_stream(
 
 fn positive_size(v: i32, what: &str) -> Result<usize> {
     if v < 0 {
-        Err(Error::bad_image(format!(
-            "native pdb: negative {what} size {v}"
-        )))
+        Err(Error::bad_image(format!("native pdb: negative {what} size {v}")))
     } else {
         Ok(v as usize)
     }
@@ -1079,9 +1051,7 @@ fn read_source_file_info(
         let place = bits.position();
         let end_sym = place + siz as usize;
         if end_sym > limit {
-            return Err(Error::bad_image(
-                "native pdb: C13 subsection overruns module line region",
-            ));
+            return Err(Error::bad_image("native pdb: C13 subsection overruns module line region"));
         }
         if sig == debug_s_subsection::FILECHKSMS {
             while bits.position() < end_sym {
@@ -1203,17 +1173,15 @@ fn assign_lines(
                         .checked_mul(line_stride)
                         .ok_or_else(|| Error::bad_image("native pdb: line payload overflow"))?;
                     if bits.position() + payload > end_sym {
-                        return Err(Error::bad_image(
-                            "native pdb: line block overruns subsection",
-                        ));
+                        return Err(Error::bad_image("native pdb: line block overruns subsection"));
                     }
 
                     let file = match checks.get(&file_index) {
                         Some(f) => f.clone(),
                         None => {
                             return Err(Error::bad_image(format!(
-                                "native pdb: line block references missing checksum entry {file_index}"
-                            )))
+                            "native pdb: line block references missing checksum entry {file_index}"
+                        )))
                         }
                     };
 
@@ -1281,10 +1249,8 @@ fn apply_token_rid_map(
             dbg.sn_token_rid_map
         ))
     })?;
-    let rid_map: Vec<u32> = data
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let rid_map: Vec<u32> =
+        data.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
     for func in &mut funcs {
         let rid = (func.token & 0x00ff_ffff) as usize;
         let new_rid = *rid_map.get(rid).ok_or_else(|| {
@@ -1329,10 +1295,7 @@ fn load_publics(data: &[u8]) -> Vec<(String, u64)> {
             let kind = u16::from_le_bytes([data[star], data[star + 1]]);
             if sym::is_pub32(kind) {
                 // flags u32 + off u32 + seg u16 + NUL-terminated name.
-                if let Some(name_bytes) = data[star + 12..star + siz]
-                    .split(|&b| b == 0)
-                    .next()
-                {
+                if let Some(name_bytes) = data[star + 12..star + siz].split(|&b| b == 0).next() {
                     // kind(2) + flags(4) precede off; seg(2) + name follow.
                     let off = u32::from_le_bytes([
                         data[star + 6],
@@ -1401,13 +1364,11 @@ mod tests {
         let dir_size = 4 * (1 + streams.len() + total_stream_pages);
         let dir_pages = dir_size.div_ceil(PAGE);
         let root_pages = (dir_pages * 4).div_ceil(PAGE);
-        let num_blocks =
-            next_block as usize + dir_pages + root_pages;
+        let num_blocks = next_block as usize + dir_pages + root_pages;
 
         let dir_blocks: Vec<u32> = (next_block..next_block + dir_pages as u32).collect();
-        let root_blocks: Vec<u32> = (next_block + dir_pages as u32
-            ..next_block + (dir_pages + root_pages) as u32)
-            .collect();
+        let root_blocks: Vec<u32> =
+            (next_block + dir_pages as u32..next_block + (dir_pages + root_pages) as u32).collect();
 
         let mut image = vec![0u8; num_blocks * PAGE];
         image[..32].copy_from_slice(b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0");
@@ -1470,8 +1431,8 @@ mod tests {
     // -- stream builders ---------------------------------------------------
 
     const GUID: [u8; 16] = [
-        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
-        0x32, 0x10,
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,
+        0x10,
     ];
 
     fn build_info_stream() -> Vec<u8> {
@@ -1639,11 +1600,7 @@ mod tests {
                 out.extend_from_slice(&sub);
             }
         }
-        ModuleStream {
-            bytes: out,
-            cb_syms,
-            cb_lines,
-        }
+        ModuleStream { bytes: out, cb_syms, cb_lines }
     }
 
     fn dbi_header_bytes(gpmodi_len: usize) -> Vec<u8> {
@@ -1716,11 +1673,7 @@ mod tests {
         let globals_slot = 4 + mods.len();
         let mut gpmodi = Vec::new();
         for (i, m) in mods.iter().enumerate() {
-            gpmodi.extend_from_slice(&module_info_entry(
-                (4 + i) as i16,
-                m.cb_syms,
-                m.cb_lines,
-            ));
+            gpmodi.extend_from_slice(&module_info_entry((4 + i) as i16, m.cb_syms, m.cb_lines));
         }
         let mut dbi = dbi_header_bytes(gpmodi.len());
         dbi.extend_from_slice(&gpmodi);
@@ -1815,10 +1768,7 @@ mod tests {
 
         let pdb = assemble_pdb(&[m], &globals_stream());
         let err = NativePdbReader::open(&pdb).expect_err("overrunning record length must fail");
-        assert!(
-            matches!(err, cecli_core::Error::BadImage(_)),
-            "expected BadImage, got {err:?}"
-        );
+        assert!(matches!(err, cecli_core::Error::BadImage(_)), "expected BadImage, got {err:?}");
     }
 
     #[test]
@@ -1892,21 +1842,9 @@ mod tests {
         // must be skipped by length (no token-map pollution) while the
         // managed record is extracted and receives its line program.
         let mut syms = Vec::new();
-        syms.extend_from_slice(&proc_record(
-            sym::S_GPROC32,
-            "NativeFoo",
-            0x1100_0001,
-            0x1000,
-            1,
-        ));
+        syms.extend_from_slice(&proc_record(sym::S_GPROC32, "NativeFoo", 0x1100_0001, 0x1000, 1));
         syms.extend_from_slice(&end_record());
-        syms.extend_from_slice(&proc_record(
-            sym::S_GMANPROC,
-            "Foo",
-            0x0600_0001,
-            0x1000,
-            1,
-        ));
+        syms.extend_from_slice(&proc_record(sym::S_GMANPROC, "Foo", 0x0600_0001, 0x1000, 1));
         syms.extend_from_slice(&end_record());
 
         let mut m = build_module_stream(false, false);
@@ -1944,23 +1882,14 @@ mod tests {
 
         let pdb = assemble_pdb(&[m], &globals_stream());
         let err = NativePdbReader::open(&pdb).expect_err("missing S_END must fail");
-        assert!(
-            matches!(err, cecli_core::Error::BadImage(_)),
-            "expected BadImage, got {err:?}"
-        );
+        assert!(matches!(err, cecli_core::Error::BadImage(_)), "expected BadImage, got {err:?}");
     }
 
     #[test]
     fn proc_without_s_end_before_next_record_is_a_hard_error() {
         // Two procs back to back: the first one is never terminated.
         let mut syms = proc_record(sym::S_GMANPROC, "Foo", 0x0600_0001, 0x1000, 1);
-        syms.extend_from_slice(&proc_record(
-            sym::S_GMANPROC,
-            "Bar",
-            0x0600_0002,
-            0x2000,
-            1,
-        ));
+        syms.extend_from_slice(&proc_record(sym::S_GMANPROC, "Bar", 0x0600_0002, 0x2000, 1));
         syms.extend_from_slice(&end_record());
 
         let mut m = build_module_stream(false, false);
@@ -1980,26 +1909,19 @@ mod tests {
         let pdb = assemble_pdb(&[build_module_stream(true, false)], &globals_stream());
         let reader = NativePdbReader::open(&pdb).expect("open should succeed");
 
-        let expected = vec![
-            (0x1000u64, 5u32, "Foo.cs".to_string()),
-            (0x1008u64, 10u32, "Foo.cs".to_string()),
-        ];
+        let expected =
+            vec![(0x1000u64, 5u32, "Foo.cs".to_string()), (0x1008u64, 10u32, "Foo.cs".to_string())];
         let by_token = reader
             .lines_for_function(FunctionKey::Token(Token(0x0600_0001)))
             .expect("token lookup");
         assert_eq!(by_token, expected);
 
         // Inside [0x1000, 0x1020): resolves to the same function.
-        let by_rva = reader
-            .lines_for_function(FunctionKey::Rva(0x1010))
-            .expect("rva lookup");
+        let by_rva = reader.lines_for_function(FunctionKey::Rva(0x1010)).expect("rva lookup");
         assert_eq!(by_rva, expected);
 
         // Outside any range / unknown token: empty result.
-        assert!(reader
-            .lines_for_function(FunctionKey::Rva(0x9000))
-            .expect("rva miss")
-            .is_empty());
+        assert!(reader.lines_for_function(FunctionKey::Rva(0x9000)).expect("rva miss").is_empty());
         assert!(reader
             .lines_for_function(FunctionKey::Token(Token(0x0600_00ff)))
             .expect("token miss")

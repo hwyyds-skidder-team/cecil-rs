@@ -139,9 +139,7 @@ impl<'a> PortablePdbReader<'a> {
     pub fn parse(pdb_bytes: &'a [u8]) -> Result<Self> {
         let md = MetadataReader::parse(pdb_bytes)?;
         if md.heaps().pdb.is_none() {
-            return Err(Error::bad_image(
-                "not a portable pdb: missing #Pdb heap",
-            ));
+            return Err(Error::bad_image("not a portable pdb: missing #Pdb heap"));
         }
         Ok(PortablePdbReader { md })
     }
@@ -180,9 +178,7 @@ impl<'a> PortablePdbReader<'a> {
 
     /// Reads every `Document` row in table order.
     pub fn documents(&self) -> Result<Vec<Document>> {
-        (1..=self.md.row_count(TDocument))
-            .map(|rid| self.document(rid))
-            .collect()
+        (1..=self.md.row_count(TDocument)).map(|rid| self.document(rid)).collect()
     }
 
     /// Reads one `Document` row (1-based rid).
@@ -211,12 +207,8 @@ impl<'a> PortablePdbReader<'a> {
     /// The tuple's rid is the document the stream starts in; individual
     /// points may switch documents mid-stream (query
     /// [`Self::sequence_point_documents`] for the per-point mapping).
-    pub fn sequence_points(
-        &self,
-        method_rid: u32,
-    ) -> Result<Option<(u32, Vec<SequencePoint>)>> {
-        self.decode_sequence_points(method_rid)
-            .map(|opt| opt.map(|(doc, points, _)| (doc, points)))
+    pub fn sequence_points(&self, method_rid: u32) -> Result<Option<(u32, Vec<SequencePoint>)>> {
+        self.decode_sequence_points(method_rid).map(|opt| opt.map(|(doc, points, _)| (doc, points)))
     }
 
     /// Per-point document rids aligned with
@@ -226,10 +218,7 @@ impl<'a> PortablePdbReader<'a> {
     /// records (`delta_il == 0` followed by a document index), so each
     /// point carries its own document reference.
     pub fn sequence_point_documents(&self, method_rid: u32) -> Result<Vec<u32>> {
-        Ok(self
-            .decode_sequence_points(method_rid)?
-            .map(|(_, _, docs)| docs)
-            .unwrap_or_default())
+        Ok(self.decode_sequence_points(method_rid)?.map(|(_, _, docs)| docs).unwrap_or_default())
     }
 
     /// Shared decoder for the sequence-point record stream; ports
@@ -261,11 +250,7 @@ impl<'a> PortablePdbReader<'a> {
         let _local_sig_token = r.compressed_u32()?;
 
         // When the row names no document, the stream opens with one.
-        let mut document = if row_document == 0 {
-            r.compressed_u32()?
-        } else {
-            row_document
-        };
+        let mut document = if row_document == 0 { r.compressed_u32()? } else { row_document };
         let initial_document = document;
 
         let mut points = Vec::new();
@@ -293,11 +278,8 @@ impl<'a> PortablePdbReader<'a> {
             offset = offset.wrapping_add(delta_il);
 
             let delta_lines = r.compressed_u32()? as i32;
-            let delta_columns = if delta_lines == 0 {
-                r.compressed_u32()? as i32
-            } else {
-                r.compressed_i32()?
-            };
+            let delta_columns =
+                if delta_lines == 0 { r.compressed_u32()? as i32 } else { r.compressed_i32()? };
 
             if delta_lines == 0 && delta_columns == 0 {
                 // Hidden sequence point (compiler-generated code).
@@ -468,7 +450,6 @@ impl<'a> PortablePdbReader<'a> {
         }
         None
     }
-
 }
 
 /// Materializes `length` consecutive 1-based rids beginning at `start`.
@@ -510,7 +491,7 @@ mod tests {
     fn sequence_point_blob() -> Vec<u8> {
         let mut w = ByteWriter::new();
         w.compressed_u32(0); // local signature token (unused)
-        // Hidden point at offset 0.
+                             // Hidden point at offset 0.
         w.compressed_u32(0);
         w.compressed_u32(0);
         w.compressed_u32(0);
@@ -520,13 +501,13 @@ mod tests {
         w.compressed_i32(10); // delta columns
         w.compressed_u32(100); // absolute start line
         w.compressed_u32(1); // absolute start column
-        // Offset 10: line 102..104, column 11..19.
+                             // Offset 10: line 102..104, column 11..19.
         w.compressed_u32(6); // delta il
         w.compressed_u32(2); // delta lines
         w.compressed_i32(8); // delta columns
         w.compressed_i32(2); // delta start line
         w.compressed_i32(10); // delta start column
-        // Mid-stream document switch to document rid 2.
+                              // Mid-stream document switch to document rid 2.
         w.compressed_u32(0);
         w.compressed_u32(2);
         // Offset 11 in document 2: line 104..105, column 15..11.
@@ -544,7 +525,7 @@ mod tests {
         w.compressed_u32(0); // local signature token
         w.compressed_u32(4); // delta il
         w.compressed_u32(1); // delta lines
-        // EOF before delta columns.
+                             // EOF before delta columns.
         w.into_vec()
     }
 
@@ -590,16 +571,12 @@ mod tests {
         }) as u64;
 
         // Documents (2 rows).
-        b.add_row(TableIndex::Document, &[name1, alg1, hash1, lang1])
-            .unwrap();
-        b.add_row(TableIndex::Document, &[name2, alg2, hash2, lang2])
-            .unwrap();
+        b.add_row(TableIndex::Document, &[name1, alg1, hash1, lang1]).unwrap();
+        b.add_row(TableIndex::Document, &[name2, alg2, hash2, lang2]).unwrap();
 
         // MethodDebugInformation: rid 1 carries points, rid 2 is empty.
-        b.add_row(TableIndex::MethodDebugInformation, &[1, seq1])
-            .unwrap();
-        b.add_row(TableIndex::MethodDebugInformation, &[2, 0])
-            .unwrap();
+        b.add_row(TableIndex::MethodDebugInformation, &[1, seq1]).unwrap();
+        b.add_row(TableIndex::MethodDebugInformation, &[2, 0]).unwrap();
 
         // Import scope rid 1 (no parent, empty imports blob).
         b.add_row(TableIndex::ImportScope, &[0, 0]).unwrap();
@@ -609,11 +586,7 @@ mod tests {
         let lc1 = b.add_row(TableIndex::LocalConstant, &[s_pi, const_sig]).unwrap() as u64;
 
         // One scope over method 1 covering IL [0, 12).
-        b.add_row(
-            TableIndex::LocalScope,
-            &[1, 1, lv1, lc1, 0, 12],
-        )
-        .unwrap();
+        b.add_row(TableIndex::LocalScope, &[1, 1, lv1, lc1, 0, 12]).unwrap();
 
         // State machine: move-next method 2 kicks off at method 1.
         b.add_row(TableIndex::StateMachineMethod, &[2, 1]).unwrap();
@@ -828,10 +801,7 @@ mod tests {
     fn truncated_sequence_stream_is_error() {
         let bytes = build_pdb(&truncated_sequence_point_blob());
         let reader = PortablePdbReader::parse(&bytes).unwrap();
-        assert!(
-            reader.sequence_points(1).is_err(),
-            "mid-record EOF must surface as Err"
-        );
+        assert!(reader.sequence_points(1).is_err(), "mid-record EOF must surface as Err");
     }
 
     #[test]
@@ -839,5 +809,4 @@ mod tests {
         assert!(PortablePdbReader::parse(&[0u8; 64]).is_err());
         assert!(PortablePdbReader::parse(&[]).is_err());
     }
-
 }

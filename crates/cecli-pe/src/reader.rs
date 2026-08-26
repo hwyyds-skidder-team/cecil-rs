@@ -44,11 +44,7 @@ pub fn read_image(raw: Vec<u8>) -> Result<Image> {
     let pe64 = match magic {
         0x10B => false,
         0x20B => true,
-        other => {
-            return Err(Error::bad_image(format!(
-                "unknown optional header magic {other:#x}"
-            )))
-        }
+        other => return Err(Error::bad_image(format!("unknown optional header magic {other:#x}"))),
     };
     let linker_version = r.u16()?;
     // SizeOfCode (4), InitializedDataSize (4), UninitializedDataSize (4),
@@ -133,14 +129,15 @@ fn read_pe_offset(raw: &[u8]) -> Result<usize> {
 
 /// Translates an RVA to a file offset using the already-parsed section table.
 fn resolve_rva_offset(rva: u64, sections: &[Section]) -> Result<usize> {
-    let section = sections.iter().find(|s| {
-        let rva = rva.min(u32::MAX as u64) as u32;
-        let mapped_end = s
-            .virtual_address
-            .saturating_add(s.virtual_size.max(s.size_of_raw_data));
-        rva >= s.virtual_address && rva < mapped_end
-    })
-    .ok_or_else(|| Error::bad_image(format!("rva {rva:#x} is not inside any section")))?;
+    let section = sections
+        .iter()
+        .find(|s| {
+            let rva = rva.min(u32::MAX as u64) as u32;
+            let mapped_end =
+                s.virtual_address.saturating_add(s.virtual_size.max(s.size_of_raw_data));
+            rva >= s.virtual_address && rva < mapped_end
+        })
+        .ok_or_else(|| Error::bad_image(format!("rva {rva:#x} is not inside any section")))?;
     Ok((rva - section.virtual_address as u64 + section.pointer_to_raw_data as u64) as usize)
 }
 
@@ -203,7 +200,11 @@ type MetadataInfo = (usize, String, Vec<crate::image::MetadataStream>);
 /// Locates the metadata root and its stream directory.
 ///
 /// Returns `(metadata section index, runtime version string, streams)`.
-fn read_metadata(r: &mut ByteReader<'_>, metadata_rva: u64, sections: &[Section]) -> Result<MetadataInfo> {
+fn read_metadata(
+    r: &mut ByteReader<'_>,
+    metadata_rva: u64,
+    sections: &[Section],
+) -> Result<MetadataInfo> {
     r.seek(resolve_rva_offset(metadata_rva, sections)?)?;
 
     if r.u32()? != 0x424A_5342 {
@@ -214,9 +215,7 @@ fn read_metadata(r: &mut ByteReader<'_>, metadata_rva: u64, sections: &[Section]
 
     let version_length = r.i32()?;
     if version_length < 0 || version_length as usize > r.remaining() {
-        return Err(Error::bad_image(format!(
-            "invalid metadata version length {version_length}"
-        )));
+        return Err(Error::bad_image(format!("invalid metadata version length {version_length}")));
     }
     let runtime_version = read_zero_terminated_string(r, version_length as usize)?;
 
@@ -303,10 +302,7 @@ fn read_debug_header(
                 data = raw_slice(r, start, end).to_vec();
             }
         }
-        entries.push(ImageDebugEntry {
-            directory: d,
-            data,
-        });
+        entries.push(ImageDebugEntry { directory: d, data });
     }
     Ok(entries)
 }
@@ -320,9 +316,7 @@ fn raw_slice<'a>(r: &ByteReader<'a>, start: usize, end: usize) -> &'a [u8] {
 mod tests {
     use super::*;
     use crate::image::ModuleKind;
-    use crate::testutil::{
-        self, CLI_RVA, ENTRY_TOKEN, META_RVA, SEC1_VA, SEC2_VA, TIMESTAMP,
-    };
+    use crate::testutil::{self, CLI_RVA, ENTRY_TOKEN, META_RVA, SEC1_VA, SEC2_VA, TIMESTAMP};
     use cecli_core::{TableIndex, Token};
 
     /// Independently walks the section table straight from the raw bytes so
@@ -363,10 +357,7 @@ mod tests {
         for ((name, _, _), section) in expected.iter().zip(image.sections.iter()) {
             assert_eq!(&section.name, name);
         }
-        assert_eq!(
-            image.section(".text").unwrap().virtual_address,
-            expected[0].1
-        );
+        assert_eq!(image.section(".text").unwrap().virtual_address, expected[0].1);
 
         assert_eq!(image.kind, ModuleKind::Console);
         assert_eq!(image.timestamp, 0x4838_13DC);
@@ -393,8 +384,10 @@ mod tests {
         assert_eq!(image.architecture, TargetArchitecture(0x014C));
         let expected = raw_sections(&data);
         assert_eq!(expected.len(), image.sections.len());
-        assert_eq!(image.sections.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
-                   expected.iter().map(|(n, _, _)| n.as_str()).collect::<Vec<_>>());
+        assert_eq!(
+            image.sections.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            expected.iter().map(|(n, _, _)| n.as_str()).collect::<Vec<_>>()
+        );
 
         assert_eq!(image.kind, ModuleKind::Dll);
         assert_ne!(image.characteristics & 0x2000, 0);
@@ -425,12 +418,12 @@ mod tests {
         assert_eq!(image.rva_offset((SEC1_VA + 0x100) as u64).unwrap(), 0x300);
         assert_eq!(image.rva_offset((SEC2_VA + 0x10) as u64).unwrap(), 0x610);
         assert!(image.rva_offset(0x40).is_err()); // headers are not mapped
-        assert!(image.rva_offset(((SEC2_VA + 0x200)) as u64).is_err()); // end of section
+        assert!(image.rva_offset((SEC2_VA + 0x200) as u64).is_err()); // end of section
 
         // RVA slices.
         let meta = image.rva(META_RVA as u64).unwrap();
         assert_eq!(&meta[..4], b"BSJB");
-        assert_eq!(image.rva(CLI_RVA as u64).unwrap()[0], 0x48 & 0xFF);
+        assert_eq!(image.rva(CLI_RVA as u64).unwrap()[0], 0x48);
 
         let (rva, size) = image.metadata_rva().unwrap();
         assert_eq!(rva, META_RVA as u64);

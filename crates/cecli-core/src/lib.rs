@@ -10,6 +10,5 @@ pub use token::{CodedIndexGroup, TableIndex, Token, TokenType};
 
 /// Path to the workspace-level `fixtures/` directory (real .NET assemblies used by tests).
 pub fn fixtures_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }

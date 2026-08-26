@@ -41,11 +41,9 @@ impl<'a> StringHeap<'a> {
         if start > self.data.len().saturating_sub(1) {
             return Ok("");
         }
-        let end = self.data[start..]
-            .iter()
-            .position(|&b| b == 0)
-            .ok_or_else(|| Error::bad_image(format!("unterminated string at #Strings index {index}")))?
-            + start;
+        let end = self.data[start..].iter().position(|&b| b == 0).ok_or_else(|| {
+            Error::bad_image(format!("unterminated string at #Strings index {index}"))
+        })? + start;
         std::str::from_utf8(&self.data[start..end])
             .map_err(|_| Error::bad_image(format!("invalid UTF-8 at #Strings index {index}")))
     }
@@ -82,10 +80,8 @@ impl<'a> UserStringHeap<'a> {
                 "odd user-string byte length {length} at #US index {index}"
             )));
         }
-        let units: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|p| u16::from_le_bytes([p[0], p[1]]))
-            .collect();
+        let units: Vec<u16> =
+            bytes.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect();
         String::from_utf16(&units)
             .map_err(|_| Error::bad_image(format!("invalid UTF-16 at #US index {index}")))
     }
@@ -179,13 +175,7 @@ impl<'a> PdbHeap<'a> {
                 row_counts[i] = r.u32()?;
             }
         }
-        Ok(PdbHeap {
-            data,
-            id,
-            entry_point,
-            type_system_tables,
-            row_counts,
-        })
+        Ok(PdbHeap { data, id, entry_point, type_system_tables, row_counts })
     }
 
     /// Raw heap payload.

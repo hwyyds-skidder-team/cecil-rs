@@ -5,6 +5,7 @@
 //! public facade; `resolver`, `importer`, and `type_parser` are support services.
 
 pub mod assembly;
+pub mod edit;
 pub mod importer;
 pub mod model;
 pub mod module_def;
@@ -14,7 +15,6 @@ pub mod resolver;
 pub mod strongname;
 pub mod type_parser;
 pub mod winrt;
-pub mod edit;
 pub mod write;
 
 pub use model::types::{EventId, FieldId, GenericParamId, MethodId, PropertyId, TypeId};
