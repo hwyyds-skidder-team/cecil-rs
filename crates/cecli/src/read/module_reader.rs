@@ -1,7 +1,7 @@
 //! Port of Mono.Cecil's `AssemblyReader.cs` (`ReadModule`) path.
 //!
 //! [`read_module`] walks the metadata tables of an already-parsed PE/CLI
-//! image and builds the arena-based object model ([`Module`](crate::module_def::Module))
+//! image and builds the arena-based object model ([`Module`])
 //! together with its token maps ([`ReadContext`]). Deterministic ordering:
 //! every arena is populated in metadata-table row order, so handle values are
 //! always `rid - 1`.

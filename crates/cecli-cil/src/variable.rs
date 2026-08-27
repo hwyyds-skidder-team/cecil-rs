@@ -7,7 +7,7 @@ use cecli_core::Token;
 ///
 /// Cecil attaches a `TypeReference` to each local; to keep this crate free
 /// of the object model the type is carried as the stand-in token recorded in
-/// [`variable_type`] (resolved later by the `cecli` facade; `Token::NIL`
+/// `variable_type` (resolved later by the `cecli` facade; `Token::NIL`
 /// while unknown).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariableDefinition {

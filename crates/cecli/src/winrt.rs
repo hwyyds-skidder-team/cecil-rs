@@ -10,8 +10,8 @@
 //!   loading a winmd: virtual `System.Runtime*` assembly references are
 //!   appended (and `mscorlib` is re-versioned), well-known WinRT type
 //!   references are renamed to their CLR identities (`IIterable\`1` ->
-//!   `IEnumerable\`1`, scoped to `System.Runtime`), `<CLR>` implementation
-//!   types are unmangled, public managed-winmd types get the `<WinRT>`
+//!   `IEnumerable\`1`, scoped to `System.Runtime`), `\<CLR>` implementation
+//!   types are unmangled, public managed-winmd types get the `\<WinRT>`
 //!   prefix, `AttributeUsageAttribute` records gain an `AllowMultiple`
 //!   property, and classes implementing projected interfaces receive
 //!   synthesized "redirected" methods plus un-projected interface duplicates.
@@ -55,7 +55,7 @@ use crate::module_def::Module;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
-/// How a [`TypeDefinition`] must be treated when projecting (Treatments.cs).
+/// How a [`TypeDefinition`](crate::model::types::TypeDefinition) must be treated when projecting (Treatments.cs).
 ///
 /// Hand-rolled bitflag type: the `cecli` crate does not depend on the
 /// `bitflags` crate (only `cecli-core` does).
@@ -570,7 +570,7 @@ const CONTRACT_PK: [u8; 160] = [
     0x26, 0x1C, 0x8A, 0x12, 0x43, 0x65, 0x18, 0x20, 0x6D, 0xC0, 0x93, 0x34, 0x4D, 0x5A, 0xD2, 0x93,
 ];
 
-/// Names appended by [`add_virtual_references`], in append order.
+/// Names appended by `add_virtual_references`, in append order.
 pub const VIRTUAL_REFERENCE_NAMES: [&str; 6] = [
     "System.Runtime",
     "System.Runtime.InteropServices.WindowsRuntime",

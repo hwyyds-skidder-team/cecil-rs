@@ -1,7 +1,7 @@
 //! IL body validation and walk utilities over resolved method bodies.
 //!
 //! Port of `Mono.Cecil.Rocks/ILParser.cs`, reworked for the resolved object
-//! model: the C# parser decodes raw bytes and drives an [`IILVisitor`]-style
+//! model: the C# parser decodes raw bytes and drives an `IILVisitor`-style
 //! callback per operand kind. Here bodies arrive already decoded
 //! ([`ResolvedBody`]), so the same logic becomes
 //!
@@ -90,7 +90,7 @@ fn invalid(idx: usize, msg: String) -> Error {
 /// Validates a resolved body without argument-index checking.
 ///
 /// * every operand kind agrees with `opcode.operand_type`
-///   ([`operand_matches`]);
+///   (`operand_matches`);
 /// * instruction offsets are non-decreasing and never overlap;
 /// * branch and switch targets lie within `[0, code_size]`;
 /// * local variable indices (`ldloc*`/`stloc*`) are `< locals.len()`;

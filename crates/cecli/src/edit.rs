@@ -593,7 +593,7 @@ pub fn optimize_macros(body: &mut ResolvedBody) {
 }
 
 /// Port of `MethodBodyRocks.Optimize`: narrows representable `ldc.i8`
-/// constants ([`optimize_longs`]) and then runs the full
+/// constants (`optimize_longs`) and then runs the full
 /// [`optimize_macros`] pipeline.
 pub fn optimize(body: &mut ResolvedBody) {
     optimize_longs(body);

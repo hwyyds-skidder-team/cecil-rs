@@ -17,7 +17,7 @@
 //!   byte. The raw byte decodes with the **flat** OLE VARENUM numbering of
 //!   Cecil's `ReadVariantType` (`0x09` reads as `Dispatch`, matching
 //!   Cecil's `marshal.dll` fixture, whose `SAFEARRAY` byte 0x09 asserts
-//!   `VariantType.Dispatch`); see [`variant_from_wire`].
+//!   `VariantType.Dispatch`); see `variant_from_wire`.
 //! * `NATIVEARRAY` (0x2a): an optional nested element spec comes FIRST (no
 //!   payload at all is the bare parameterless `Array` form), then up to
 //!   three compressed counts in Cecil's positional order: ParamNum,

@@ -318,7 +318,7 @@ pub trait TypeReferenceRocks {
     fn resolve_in(&self, m: &Module) -> Option<TypeId>;
 
     /// Cecil-style full name: `NS.Outer/Nested` for definitions,
-    /// `[scope]NS.Name` for external references, `Name`2[args]` for generic
+    /// `[scope]NS.Name` for external references, ``Name`2[args]`` for generic
     /// instances. Generic parameters render in ILAsm notation (`!n` type var,
     /// `!!n` method var); the `_td` suffix disambiguates from any future
     /// inherent `full_name`.

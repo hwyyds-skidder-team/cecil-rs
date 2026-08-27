@@ -4,7 +4,7 @@
 //! emission halves of `SourceMethodBuilder`, `LineNumberTable.Write`,
 //! `MethodEntry.WriteData` and `MonoSymbolFile.Write`. The output layout
 //! mirrors [`crate::reader::MdbReader`] expectations exactly: header,
-//! back-patched [`OffsetTable`](crate::reader::OffsetTable), data section
+//! back-patched [`OffsetTable`], data section
 //! (sources, compile units, methods), then the method / source /
 //! compile-unit tables, sorted deterministically by method token.
 

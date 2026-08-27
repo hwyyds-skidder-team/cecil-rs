@@ -365,7 +365,7 @@ pub fn to_capi_public_blob(modulus_be: &[u8], exponent_be: &[u8]) -> Vec<u8> {
 }
 
 /// Serializes a parsed private key into a CAPI `PRIVATEKEYBLOB` (`RSA2`) —
-/// the inverse of [`from_capi_private_blob`] and the shape of a private
+/// the inverse of `from_capi_private_blob` and the shape of a private
 /// `.snk`. CRT fields missing from `key` are recomputed from `(p, q, d)`.
 pub fn to_capi_private_blob(key: &CapiKey) -> Result<Vec<u8>> {
     use rsa::BigUint;

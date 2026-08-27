@@ -9,7 +9,7 @@
 //! * the `/names` string heap stream (`LoadNameStream`),
 //! * the **DBI stream** (stream 3): [`DbiHeader`], per-module [`DbiModuleInfo`]
 //!   records (with their [`DbiSecCon`] section contributions) and the optional
-//!   [`DbiDbgHdr`](DbiDbgHdr) debug header,
+//!   [`DbiDbgHdr`] debug header,
 //! * per-module **debug streams**: CodeView symbol records (managed procs
 //!   `S_GMANPROC`/`S_LMANPROC` only — native `S_GPROC32`/`S_LPROC32`,
 //!   incl. `_ST`, are parsed-and-skipped so unmanaged symbols on mixed
@@ -34,8 +34,8 @@
 //!
 //! * `MsfDirectory`, `PdbFileHeader`, `DataStream`, `PdbReader`, `BitAccess` —
 //!   replaced wholesale by [`crate::native::msf::MsfImage`] + a local
-//!   little-endian cursor ([`BitReader`]).
-//! * `BitSet` — ported inline as [`BitSet`] (name-index present/deleted maps).
+//!   little-endian cursor (`BitReader`).
+//! * `BitSet` — ported inline as `BitSet` (name-index present/deleted maps).
 //! * `IntHashTable` — replaced by `std::collections::HashMap`.
 //! * `PdbScope`, `PdbSlot`, `PdbConstant`, `PdbLines`, `PdbLine`,
 //!   `PdbSource`, `PdbTokenLine` — lexical scopes, locals slots, constants,
@@ -57,7 +57,7 @@
 //! * Global/public symbol **hash streams** (GSI) — modern (VC7+) globals and
 //!   publics streams carry only the `0xffffffff`-signed hash tables with no
 //!   inline CV records; enumerating their `S_PUB32` entries requires the
-//!   cross-stream hash machinery Cecil never implemented. [`load_publics`]
+//!   cross-stream hash machinery Cecil never implemented. `load_publics`
 //!   therefore walks legacy inline-record layouts best-effort and yields an
 //!   empty list for hash-only streams.
 //! * `FrameData` / `FRAMEDATA_FLAGS` / `XFixupData` (`DEBUG_S_FRAMEDATA`
@@ -862,7 +862,7 @@ impl NativePdbReader {
     /// source lines as absolute `(rva, line, file)` triples.
     ///
     /// Every matched `DEBUG_S_LINES` section starts at the function's own
-    /// address ([`assign_lines`] matches on exact `(segment, offset)`), so a
+    /// address (`assign_lines` matches on exact `(segment, offset)`), so a
     /// single base RVA converts each stored `rva_delta`. Unresolvable keys
     /// yield an empty list.
     pub fn lines_for_function(&self, key: FunctionKey) -> Result<Vec<(u64, u32, String)>> {
@@ -890,7 +890,7 @@ impl NativePdbReader {
     /// Public symbols as `(name, rva)` pairs, walked best-effort from the DBI
     /// public/global symbol streams (`S_PUB32` records). Modern GSI hash-only
     /// streams carry no inline records and yield an empty list (see
-    /// [`load_publics`]). Like Cecil, the recorded `off`
+    /// `load_publics`). Like Cecil, the recorded `off`
     /// field is returned as the RVA; non-primary segments are not rebased.
     pub fn publics(&self) -> Vec<(String, u64)> {
         self.publics.clone()

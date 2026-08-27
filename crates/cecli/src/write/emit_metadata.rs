@@ -126,7 +126,7 @@ pub struct EmittedMetadata {
     /// or [`Token::NIL`] when `entry` was `None`.
     pub entry_point_token: Token,
     /// Concatenated `FieldRva` initial-value chunks (each padded to
-    /// [`FIELD_DATA_ALIGN`]), in `FieldRva` row order. Place this blob at
+    /// `FIELD_DATA_ALIGN`), in `FieldRva` row order. Place this blob at
     /// `EmitLayout::data_segment_rva` (or at any RVA you write into the patch
     /// cells below).
     pub data: Vec<u8>,

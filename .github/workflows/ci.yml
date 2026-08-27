@@ -30,6 +30,18 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy --workspace --all-targets --features cecli/strongname -- -D warnings
 
+  docs:
+    # Rustdoc must stay warning-clean (broken links, private-item links,
+    # malformed doc syntax). Doctests run in the test job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   test:
     name: test (${{ matrix.os }})
     strategy:
