@@ -733,16 +733,11 @@ mod tests {
         }))
     }
 
-    fn named_ext(
-        ns: &str,
-        name: &str,
-        nesting: Vec<Box<ExternalType>>,
-        scope: ScopeRef,
-    ) -> TypeDesc {
+    fn named_ext(ns: &str, name: &str, nesting: Vec<ExternalType>, scope: ScopeRef) -> TypeDesc {
         TypeDesc::External(Box::new(ExternalType {
             namespace: ns.to_string(),
             name: name.to_string(),
-            nesting,
+            nesting: nesting.into_iter().map(Box::new).collect(),
             scope,
         }))
     }
@@ -853,12 +848,12 @@ mod tests {
         );
 
         // Nested chain resolves to the innermost definition.
-        let outer_ext = Box::new(ExternalType {
+        let outer_ext = ExternalType {
             namespace: "Ns".into(),
             name: "Outer".into(),
             nesting: Vec::new(),
             scope: ScopeRef::ThisModule,
-        });
+        };
         assert_eq!(
             engine
                 .resolve_type(&named_ext("Ns", "Inner", vec![outer_ext], ScopeRef::ThisModule))

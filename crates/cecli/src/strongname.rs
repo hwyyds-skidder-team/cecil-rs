@@ -355,10 +355,8 @@ pub fn to_capi_public_blob(modulus_be: &[u8], exponent_be: &[u8]) -> Vec<u8> {
     blob[12..16].copy_from_slice(&((key_length as u32) << 3).to_le_bytes());
 
     // Public exponent, right-aligned little-endian DWORD.
-    let mut pos = 16;
-    for &byte in exponent_be.iter().rev().take(4) {
-        blob[pos] = byte;
-        pos += 1;
+    for (i, &byte) in exponent_be.iter().rev().take(4).enumerate() {
+        blob[16 + i] = byte;
     }
 
     // Modulus, little-endian (reversed big-endian).
@@ -484,7 +482,7 @@ fn pkcs1_v15_sign(
     digest: &[u8],
 ) -> Result<Vec<u8>> {
     let prefix = digest_info_prefix(alg);
-    let k = ((n.bits() + 7) / 8) as usize;
+    let k = n.bits().div_ceil(8);
     let t_len = prefix.len() + digest.len();
     if k < t_len + 11 {
         return Err(StrongNameError::new("RSA modulus too small for signature"));
@@ -516,7 +514,7 @@ fn pkcs1_v15_verify(
     signature_be: &[u8],
 ) -> bool {
     let prefix = digest_info_prefix(alg);
-    let k = ((n.bits() + 7) / 8) as usize;
+    let k = n.bits().div_ceil(8);
     if signature_be.len() != k {
         return false;
     }
@@ -755,13 +753,13 @@ impl StrongNameKeyPair {
     ///
     /// The caller hands over the exact bytes written to disk (Cecil calls
     /// this right after `ImageWriter.WriteImage` on the output stream).
-    pub fn sign_image(&self, image: &mut Vec<u8>) -> Result<()> {
+    pub fn sign_image(&self, image: &mut [u8]) -> Result<()> {
         self.sign_image_with(image, self.hash_algorithm())
     }
 
     /// [`Self::sign_image`] with an explicit digest algorithm (SHA-256 is
     /// what modern toolchains use even for SHA-1-era keys).
-    pub fn sign_image_with(&self, image: &mut Vec<u8>, alg: SignatureHashAlgorithm) -> Result<()> {
+    pub fn sign_image_with(&self, image: &mut [u8], alg: SignatureHashAlgorithm) -> Result<()> {
         let key = from_capi_key_blob(&self.bytes)?;
         if !key.is_private() {
             return Err(StrongNameError::new("cannot sign with a public-only strong-name key"));
@@ -782,7 +780,7 @@ impl StrongNameKeyPair {
         let digest = hash_image(image, &layout, alg)?;
 
         // …and the signature must fit back into the directory slot.
-        if layout.sn_size < ((n.bits() + 7) / 8) as usize {
+        if layout.sn_size < n.bits().div_ceil(8) {
             return Err(StrongNameError::new(
                 "strong-name signature directory is smaller than the RSA signature",
             ));
@@ -1087,7 +1085,7 @@ mod tests {
         let (layout, digest, _checksum) = verifier_digest(&image);
         let signature = &image[sn_offset..sn_offset + 128];
         assert!(
-            pkcs1_v15_verify(&key.n(), &key.e(), SignatureHashAlgorithm::Sha1, &digest, signature),
+            pkcs1_v15_verify(key.n(), key.e(), SignatureHashAlgorithm::Sha1, &digest, signature),
             "signature must verify against the generated public key"
         );
 
@@ -1138,8 +1136,8 @@ mod tests {
         let signature = &image[sn_offset..sn_offset + 128];
         assert!(
             pkcs1_v15_verify(
-                &key.n(),
-                &key.e(),
+                key.n(),
+                key.e(),
                 SignatureHashAlgorithm::Sha256,
                 &digest256,
                 signature
@@ -1149,8 +1147,8 @@ mod tests {
         // ...and must NOT verify under SHA-1.
         let digest1 = sha1_digest(&buf);
         assert!(!pkcs1_v15_verify(
-            &key.n(),
-            &key.e(),
+            key.n(),
+            key.e(),
             SignatureHashAlgorithm::Sha1,
             &digest1,
             signature
