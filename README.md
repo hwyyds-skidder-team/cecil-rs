@@ -1,5 +1,8 @@
 # cecli-rs
 
+[![CI](https://github.com/hwyyds-skidder-team/cecil-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/hwyyds-skidder-team/cecil-rs/actions/workflows/ci.yml)
+[![Fuzz](https://github.com/hwyyds-skidder-team/cecil-rs/actions/workflows/fuzz.yml/badge.svg)](https://github.com/hwyyds-skidder-team/cecil-rs/actions/workflows/fuzz.yml)
+
 Mono.Cecil 的 Rust 完整重写:读取、检查、修改并写回 .NET 程序集(ECMA-335)。
 
 ```rust
@@ -55,11 +58,42 @@ asm.write_file("patched.dll")?;
 ## 测试
 
 ```sh
-cargo test --workspace          # 356 个测试,含真实程序集夹具的读→写→重读等价套件
+cargo test --workspace          # 359 个测试,含真实程序集夹具的读→写→重读等价套件
 cargo test -p cecli --features strongname   # 强名签名套件
 ```
 
 `fixtures/` 内置 127 个真实 .NET 程序集/PDB/MDB 作为回归基线。
+
+CI(GitHub Actions)覆盖 fmt / clippy(-D warnings)/ 双平台测试矩阵 / MSRV(1.87)/ fuzz 目标编译;
+fuzz(libFuzzer)每晚对 6 个解析入口做变异测试,种子来自 fixtures 语料;benchmark
+(criterion)定期跑并在 Artifacts 留报告。
+
+## Fuzzing
+
+```sh
+cargo install cargo-fuzz
+cd fuzz
+cargo fuzz run read_assembly -- -max_total_time=60        # 全链读取
+cargo fuzz run roundtrip -- -max_total_time=60            # 读→写→重读性质测试
+cargo fuzz run parse_metadata -- -max_total_time=60       # BSJB 根
+cargo fuzz run parse_portable_pdb -- -max_total_time=60   # Portable PDB
+cargo fuzz run parse_native_pdb -- -max_total_time=60     # 原生 PDB(MSF)
+cargo fuzz run parse_mdb -- -max_total_time=60            # Mono MDB
+```
+
+语料不提交(gitignore);运行前从 fixtures 复制种子(定时任务自动做,见
+`.github/workflows/fuzz.yml`)。主要在 Linux 上跑——Windows 工具链对
+libFuzzer/ASan 支持不完整。
+
+## Benchmark
+
+```sh
+cargo bench -p cecli           # read / write / roundtrip / dag_read 四组
+```
+
+`dag_read` 是线性回归基准:对合成的 doubling-DAG 镜像(每行 TypeSpec 引用前行两次,
+展开后 ~2^N 节点)计时读取。Arc 共享 + 子树提升之前 30 行即可 OOM;现在 28 行
+约 10µs,时间随行数线性增长——该基准防止性能回退。
 
 ## License
 

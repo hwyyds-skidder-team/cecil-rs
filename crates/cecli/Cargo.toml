@@ -2,6 +2,7 @@
 name = "cecli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -18,3 +19,10 @@ strongname = ["dep:rsa", "dep:sha2"]
 
 [dev-dependencies]
 cecli-mdb.workspace = true
+cecli-core.workspace = true
+cecli-metadata.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "assembly"
+harness = false

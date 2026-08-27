@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.87"
 license = "MIT"
 
 [workspace.dependencies]
@@ -12,6 +14,7 @@ cecli = { path = "crates/cecli" }
 bitflags = "2"
 rsa = "0.9"
 sha2 = "0.10"
+criterion = "0.5"
 cecli-core = { path = "crates/cecli-core" }
 cecli-pe = { path = "crates/cecli-pe" }
 cecli-metadata = { path = "crates/cecli-metadata" }

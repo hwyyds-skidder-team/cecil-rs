@@ -1,2 +1,13 @@
 /target
 **/*.rs.bk
+
+# cargo-fuzz: corpora are seeded from fixtures/ at run time (see
+# .github/workflows/fuzz.yml); never commit grown corpora or crash artifacts.
+fuzz/corpus
+fuzz/artifacts
+fuzz/coverage
+fuzz/target
+fuzz/Cargo.lock
+
+# criterion benchmark reports
+target/criterion
