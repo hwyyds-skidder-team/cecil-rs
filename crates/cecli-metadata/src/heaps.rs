@@ -81,7 +81,7 @@ impl<'a> UserStringHeap<'a> {
             )));
         }
         let units: Vec<u16> =
-            bytes.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect();
+            bytes.as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)).collect();
         String::from_utf16(&units)
             .map_err(|_| Error::bad_image(format!("invalid UTF-16 at #US index {index}")))
     }

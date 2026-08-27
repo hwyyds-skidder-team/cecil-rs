@@ -1285,7 +1285,7 @@ fn apply_token_rid_map(
         ))
     })?;
     let rid_map: Vec<u32> =
-        data.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        data.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect();
     for func in &mut funcs {
         let rid = (func.token & 0x00ff_ffff) as usize;
         let new_rid = *rid_map.get(rid).ok_or_else(|| {

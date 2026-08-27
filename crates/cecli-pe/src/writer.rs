@@ -787,12 +787,12 @@ fn patch_resource_data_entry(buf: &mut ByteBuffer, old_rva: u32, new_rva: u32) -
 /// treated as a high-byte-padded final word.
 pub fn compute_pe_checksum(data: &[u8]) -> u32 {
     let mut sum: u64 = 0;
-    let mut chunks = data.chunks_exact(2);
-    for chunk in &mut chunks {
-        sum += u16::from_le_bytes([chunk[0], chunk[1]]) as u64;
+    let (words, remainder) = data.as_chunks::<2>();
+    for word in words {
+        sum += u16::from_le_bytes(*word) as u64;
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
-    if let [lo] = chunks.remainder() {
+    if let [lo] = remainder {
         sum += ((*lo as u16) << 8) as u64;
         sum = (sum & 0xFFFF) + (sum >> 16);
     }

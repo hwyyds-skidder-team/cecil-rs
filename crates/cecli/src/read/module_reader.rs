@@ -741,8 +741,10 @@ fn read_constants(
                 count -= 1;
             }
             let units: Vec<u16> = blob[..count]
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_le_bytes(*pair))
                 .collect();
             ConstantValue::String(String::from_utf16_lossy(&units))
         } else {

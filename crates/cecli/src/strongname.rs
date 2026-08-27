@@ -80,7 +80,7 @@ fn sha1_digest(data: &[u8]) -> [u8; 20] {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
-    for block in msg.chunks_exact(64) {
+    for block in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 80];
         for (i, word) in w.iter_mut().take(16).enumerate() {
             *word = u32::from_be_bytes([
@@ -641,8 +641,8 @@ fn patch_pe_checksum(data: &mut [u8], checksum_offset: usize) {
     data[checksum_offset..checksum_offset + 4].fill(0);
 
     let mut sum: u32 = 0;
-    for chunk in data.chunks_exact(2) {
-        let word = u16::from_le_bytes([chunk[0], chunk[1]]) as u32;
+    for chunk in data.as_chunks::<2>().0 {
+        let word = u16::from_le_bytes(*chunk) as u32;
         sum += word;
         sum = (sum & 0xffff) + (sum >> 16);
     }
