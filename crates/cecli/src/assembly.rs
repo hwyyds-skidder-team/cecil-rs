@@ -115,6 +115,20 @@ impl AssemblyDefinition {
             read_opts.load_bodies,
         )?;
 
+        // Preserve unmodeled PE payload for re-emission on write: the raw
+        // Win32 resource section and the debug directory records.
+        let rsrc_dir = image.data_directories[cecli_pe::DataDirectoryIndex::Resource as usize];
+        if !rsrc_dir.is_zero() && rsrc_dir.size > 0 {
+            if let Ok(section) = image.rva(rsrc_dir.virtual_address as u64) {
+                let end = (rsrc_dir.size as usize).min(section.len());
+                module.win32_resources = Some(crate::module_def::Win32Resources {
+                    original_rva: rsrc_dir.virtual_address,
+                    bytes: section[..end].to_vec(),
+                });
+            }
+        }
+        module.debug_entries = image.debug_entries.clone();
+
         // Assembly row -> facade identity. Netmodules have no Assembly table,
         // in which case the facade keeps Cecil's "unnamed" placeholder.
         let name = match ctx.assembly_row.take() {
@@ -136,7 +150,9 @@ impl AssemblyDefinition {
             },
         };
 
-        // Symbols (portable PDB sidecar next to the origin file).
+        // Symbols: a configured provider decides the source; the default
+        // probes PDB then MDB sidecars next to the origin file. The format
+        // is sniffed from magic (BSJB / MSF / MDB) and dispatched.
         if opts.read_symbols {
             let Some(origin_path) = origin.as_deref() else {
                 return Err(Error::Unsupported(
@@ -144,15 +160,27 @@ impl AssemblyDefinition {
                         .to_string(),
                 ));
             };
-            match load_portable_pdb_bytes(origin_path) {
-                Some(pdb_bytes) => attach_portable_symbols(&mut module, &pdb_bytes)?,
-                None => {
-                    return Err(Error::Io(std::io::Error::new(
+            let symbol_bytes = match opts.symbol_reader_provider.as_ref() {
+                Some(provider) => provider.get_symbol_reader(origin_path)?.ok_or_else(|| {
+                    Error::Io(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
-                        format!("no portable PDB found next to '{}'", origin_path.display()),
-                    )));
-                }
-            }
+                        format!(
+                            "symbol provider returned no symbol data for '{}'",
+                            origin_path.display()
+                        ),
+                    ))
+                })?,
+                None => load_symbol_bytes(origin_path).ok_or_else(|| {
+                    Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!(
+                            "no symbol file (.pdb/.mdb) found next to '{}'",
+                            origin_path.display()
+                        ),
+                    ))
+                })?,
+            };
+            attach_symbols(&mut module, &symbol_bytes)?;
         }
 
         // Eager satellite-module loading: every `File` row flagged
@@ -226,24 +254,52 @@ impl AssemblyDefinition {
 // Symbol + satellite-module plumbing (facade-integration parity phase)
 // ---------------------------------------------------------------------------
 
-/// Locates and reads a portable PDB sidecar for `origin`.
-///
-/// Mirrors `DefaultSymbolReaderProvider.GetSymbolReaderFile`: `<file>.pdb`
-/// (`line.exe.pdb`) is preferred, then the extension-swapped stem
-/// (`line.pdb`). Returns `None` when neither candidate exists.
-fn load_portable_pdb_bytes(origin: &std::path::Path) -> Option<Vec<u8>> {
-    let mut candidates = Vec::with_capacity(2);
+/// Default symbol lookup next to `origin`: `<file>.pdb`, `<stem>.pdb`
+/// (portable or native, told apart by magic at attach time), then
+/// `<file>.mdb` / `<stem>.mdb` (Mono). Returns `None` when no candidate
+/// exists.
+fn load_symbol_bytes(origin: &std::path::Path) -> Option<Vec<u8>> {
+    let mut candidates = Vec::with_capacity(4);
     if let Some(file_name) = origin.file_name() {
-        let appended = origin.with_file_name(format!("{}.pdb", file_name.to_string_lossy()));
-        candidates.push(appended);
+        let name = file_name.to_string_lossy();
+        let stem = origin.file_stem().map(|s| s.to_string_lossy().into_owned());
+        // Appended forms keep the full file name ("lib.dll.pdb",
+        // "lib.dll.mdb"); extension-swapped forms replace it ("lib.pdb",
+        // "lib.mdb"). Mono pairs MDBs as "<full-name>.mdb".
+        candidates.push(origin.with_file_name(format!("{name}.pdb")));
+        if let Some(stem) = &stem {
+            candidates.push(origin.with_file_name(format!("{stem}.pdb")));
+            candidates.push(origin.with_file_name(format!("{name}.mdb")));
+            candidates.push(origin.with_file_name(format!("{stem}.mdb")));
+        }
     }
-    candidates.push(origin.with_extension("pdb"));
     for candidate in candidates {
         if candidate.is_file() {
-            return std::fs::read(&candidate).ok();
+            if let Ok(bytes) = std::fs::read(&candidate) {
+                return Some(bytes);
+            }
         }
     }
     None
+}
+
+/// Sniffs the symbol format by magic and dispatches to the matching
+/// attach: BSJB -> portable PDB, `Microsoft C/C++ MSF` -> native PDB,
+/// the MDB magic -> Mono MDB.
+fn attach_symbols(module: &mut Module, bytes: &[u8]) -> Result<()> {
+    if bytes.starts_with(&0x424A_5342u32.to_le_bytes()) {
+        attach_portable_symbols(module, bytes)
+    } else if bytes.starts_with(b"Microsoft C/C++ MSF") {
+        attach_native_symbols(module, bytes)
+    } else if bytes.len() >= 8
+        && u64::from_le_bytes(bytes[..8].try_into().unwrap()) == cecli_mdb::reader::MAGIC
+    {
+        attach_mdb_symbols(module, bytes)
+    } else {
+        Err(Error::bad_image(
+            "unrecognized symbol file format (expected portable/native PDB or Mono MDB)",
+        ))
+    }
 }
 
 /// Parses a portable PDB and attaches its tables to `module.debug`.
@@ -274,6 +330,122 @@ fn attach_portable_symbols(module: &mut Module, pdb_bytes: &[u8]) -> Result<()> 
     }
 
     module.debug = Some(crate::module_def::ModuleDebugInfo { documents, points, scopes });
+    Ok(())
+}
+
+/// Attaches native-PDB (MSF/CodeView) symbols: source files become
+/// documents (name only — checksums live in per-line records, not the
+/// document table), and each function's line records become sequence
+/// points keyed by the MethodDef rid of its token.
+///
+/// Deviation: native records carry RVA deltas, not IL offsets; the delta
+/// is stored in [`SequencePoint::offset`] verbatim (Cecil's
+/// `NativePdbReader` performs the same lossy mapping when adapting to its
+/// sequence-point model). Columns are unknown and stay zero.
+fn attach_native_symbols(module: &mut Module, pdb_bytes: &[u8]) -> Result<()> {
+    let reader = cecli_pdb::native::NativePdbReader::open(pdb_bytes)?;
+
+    // Documents: unique file names in first-encounter order across all
+    // functions' line records.
+    let mut documents: Vec<cecli_pdb::document::Document> = Vec::new();
+    let doc_index = |name: &str, documents: &mut Vec<cecli_pdb::document::Document>| -> u32 {
+        if let Some(i) = documents.iter().position(|d| d.name == name) {
+            return i as u32;
+        }
+        documents.push(cecli_pdb::document::Document {
+            name: name.to_string(),
+            hash_algorithm: [0; 16],
+            hash: Vec::new(),
+            language: [0; 16],
+        });
+        documents.len() as u32 - 1
+    };
+
+    let mut points = std::collections::BTreeMap::new();
+    for function in reader.functions()? {
+        if function.lines.is_empty() {
+            continue;
+        }
+        let mut by_doc: std::collections::BTreeMap<
+            u32,
+            Vec<cecli_pdb::portable_reader::SequencePoint>,
+        > = std::collections::BTreeMap::new();
+        for line in &function.lines {
+            let di = doc_index(&line.file, &mut documents);
+            by_doc.entry(di).or_default().push(cecli_pdb::portable_reader::SequencePoint {
+                offset: line.rva_delta as i32,
+                start_line: line.line,
+                start_column: 0,
+                end_line: line.line,
+                end_column: 0,
+            });
+        }
+        // One entry per document the function touches (the portable model
+        // keys points by (document, list)).
+        points.insert(function.token.rid(), by_doc.into_iter().collect::<Vec<_>>());
+    }
+
+    module.debug = Some(crate::module_def::ModuleDebugInfo {
+        documents,
+        points,
+        scopes: std::collections::BTreeMap::new(),
+    });
+    Ok(())
+}
+
+/// Attaches Mono MDB symbols: source files become documents (with their
+/// MD5 hashes), and each method's line table becomes sequence points keyed
+/// by the MethodDef rid of its token. The per-point source file is not
+/// surfaced by the MDB line table (it travels inside the packed DWARF
+/// opcode stream), so every point references the method's compile-unit
+/// primary source when one exists, else document 0.
+fn attach_mdb_symbols(module: &mut Module, mdb_bytes: &[u8]) -> Result<()> {
+    let reader = cecli_mdb::reader::MdbReader::open(mdb_bytes)?;
+
+    let documents: Vec<cecli_pdb::document::Document> = reader
+        .source_files()
+        .into_iter()
+        .map(|sf| cecli_pdb::document::Document {
+            name: sf.path,
+            hash_algorithm: [0; 16],
+            hash: sf.hash.to_vec(),
+            language: [0; 16],
+        })
+        .collect();
+    // Compile unit -> 0-based index of its primary source file.
+    let cu_doc: Vec<u32> = reader
+        .compile_units()
+        .into_iter()
+        .map(|cu| cu.file_ids.first().copied().map(|id| id.saturating_sub(1)).unwrap_or(0))
+        .collect();
+
+    let mut points = std::collections::BTreeMap::new();
+    for method in reader.methods() {
+        let Some(lines) = reader.method_lines(method.row)? else { continue };
+        if lines.il_offsets.is_empty() {
+            continue;
+        }
+        let doc = cu_doc.get(method.compile_unit.saturating_sub(1) as usize).copied().unwrap_or(0);
+        let sequence: Vec<cecli_pdb::portable_reader::SequencePoint> = lines
+            .il_offsets
+            .iter()
+            .zip(&lines.line_numbers)
+            .map(|(&offset, &line)| cecli_pdb::portable_reader::SequencePoint {
+                offset,
+                start_line: line.max(0) as u32,
+                start_column: 0,
+                end_line: line.max(0) as u32,
+                end_column: 0,
+            })
+            .collect();
+        points.insert(method.token.rid(), vec![(doc, sequence)]);
+    }
+
+    module.debug = Some(crate::module_def::ModuleDebugInfo {
+        documents,
+        points,
+        scopes: std::collections::BTreeMap::new(),
+    });
     Ok(())
 }
 
@@ -369,16 +541,22 @@ const TEXT_RVA: u32 = 0x2000;
 
 /// Writer configuration carrier. Port of the fields Mono.Cecil's
 /// `WriterParameters` carries that matter here.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct WriteParameters {
     /// Emit debug symbols for a module carrying
     /// [`crate::module_def::ModuleDebugInfo`] (Cecil
     /// `WriterParameters.WriteSymbols`).
     pub write_symbols: bool,
+    /// Raw `.snk` key-pair bytes (Cecil `WriterParameters.StrongNameKeyPair`).
+    /// When set, the output reserves a strong-name signature slot sized to
+    /// the key, the `Assembly` row's public key is replaced by the key's
+    /// public key, and — with the `strongname` feature enabled — the
+    /// finished image is signed. Without the feature a key is rejected.
+    pub strong_name_key: Option<Vec<u8>>,
 }
 
 impl WriteParameters {
-    /// Creates parameters with symbol writing off.
+    /// Creates parameters with symbol writing and signing off.
     pub fn new() -> Self {
         WriteParameters::default()
     }
@@ -397,10 +575,47 @@ impl AssemblyDefinition {
     /// so user strings register before table serialization) -> metadata
     /// tables with final RVAs -> canonical `.text` rebuild that preserves the
     /// module's identity fields (machine, characteristics, subsystem kind,
-    /// CLI flags). Symbol emission happens in [`Self::write_file_with`],
+    /// CLI flags), plus the Win32 resources and PE debug directory captured
+    /// at read time. Symbol emission happens in [`Self::write_file_with`],
     /// which knows the output path of the sidecar `.pdb`.
-    pub fn write_with(&self, _opts: &WriteParameters) -> Result<Vec<u8>> {
+    ///
+    /// With [`WriteParameters::strong_name_key`] set, the assembly's public
+    /// key is taken from the key, a signature slot is reserved, and (with
+    /// the `strongname` feature) the emitted image is signed in place.
+    pub fn write_with(&self, opts: &WriteParameters) -> Result<Vec<u8>> {
         let module = &self.main;
+
+        // Strong-name key handling. The key's public key replaces the
+        // assembly's for the emitted Assembly row (Cecil does the same when
+        // WriterParameters.StrongNameKeyPair is set) so the reserved
+        // signature slot matches what the row advertises.
+        #[cfg(feature = "strongname")]
+        let key_pair = match opts.strong_name_key.as_deref() {
+            Some(bytes) => Some(
+                crate::strongname::StrongNameKeyPair::new(bytes)
+                    .map_err(|e| Error::bad_image(format!("invalid strong-name key: {e}")))?,
+            ),
+            None => None,
+        };
+        #[cfg(not(feature = "strongname"))]
+        if opts.strong_name_key.is_some() {
+            return Err(Error::Unsupported(
+                "strong-name signing requires the `strongname` feature".to_string(),
+            ));
+        }
+
+        let effective_name = {
+            // `mut` only under the strongname feature; the allow keeps the
+            // default-feature build warning-free.
+            #[allow(unused_mut)]
+            let mut name = self.name.clone();
+            #[cfg(feature = "strongname")]
+            if let Some(kp) = &key_pair {
+                name.public_key = kp.public_key();
+            }
+            name
+        };
+        let strongname_size = strong_name_signature_size(&effective_name, module);
 
         // 1. Managed resources blob. Offsets become ManifestResource.Offset
         //    columns; bytes fill the CLI-header Resources directory.
@@ -466,7 +681,7 @@ impl AssemblyDefinition {
             };
             crate::write::emit_metadata::emit_metadata_with(
                 module,
-                Some(&self.name),
+                Some(&effective_name),
                 self.entry_point,
                 &layout,
                 tmap,
@@ -474,24 +689,34 @@ impl AssemblyDefinition {
         };
 
         // 5. Rebuild the PE image. Identity fields travel through a minimal
-        //    carrier image because the object model does not retain the
-        //    original file bytes. Win32-resource passthrough and debug
-        //    directory entries are not retained by the v1 model either.
+        //    carrier image; the Win32 resources and debug directory captured
+        //    at read time ride along in the parts (their RVAs/addresses are
+        //    recomputed by the PE writer).
         let parts = cecli_pe::EmitParts {
             code: code.into_vec(),
             resources: resources.bytes,
             data: emitted.data,
             data_alignment: None,
             metadata: emitted.root,
-            strongname_size: 0, // strong-name signing is skipped per contract
-            win32_resources: None,
-            debug_entries: Vec::new(),
+            strongname_size,
+            win32_resources: module.win32_resources.as_ref().map(|r| r.bytes.clone()),
+            debug_entries: module.debug_entries.clone(),
             // A7-F2: take the token from the metadata emission (resolved via
             // `entry`), not the stale read-time `module.entry_point_token`.
             entry_point_token: emitted.entry_point_token,
         };
         let carrier = carrier_image(module)?;
-        cecli_pe::ImageWriter::rebuild(&carrier, parts).emit()
+        #[allow(unused_mut)] // signed in place under the strongname feature
+        let mut image = cecli_pe::ImageWriter::rebuild(&carrier, parts).emit()?;
+
+        // 6. Strong-name sign the finished image in place (Cecil calls
+        //    CryptoService.StrongName right after ImageWriter.WriteImage).
+        #[cfg(feature = "strongname")]
+        if let Some(kp) = &key_pair {
+            kp.sign_image(&mut image)
+                .map_err(|e| Error::bad_image(format!("strong-name signing failed: {e}")))?;
+        }
+        Ok(image)
     }
 
     /// Writes the serialized image to `path`, optionally emitting a portable
@@ -589,6 +814,20 @@ pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
 fn arch_is_pe64(arch: cecli_core::flags::TargetArchitecture) -> bool {
     use cecli_core::flags::TargetArchitecture as A;
     matches!(arch, A::AMD64 | A::IA64 | A::ARM64)
+}
+
+/// Signature-slot size for the emitted image (Cecil `ImageWriter`'s
+/// strong-name length rule): the RSA modulus size implied by the ECMA
+/// public key (`len - 32` of header), 128 for ECMA-key (flagged but
+/// keyless) assemblies, 0 when unsigned.
+fn strong_name_signature_size(name: &AssemblyNameDefinition, module: &Module) -> u32 {
+    if !name.public_key.is_empty() {
+        (name.public_key.len().saturating_sub(32)) as u32
+    } else if module.attributes.contains(cecli_core::flags::ModuleAttributes::STRONG_NAME_SIGNED) {
+        128
+    } else {
+        0
+    }
 }
 
 /// Builds a minimal parseable PE/CLI image whose identity fields match
@@ -695,10 +934,18 @@ fn carrier_image(module: &Module) -> Result<cecli_pe::Image> {
     w += 4;
     w += if pe64 { 40 } else { 24 }; // stack/heap + LoaderFlags + NumberOfRvaAndSizes(16)
 
-    // Data directories: only COM+ points anywhere.
+    // Data directories: only COM+ points anywhere — plus, when the module
+    // carries Win32 resources, the ORIGINAL resource directory so the PE
+    // writer can patch internal resource RVAs from the old base to the
+    // re-emitted `.rsrc` section.
     let cli_dir = w + 14 * 8;
     out[cli_dir..cli_dir + 4].copy_from_slice(&TEXT_RVA.to_le_bytes());
     out[cli_dir + 4..cli_dir + 8].copy_from_slice(&(CLI_HEADER_CB as u32).to_le_bytes());
+    if let Some(rsrc) = &module.win32_resources {
+        let dd = w + 2 * 8;
+        out[dd..dd + 4].copy_from_slice(&rsrc.original_rva.to_le_bytes());
+        out[dd + 4..dd + 8].copy_from_slice(&(rsrc.bytes.len() as u32).to_le_bytes());
+    }
     w += 16 * 8;
 
     // Section table: one `.text`.
@@ -849,7 +1096,7 @@ mod tests {
 
         let out_dir = unique_test_dir("sidecar");
         let out = out_dir.join("line_out.exe");
-        ad.write_file_with(&out, &WriteParameters { write_symbols: true })
+        ad.write_file_with(&out, &WriteParameters { write_symbols: true, ..Default::default() })
             .expect("write with symbols");
         assert!(out.exists(), "image written");
         let sidecar = out_dir.join("line_out.pdb");
@@ -931,5 +1178,153 @@ mod tests {
                 | ModuleCharacteristics::HIGH_ENTROPY_VA
         );
         assert!(m.debug.is_none());
+    }
+
+    /// Native PDB sidecar attaches through the default same-stem lookup
+    /// (format sniffed from the MSF magic, not assumed).
+    #[test]
+    fn native_pdb_symbols_attach() {
+        let fixtures = cecli_core::fixtures_dir();
+        let dll = fixtures.join("ComplexPdb.dll");
+        if !dll.exists() || !fixtures.join("ComplexPdb.pdb").exists() {
+            return; // fixture pair not provisioned on this checkout
+        }
+        let mut opts = crate::resolver::ReaderParameters::new();
+        opts.read_symbols = true;
+        let ad = AssemblyDefinition::read_file_with(&dll, &opts).expect("reads with symbols");
+        let debug = ad.main.debug.as_ref().expect("native symbols attached");
+        assert!(!debug.documents.is_empty(), "native pdb yields documents");
+        assert!(!debug.points.is_empty(), "native pdb yields sequence points");
+    }
+
+    /// Mono MDB sidecar attaches through the default same-stem lookup.
+    #[test]
+    fn mdb_symbols_attach() {
+        let fixtures = cecli_core::fixtures_dir();
+        let dll = fixtures.join("SQLite-net.dll");
+        if !dll.exists() || !fixtures.join("SQLite-net.dll.mdb").exists() {
+            return; // fixture pair not provisioned on this checkout
+        }
+        let mut opts = crate::resolver::ReaderParameters::new();
+        opts.read_symbols = true;
+        let ad = AssemblyDefinition::read_file_with(&dll, &opts).expect("reads with symbols");
+        let debug = ad.main.debug.as_ref().expect("mdb symbols attached");
+        assert!(!debug.documents.is_empty(), "mdb yields documents");
+        assert!(!debug.points.is_empty(), "mdb yields sequence points");
+    }
+
+    /// A configured SymbolReaderProvider overrides the default sidecar
+    /// lookup entirely.
+    #[test]
+    fn symbol_provider_overrides_default_lookup() {
+        let fixtures = cecli_core::fixtures_dir();
+        let dll = fixtures.join("ComplexPdb.dll");
+        let native_pdb = fixtures.join("CecilTest.pdb");
+        if !dll.exists() || !native_pdb.exists() {
+            return;
+        }
+        struct FixedProvider(Vec<u8>);
+        impl crate::resolver::SymbolReaderProvider for FixedProvider {
+            fn get_symbol_reader(&self, _image_path: &std::path::Path) -> Result<Option<Vec<u8>>> {
+                Ok(Some(self.0.clone()))
+            }
+        }
+
+        let mut opts = crate::resolver::ReaderParameters::new();
+        opts.read_symbols = true;
+        opts.symbol_reader_provider =
+            Some(Box::new(FixedProvider(std::fs::read(&native_pdb).expect("pdb readable"))));
+        let ad = AssemblyDefinition::read_file_with(&dll, &opts).expect("reads via provider");
+        let debug = ad.main.debug.as_ref().expect("provider symbols attached");
+        assert!(
+            !debug.documents.is_empty(),
+            "documents come from the provider's file, not the sidecar"
+        );
+    }
+
+    /// Win32 resources and the PE debug directory captured at read time
+    /// survive the canonical rebuild: resource bytes roundtrip verbatim
+    /// (at a fresh RVA), debug entries re-emit one-for-one.
+    #[test]
+    fn win32_resources_and_debug_directory_survive_rebuild() {
+        let fixtures = cecli_core::fixtures_dir();
+        let dll = fixtures.join("cecil.dll");
+        if !dll.exists() {
+            return; // fixture not provisioned on this checkout
+        }
+        let ad = AssemblyDefinition::read_file(&dll).expect("cecil.dll parses");
+        let orig_rsrc = ad.main.win32_resources.clone().expect("cecil.dll carries resources");
+        let orig_debug_count = ad.main.debug_entries.len();
+        assert!(orig_debug_count > 0, "cecil.dll carries debug directory entries");
+
+        let out = ad.write().expect("write");
+        let re = AssemblyDefinition::read(&out).expect("output re-parses");
+        let rsrc = re.main.win32_resources.as_ref().expect("resources re-emitted");
+        // Internal RVAs are patched to the new section base, so bytes are
+        // not verbatim — assert length and semantic content instead.
+        assert_eq!(rsrc.bytes.len(), orig_rsrc.bytes.len(), "resource length preserved");
+        let marker: Vec<u8> = "Mono.Cecil".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert!(
+            rsrc.bytes.windows(marker.len()).any(|w| w == marker),
+            "VS_VERSIONINFO string content survives the rebuild"
+        );
+        assert_eq!(
+            re.main.debug_entries.len(),
+            orig_debug_count,
+            "debug entries re-emit one-for-one"
+        );
+
+        // The re-emitted resource directory must point into the new image,
+        // not the stale original RVA.
+        let image = cecli_pe::Image::parse(&out).expect("output is a PE image");
+        let dir = image.data_directories[cecli_pe::DataDirectoryIndex::Resource as usize];
+        assert_eq!(dir.size as usize, orig_rsrc.bytes.len());
+        assert_eq!(dir.virtual_address, rsrc.original_rva, "directory tracks the new section");
+    }
+
+    /// Full strong-name wiring: key in, public key out, signature slot
+    /// reserved and actually signed.
+    #[cfg(all(test, feature = "strongname"))]
+    #[test]
+    fn strong_name_signing_wires_into_write() {
+        let fixtures = cecli_core::fixtures_dir();
+        let exe = fixtures.join("hello.exe");
+        if !exe.exists() {
+            return; // fixture not provisioned on this checkout
+        }
+        let ad = AssemblyDefinition::read_file(&exe).expect("hello.exe parses");
+
+        let key_bytes =
+            crate::strongname::tests::private_snk(&crate::strongname::tests::generate_key());
+        let opts =
+            WriteParameters { strong_name_key: Some(key_bytes.clone()), ..Default::default() };
+        let out = ad.write_with(&opts).expect("signed write");
+
+        let re = AssemblyDefinition::read(&out).expect("signed image re-parses");
+        let kp = crate::strongname::StrongNameKeyPair::new(&key_bytes).expect("key parses");
+        assert_eq!(
+            re.name.public_key,
+            kp.public_key(),
+            "Assembly row carries the key's public key"
+        );
+
+        let image = cecli_pe::Image::parse(&out).expect("image layer parses");
+        let header = image.cli_header();
+        assert!(header.strong_name_rva != 0, "signature slot reserved");
+        assert!(header.strong_name_size > 0, "signature slot sized");
+        let slot = image.rva(header.strong_name_rva).expect("slot readable");
+        let sig = &slot[..header.strong_name_size as usize];
+        assert!(sig.iter().any(|&b| b != 0), "signature is signed, not a zero placeholder");
+    }
+
+    /// Without the `strongname` feature a key is a clean error, not a
+    /// silent skip.
+    #[cfg(all(test, not(feature = "strongname")))]
+    #[test]
+    fn strong_name_key_requires_feature() {
+        let ad = sample_assembly();
+        let opts = WriteParameters { strong_name_key: Some(vec![1u8; 16]), ..Default::default() };
+        let err = ad.write_with(&opts).expect_err("key without feature must fail");
+        assert!(err.to_string().contains("strongname"), "error names the feature: {err}");
     }
 }

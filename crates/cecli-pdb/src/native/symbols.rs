@@ -72,9 +72,11 @@
 //! region, an undersized (`< 2`) record length, or truncated fixed-size
 //! structures produce [`Error::BadImage`]. A procedure whose segment differs
 //! from 1 or that carries a non-zero parent/next link errors out exactly like
-//! Cecil's `PdbDebugException`; a managed proc record not followed by an
-//! `S_END` record inside its module symbol region (truncated region) is a
-//! [`Error::BadImage`] as well (Cecil `PdbFunction` ctor behavior).
+//! Cecil's `PdbDebugException`. Scopes nest: managed/native procs and
+//! `S_BLOCK32` lexical blocks each open a scope closed by `S_END`, so a
+//! function's terminator may be preceded by interleaved block records (real
+//! compiler output); a symbol region that ends with a scope still open is a
+//! [`Error::BadImage`] (truncated region, Cecil `PdbFunction` ctor behavior).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -94,16 +96,15 @@ mod sym {
     pub const S_PUB32_ST: u16 = 0x1009;
     /// Native (unmanaged) proc kinds: walked past by length during function
     /// extraction — accepting them would pollute the managed token map on
-    /// mixed images (Cecil parity). Kept for format documentation and the
-    /// mixed-image test below.
-    #[allow(dead_code)]
+    /// mixed images (Cecil parity).
     pub const S_LPROC32_ST: u16 = 0x100a;
-    #[allow(dead_code)]
     pub const S_GPROC32_ST: u16 = 0x100b;
+    /// Lexical block scopes (`S_BLOCK32`), opened between a proc and its
+    /// terminator by real compilers.
+    pub const S_BLOCK32_ST: u16 = 0x1003;
+    pub const S_BLOCK32: u16 = 0x1103;
     pub const S_PUB32: u16 = 0x110e;
-    #[allow(dead_code)]
     pub const S_LPROC32: u16 = 0x110f;
-    #[allow(dead_code)]
     pub const S_GPROC32: u16 = 0x1110;
     pub const S_GMANPROC: u16 = 0x112a;
     pub const S_LMANPROC: u16 = 0x112b;
@@ -113,6 +114,23 @@ mod sym {
     /// These are the ONLY proc kinds accepted for function extraction.
     pub fn is_manproc(kind: u16) -> bool {
         matches!(kind, S_GMANPROC | S_LMANPROC)
+    }
+
+    /// Records that open a scope closed by `S_END`: every proc kind plus
+    /// lexical blocks (`S_BLOCK32`). Scope nesting is what makes a proc's
+    /// terminator findable amid interleaved block records.
+    pub fn is_scope_opener(kind: u16) -> bool {
+        matches!(
+            kind,
+            S_GMANPROC
+                | S_LMANPROC
+                | S_GPROC32
+                | S_LPROC32
+                | S_GPROC32_ST
+                | S_LPROC32_ST
+                | S_BLOCK32
+                | S_BLOCK32_ST
+        )
     }
 
     pub fn is_pub32(kind: u16) -> bool {
@@ -967,19 +985,34 @@ fn load_managed_functions(data: &[u8], cb_syms: i32) -> Result<Vec<RawFunction>>
     bits.set_position(4)?;
 
     let mut funcs = Vec::new();
-    // Port of the PdbFunction-constructor requirement that every proc record
-    // is closed by an S_END record: the record right after a proc must be its
-    // terminator, and a region that ends right after a proc is truncated.
-    let mut expect_end: Option<String> = None;
+    // Scope-depth walk, mirroring Cecil's symbol-stack handling in
+    // `PdbFile.LoadManagedFunctions`: managed procs, native procs and
+    // lexical blocks each open a scope closed by an S_END record. Real
+    // compilers interleave S_BLOCK32 scopes (locals, `using`) between a
+    // proc and its terminator, so the function's S_END is the one that
+    // closes the scope the proc opened — not necessarily the immediately
+    // following record.
+    let mut depth: usize = 0;
+    let mut open_func: Option<String> = None;
     walk_records(&mut bits, limit, |bits, rec, stop| {
-        if let Some(name) = expect_end.take() {
-            if rec != sym::S_END {
-                return Err(Error::bad_image(format!(
-                    "native pdb: function '{name}' is not terminated by S_END"
-                )));
+        if rec == sym::S_END {
+            if depth > 0 {
+                depth -= 1;
+                if depth == 0 {
+                    open_func = None;
+                }
             }
+            return Ok(());
         }
-        if !sym::is_manproc(rec) {
+        // Scope openers: any proc kind or lexical block. Native procs are
+        // walked past by length (Cecil parity) but still count for depth so
+        // their own S_END cannot close an enclosing managed function.
+        if sym::is_scope_opener(rec) {
+            depth += 1;
+            if depth > 1 || !sym::is_manproc(rec) {
+                return Ok(()); // nested proc or native/block scope: skip body
+            }
+        } else if !sym::is_manproc(rec) {
             return Ok(()); // skip-by-len (Cecil default branch)
         }
         let parent = bits.read_u32()?;
@@ -1009,7 +1042,7 @@ fn load_managed_functions(data: &[u8], cb_syms: i32) -> Result<Vec<RawFunction>>
                 "native pdb: function '{name}' parent={parent}, next={next}"
             )));
         }
-        expect_end = Some(name.clone());
+        open_func = Some(name.clone());
         funcs.push(RawFunction {
             token,
             name,
@@ -1020,7 +1053,7 @@ fn load_managed_functions(data: &[u8], cb_syms: i32) -> Result<Vec<RawFunction>>
         });
         Ok(())
     })?;
-    if let Some(name) = expect_end.take() {
+    if let Some(name) = open_func.take() {
         return Err(Error::bad_image(format!(
             "native pdb: truncated module symbol region: function '{name}' has no S_END"
         )));

@@ -51,6 +51,26 @@ pub struct Module {
     /// keyed by the original table rid; consumed by the IL writer to re-emit
     /// `calli` operands through its own deduplicated signature rows.
     pub sas_blobs: std::collections::BTreeMap<u32, Vec<u8>>,
+    /// Raw Win32 resource (`.rsrc`) section captured at read time. The v1
+    /// model does not interpret Win32 resources; `write` re-emits them into
+    /// a fresh `.rsrc` section, patching internal offsets relative to
+    /// [`Win32Resources::original_rva`].
+    pub win32_resources: Option<Win32Resources>,
+    /// PE debug directory entries (CodeView, PDB checksum, ...) captured at
+    /// read time with their payload bytes; `write` re-emits them with
+    /// recomputed raw-data addresses. CodeView entries still reference the
+    /// ORIGINAL PDB (stale GUID/age after a rebuild), mirroring Cecil.
+    pub debug_entries: Vec<cecli_pe::ImageDebugEntry>,
+}
+
+/// Verbatim Win32 resource payload plus the RVA it was loaded from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Win32Resources {
+    /// `.rsrc` section RVA in the original image; internal directory
+    /// offsets are patched from this base to the re-emitted section's RVA.
+    pub original_rva: u32,
+    /// Raw section bytes, layout unchanged.
+    pub bytes: Vec<u8>,
 }
 
 impl Default for Module {
@@ -82,6 +102,8 @@ impl Default for Module {
             entry_point_token: cecli_core::Token::NIL,
             debug: None,
             sas_blobs: std::collections::BTreeMap::new(),
+            win32_resources: None,
+            debug_entries: Vec::new(),
         }
     }
 }

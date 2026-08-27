@@ -321,9 +321,14 @@ pub trait SymbolReaderProvider {
 /// `ReaderParameters` carries that matter to this phase.
 #[derive(Default)]
 pub struct ReaderParameters {
-    /// Resolver used for nested `AssemblyRef` lookups while reading; when
-    /// `None` the facade installs its own [`DefaultAssemblyResolver`]
-    /// (Cecil: `BaseAssemblyResolver.GetAssembly` defaults it to `this`).
+    /// Resolver consulted when the facade must FIND A FILE ON DISK while
+    /// reading: satellite netmodules named by `File` rows (see
+    /// [`crate::assembly::AssemblyDefinition`]). It does NOT resolve
+    /// `AssemblyRef`-based type lookups — those go through the separate
+    /// [`crate::resolution::ResolutionEngine`] with its own loader. When
+    /// `None`, satellite probes fall back to [`DefaultAssemblyResolver`]
+    /// with its default search paths (Cecil:
+    /// `BaseAssemblyResolver.GetAssembly` defaulting to `this`).
     pub assembly_resolver: Option<Box<dyn AssemblyResolver>>,
     /// Whether to load debug symbols alongside the assembly
     /// (Cecil `ReaderParameters.ReadSymbols`).
@@ -333,7 +338,9 @@ pub struct ReaderParameters {
     pub reading_mode: ReadingMode,
     /// Symbol-store source used when [`Self::read_symbols`] is set
     /// (Cecil `ReaderParameters.SymbolReaderProvider`). When `None`, the
-    /// facade falls back to its default same-stem lookup.
+    /// facade falls back to its default same-stem lookup: `<file>.pdb` and
+    /// `<stem>.pdb` (portable or native, sniffed by magic), then
+    /// `<file>.mdb` / `<stem>.mdb` (Mono).
     pub symbol_reader_provider: Option<Box<dyn SymbolReaderProvider>>,
 }
 

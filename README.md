@@ -35,14 +35,19 @@ asm.write_file("patched.dll")?;
 
 ## 能力概览
 
-- 读 → 检查 → 改 → 写完整闭环;未触碰的镜像可字节级直通
+- 读 → 检查 → 改 → 写完整闭环;未触碰的镜像可字节级直通;Win32 资源与 PE
+  debug 目录在读时保留、写时原样重发(RVA 重定位)
 - 泛型实例 / vararg / 函数指针 / 自定义修饰符等全部签名字形
 - 自定义特性:构造函数签名驱动的真实镜像解码 + 类型化参数视图
 - 方法体编辑:`BodyEditor`(插入/替换/删除/发射辅助)、`simplify_macros` / `optimize_macros` / `renumber`
-- 符号:Portable PDB 读写(文档、序列点、局部作用域)、原生 PDB 行号读取、MDB 读写
+- 符号:三格式接入主读流程(`read_symbols` 自动嗅探 Portable PDB / 原生
+  PDB / Mono MDB,`SymbolReaderProvider` 可注入自定义来源)、Portable PDB
+  读写(文档、序列点、局部作用域)、原生 PDB 行号读取、MDB 读写
 - P/Invoke、封送规范全量 NativeTypeSpec、安全声明(XML/二进制两种线格式)
 - WinRT 投影(`apply_projections` / `remove_projections`,移植自 WindowsRuntimeProjections.cs)
-- 强名签名:.snk 密钥解析与 PE 签名(启用 `strongname` feature)
+- 强名签名:`.snk` 密钥解析与 PE 签名;`WriteParameters::strong_name_key`
+  直接在 `write` 流程内完成签名目录预留 + 公钥替换 + 签名(启用
+  `strongname` feature)
 
 ## 与 Mono.Cecil 的 API 差异
 
@@ -58,8 +63,8 @@ asm.write_file("patched.dll")?;
 ## 测试
 
 ```sh
-cargo test --workspace          # 359 个测试,含真实程序集夹具的读→写→重读等价套件
-cargo test -p cecli --features strongname   # 强名签名套件
+cargo test --workspace          # 364 个测试,含真实程序集夹具的读→写→重读等价套件
+cargo test -p cecli --features strongname   # 强名签名套件(含 write 集成签名)
 ```
 
 `fixtures/` 内置 127 个真实 .NET 程序集/PDB/MDB 作为回归基线。

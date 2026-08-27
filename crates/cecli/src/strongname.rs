@@ -831,14 +831,14 @@ fn private_key_parts(key: &CapiKey) -> Result<(rsa::BigUint, rsa::BigUint)> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use rsa::rand_core::{CryptoRng, RngCore};
     use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 
     /// Deterministic xorshift RNG so key generation (and therefore every
     /// assertion) is reproducible without extra dependencies.
-    struct TestRng(u64);
+    pub(crate) struct TestRng(u64);
 
     impl RngCore for TestRng {
         fn next_u32(&mut self) -> u32 {
@@ -873,13 +873,13 @@ mod tests {
     impl CryptoRng for TestRng {}
 
     /// Generates a deterministic 1024-bit RSA key.
-    fn generate_key() -> rsa::RsaPrivateKey {
+    pub(crate) fn generate_key() -> rsa::RsaPrivateKey {
         rsa::RsaPrivateKey::new(&mut TestRng(0x5eed_1234_abcd_ef01), 1024).expect("keygen failed")
     }
 
     /// Serializes a full key pair as an `RSA2` private `.snk` blob, mirroring
     /// what `sn -k` writes.
-    fn private_snk(key: &rsa::RsaPrivateKey) -> Vec<u8> {
+    pub(crate) fn private_snk(key: &rsa::RsaPrivateKey) -> Vec<u8> {
         let n = key.n().to_bytes_be();
         let e = key.e().to_bytes_be();
         let d = key.d().to_bytes_be();
