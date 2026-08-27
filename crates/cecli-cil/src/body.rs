@@ -622,10 +622,8 @@ mod tests {
         handler.handler_length = 4;
         handler.catch_type = Token(0x0100_000A);
 
-        // Offsets: nop(0) leave.s(1..3) pop(3)? keep simple:
-        // 0: nop, 1: leave.s -> 6, 3: pop, 4: endfinally, 5: rethrow? use:
-        // 0: nop; 1: leave.s 7 (2 bytes); 3: pop; 4: pop; 5: endfinally;
-        // 6: rethrow (fe 1a); 8: ret
+        // Body layout: 0: nop; 1: leave.s 7 (2 bytes); 3: pop; 4: pop;
+        // 5: endfinally; 6: rethrow (fe 1a); 8: ret
         let body = MethodBody {
             max_stack: 8,
             local_var_sig_tok: locals,

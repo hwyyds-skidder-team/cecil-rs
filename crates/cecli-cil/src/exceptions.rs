@@ -370,9 +370,9 @@ mod tests {
             h.try_start = i as i32;
             many.push(h);
         }
-        // 21 handlers still fit the size byte (21*12+4 = 256 > 255 actually
-        // forces fat through write_section, but the heuristic itself is
-        // count >= 0x15).
+        // 21 handlers overflow the one-byte section size (21*12+4 = 256 >
+        // 255), so the heuristic forces fat at count >= 0x15 — exactly the
+        // layout rule write_section applies.
         assert!(requires_fat_section(&many, false));
     }
 }
