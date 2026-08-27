@@ -111,13 +111,13 @@ pub fn event_doc_id(ev: EventId, m: &Module) -> String {
 struct GenOpts<'a> {
     is_argument: bool,
     is_nested_type: bool,
-    arguments: &'a [TypeDesc],
+    arguments: &'a [std::sync::Arc<TypeDesc>],
     argument_index: usize,
 }
 
 impl<'a> GenOpts<'a> {
     /// Options for printing an instantiated type's element chain.
-    fn argument(arguments: &'a [TypeDesc], is_nested_type: bool) -> Self {
+    fn argument(arguments: &'a [std::sync::Arc<TypeDesc>], is_nested_type: bool) -> Self {
         GenOpts { is_argument: true, is_nested_type, arguments, argument_index: 0 }
     }
 }
@@ -300,7 +300,7 @@ fn write_chain_level(
     }
 }
 
-fn write_argument_list(out: &mut String, args: &[TypeDesc], m: &Module) {
+fn write_argument_list(out: &mut String, args: &[std::sync::Arc<TypeDesc>], m: &Module) {
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
             out.push(',');
@@ -578,7 +578,7 @@ mod tests {
             cecli::model::types::MethodDefinition {
                 name: "bb".into(),
                 signature: sig(
-                    vec![ext("System", "String"), TypeDesc::ByRef(Box::new(int32()))],
+                    vec![ext("System", "String"), TypeDesc::ByRef(std::sync::Arc::new(int32()))],
                     TypeDesc::Internal("void".into()),
                 ),
                 ..Default::default()
@@ -593,9 +593,9 @@ mod tests {
                 name: "gg".into(),
                 signature: sig(
                     vec![
-                        TypeDesc::SzArray(Box::new(ext("System", "Int16"))),
+                        TypeDesc::SzArray(std::sync::Arc::new(ext("System", "Int16"))),
                         TypeDesc::Array {
-                            element: Box::new(int32()),
+                            element: std::sync::Arc::new(int32()),
                             sizes: vec![],
                             lobounds: vec![0, 0],
                         },
@@ -716,8 +716,8 @@ mod tests {
         // Instantiate GenericType<T>.NestedType over the method var ``0:
         // arity stripped from the element name, braces carry the argument.
         let param = TypeDesc::GenericInstance {
-            definition: Box::new(nested_ext("N", &["GenericType`1"], "NestedType")),
-            arguments: vec![TypeDesc::MVar(0)],
+            definition: std::sync::Arc::new(nested_ext("N", &["GenericType`1"], "NestedType")),
+            arguments: vec![std::sync::Arc::new(TypeDesc::MVar(0))],
         };
         m.method_mut(meth).unwrap().signature.parameters = vec![param];
         assert_eq!(

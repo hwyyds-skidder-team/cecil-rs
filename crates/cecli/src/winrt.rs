@@ -840,13 +840,15 @@ fn walk_type_desc(
     match td {
         TypeDesc::External(e) => visit_external_chain(e, f),
         TypeDesc::SzArray(x) | TypeDesc::Ptr(x) | TypeDesc::ByRef(x) | TypeDesc::Pinned(x) => {
-            walk_type_desc(x, f)
+            // Copy-on-write: shared subtrees (refcount > 1) are cloned before
+            // mutation so projections never bleed across unrelated owners.
+            walk_type_desc(std::sync::Arc::make_mut(x), f)
         }
-        TypeDesc::Array { element, .. } => walk_type_desc(element, f),
+        TypeDesc::Array { element, .. } => walk_type_desc(std::sync::Arc::make_mut(element), f),
         TypeDesc::GenericInstance { definition, arguments } => {
-            walk_type_desc(definition, f)?;
+            walk_type_desc(std::sync::Arc::make_mut(definition), f)?;
             for a in arguments {
-                walk_type_desc(a, f)?;
+                walk_type_desc(std::sync::Arc::make_mut(a), f)?;
             }
             Ok(())
         }
@@ -857,8 +859,8 @@ fn walk_type_desc(
             walk_type_desc(&mut sig.return_type, f)
         }
         TypeDesc::CMod { modifier, unmodified, .. } => {
-            walk_type_desc(modifier, f)?;
-            walk_type_desc(unmodified, f)
+            walk_type_desc(std::sync::Arc::make_mut(modifier), f)?;
+            walk_type_desc(std::sync::Arc::make_mut(unmodified), f)
         }
         _ => Ok(()),
     }
@@ -913,7 +915,7 @@ fn walk_marshal(
 ) -> Result<()> {
     if let Some(MarshalInfo { spec: NativeTypeSpec::SafeArray { element_desc: Some(d), .. } }) = mi
     {
-        walk_type_desc(d, f)?;
+        walk_type_desc(std::sync::Arc::make_mut(d), f)?;
     }
     Ok(())
 }
@@ -1137,7 +1139,7 @@ fn unproject_type(
 ) -> Option<TypeDesc> {
     match td {
         TypeDesc::GenericInstance { definition, arguments } => Some(TypeDesc::GenericInstance {
-            definition: Box::new(unproject_type(definition, refs)?),
+            definition: std::sync::Arc::new(unproject_type(definition, refs)?),
             arguments: arguments.clone(),
         }),
         other => {
@@ -1297,7 +1299,7 @@ fn collect_implemented_interfaces(
         // context (`TypeResolver.Resolve`).
         let resolved = if let TypeDesc::GenericInstance { definition, arguments } = td {
             if resolve_local(m, definition).is_some() {
-                let map_v = |n: u16| arguments.get(n as usize).cloned();
+                let map_v = |n: u16| arguments.get(n as usize).map(|a| a.as_ref().clone());
                 let mut no_map = |_n: u16| -> Option<TypeDesc> { None };
                 substitute_type(it, &map_v, &mut no_map)
             } else {
@@ -1325,7 +1327,9 @@ fn redirect_interface_methods(
     let Some(id) = resolve_local_maybe_projected(m, interface_td, refs) else { return };
     let map_v = |n: u16| -> Option<TypeDesc> {
         match interface_td {
-            TypeDesc::GenericInstance { arguments, .. } => arguments.get(n as usize).cloned(),
+            TypeDesc::GenericInstance { arguments, .. } => {
+                arguments.get(n as usize).map(|a| a.as_ref().clone())
+            }
             _ => None,
         }
     };
@@ -1963,7 +1967,10 @@ mod tests {
     }
 
     fn gi(def: TypeDesc, args: Vec<TypeDesc>) -> TypeDesc {
-        TypeDesc::GenericInstance { definition: Box::new(def), arguments: args }
+        TypeDesc::GenericInstance {
+            definition: std::sync::Arc::new(def),
+            arguments: args.into_iter().map(std::sync::Arc::new).collect(),
+        }
     }
 
     fn void_sig(ret: TypeDesc) -> MethodSignature {

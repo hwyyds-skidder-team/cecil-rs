@@ -72,26 +72,35 @@ impl<'a> Importer<'a> {
         match ty {
             TypeDesc::Def(id) => self.import_def(*id),
             TypeDesc::External(ext) => TypeDesc::External(Box::new(self.rebuild_external(ext))),
-            TypeDesc::SzArray(element) => TypeDesc::SzArray(Box::new(self.import_type(element))),
+            TypeDesc::SzArray(element) => {
+                TypeDesc::SzArray(std::sync::Arc::new(self.import_type(element)))
+            }
             TypeDesc::Array { element, sizes, lobounds } => TypeDesc::Array {
-                element: Box::new(self.import_type(element)),
+                element: std::sync::Arc::new(self.import_type(element)),
                 sizes: sizes.clone(),
                 lobounds: lobounds.clone(),
             },
-            TypeDesc::Ptr(pointee) => TypeDesc::Ptr(Box::new(self.import_type(pointee))),
-            TypeDesc::ByRef(pointee) => TypeDesc::ByRef(Box::new(self.import_type(pointee))),
-            TypeDesc::Pinned(pointee) => TypeDesc::Pinned(Box::new(self.import_type(pointee))),
+            TypeDesc::Ptr(pointee) => TypeDesc::Ptr(std::sync::Arc::new(self.import_type(pointee))),
+            TypeDesc::ByRef(pointee) => {
+                TypeDesc::ByRef(std::sync::Arc::new(self.import_type(pointee)))
+            }
+            TypeDesc::Pinned(pointee) => {
+                TypeDesc::Pinned(std::sync::Arc::new(self.import_type(pointee)))
+            }
             TypeDesc::GenericInstance { definition, arguments } => TypeDesc::GenericInstance {
-                definition: Box::new(self.import_type(definition)),
-                arguments: arguments.iter().map(|a| self.import_type(a)).collect(),
+                definition: std::sync::Arc::new(self.import_type(definition)),
+                arguments: arguments
+                    .iter()
+                    .map(|a| std::sync::Arc::new(self.import_type(a)))
+                    .collect(),
             },
             TypeDesc::FnPtr(signature) => {
                 TypeDesc::FnPtr(Box::new(self.import_signature(signature)))
             }
             TypeDesc::CMod { required, modifier, unmodified } => TypeDesc::CMod {
                 required: *required,
-                modifier: Box::new(self.import_type(modifier)),
-                unmodified: Box::new(self.import_type(unmodified)),
+                modifier: std::sync::Arc::new(self.import_type(modifier)),
+                unmodified: std::sync::Arc::new(self.import_type(unmodified)),
             },
             // Context-bound or leaf values carry no cross-module state.
             TypeDesc::Var(_) | TypeDesc::MVar(_) | TypeDesc::Sentinel => ty.clone(),
@@ -633,16 +642,16 @@ mod tests {
         target.types.push(TypeDefinition { name: "Point".into(), ..Default::default() });
 
         let ty = TypeDesc::GenericInstance {
-            definition: Box::new(TypeDesc::Def(pid)),
+            definition: std::sync::Arc::new(TypeDesc::Def(pid)),
             arguments: vec![
-                TypeDesc::SzArray(Box::new(TypeDesc::Var(0))),
-                TypeDesc::MVar(1),
-                TypeDesc::FnPtr(Box::new(int32_sig(TypeDesc::Def(pid)))),
-                TypeDesc::CMod {
+                std::sync::Arc::new(TypeDesc::SzArray(std::sync::Arc::new(TypeDesc::Var(0)))),
+                std::sync::Arc::new(TypeDesc::MVar(1)),
+                std::sync::Arc::new(TypeDesc::FnPtr(Box::new(int32_sig(TypeDesc::Def(pid))))),
+                std::sync::Arc::new(TypeDesc::CMod {
                     required: true,
-                    modifier: Box::new(system("IsConst")),
-                    unmodified: Box::new(TypeDesc::Def(pid)),
-                },
+                    modifier: std::sync::Arc::new(system("IsConst")),
+                    unmodified: std::sync::Arc::new(TypeDesc::Def(pid)),
+                }),
             ],
         };
 
@@ -650,18 +659,18 @@ mod tests {
         match imported {
             TypeDesc::GenericInstance { definition, arguments } => {
                 assert_eq!(*definition, TypeDesc::Def(TypeId(0)));
-                match &arguments[0] {
+                match arguments[0].as_ref() {
                     TypeDesc::SzArray(inner) => assert_eq!(**inner, TypeDesc::Var(0)),
                     other => panic!("expected SzArray, got {:?}", other),
                 }
-                assert_eq!(arguments[1], TypeDesc::MVar(1));
-                match &arguments[2] {
+                assert_eq!(*arguments[1], TypeDesc::MVar(1));
+                match arguments[2].as_ref() {
                     TypeDesc::FnPtr(sig) => {
                         assert_eq!(sig.parameters[0], TypeDesc::Def(TypeId(0)))
                     }
                     other => panic!("expected FnPtr, got {:?}", other),
                 }
-                match &arguments[3] {
+                match arguments[3].as_ref() {
                     TypeDesc::CMod { unmodified, .. } => {
                         assert_eq!(**unmodified, TypeDesc::Def(TypeId(0)))
                     }

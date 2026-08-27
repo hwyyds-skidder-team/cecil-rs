@@ -883,8 +883,8 @@ mod tests {
         let int32 = ext("System", "Int32");
         let foo = ext("Demo", "Foo");
         let generic = TypeDesc::GenericInstance {
-            definition: Box::new(list.clone()),
-            arguments: vec![int32.clone()],
+            definition: std::sync::Arc::new(list.clone()),
+            arguments: vec![std::sync::Arc::new(int32.clone())],
         };
 
         // Encode a field signature: 0x06 + List`1<Int32> + Foo.

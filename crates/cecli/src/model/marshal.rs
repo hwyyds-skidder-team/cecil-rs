@@ -282,12 +282,12 @@ fn opt_native(rd: &mut ByteReader, r: &mut TdorResolver) -> Result<Option<Box<Na
 }
 
 /// Reads a `TypeDefOrRef` cell and resolves it if any bytes remain.
-fn opt_tdor(rd: &mut ByteReader, r: &mut TdorResolver) -> Result<Option<Box<TypeDesc>>> {
+fn opt_tdor(rd: &mut ByteReader, r: &mut TdorResolver) -> Result<Option<std::sync::Arc<TypeDesc>>> {
     if rd.is_empty() {
         Ok(None)
     } else {
         let cell = rd.compressed_u32()?;
-        Ok(Some(Box::new(r(cell)?)))
+        Ok(Some(std::sync::Arc::new(r(cell)?)))
     }
 }
 
@@ -569,7 +569,7 @@ mod tests {
             NativeTypeSpec::FixedArray { size: 3, element: None },
             NativeTypeSpec::SafeArray {
                 element_variant: Some(VariantType::Dispatch),
-                element_desc: Some(Box::new(ext_ty("ElemTy"))),
+                element_desc: Some(std::sync::Arc::new(ext_ty("ElemTy"))),
             },
             NativeTypeSpec::SafeArray {
                 element_variant: Some(VariantType::UserDefined),
@@ -908,7 +908,7 @@ mod tests {
         let info = MarshalInfo {
             spec: NativeTypeSpec::SafeArray {
                 element_variant: Some(VariantType::BStr),
-                element_desc: Some(Box::new(TypeDesc::Sentinel)),
+                element_desc: Some(std::sync::Arc::new(TypeDesc::Sentinel)),
             },
         };
         assert!(write_marshal_spec(&info, &mut enc_cell()).is_err());

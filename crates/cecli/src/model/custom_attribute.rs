@@ -1504,7 +1504,7 @@ mod tests {
             sys("String"),
             sys("Double"),
             sys("Object"),
-            TypeDesc::SzArray(Box::new(sys("UInt16"))),
+            TypeDesc::SzArray(std::sync::Arc::new(sys("UInt16"))),
             enum_ty.clone(),
         ];
         let fixed = vec![

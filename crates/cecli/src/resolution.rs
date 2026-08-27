@@ -1013,7 +1013,9 @@ mod tests {
             .unwrap());
 
         // Stripping: SZARRAY of Int32 is still a value type element-wise.
-        assert!(engine.is_value_type(&TypeDesc::SzArray(Box::new(int32.clone()))).unwrap());
+        assert!(engine
+            .is_value_type(&TypeDesc::SzArray(std::sync::Arc::new(int32.clone())))
+            .unwrap());
 
         // The loader is consulted once per reference: a second query hits the
         // cache (same result, no growth).

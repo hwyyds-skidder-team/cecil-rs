@@ -39,41 +39,6 @@ use crate::model::types::{
 /// stack.
 const MAX_TDOR_DEPTH: u32 = 64;
 
-/// Upper bound on the total number of materialized TypeSpec tree nodes per
-/// module. The value-semantics model fully expands shared references, so a
-/// hostile image whose TypeSpec rows form a doubling DAG (row K referencing
-/// row K-1 twice) grows trees exponentially — 30 rows would be ~2^30 nodes.
-/// Real assemblies stay orders of magnitude below this budget; exceeding it
-/// is reported as a bad-image error instead of exhausting memory.
-const MAX_TYPE_SPEC_NODES: u64 = 4 << 20;
-
-/// Node count of a materialized [`TypeDesc`] tree, for the expansion budget
-/// above. `External`/`FnPtr`/flat variants count as single nodes: their
-/// contents come from one blob or one table row, so their size is already
-/// bounded by the image size.
-fn type_desc_nodes(ty: &TypeDesc) -> usize {
-    1 + match ty {
-        TypeDesc::Def(_)
-        | TypeDesc::Var(_)
-        | TypeDesc::MVar(_)
-        | TypeDesc::Sentinel
-        | TypeDesc::TypedByRef
-        | TypeDesc::Internal(_)
-        | TypeDesc::External(_)
-        | TypeDesc::FnPtr(_) => 0,
-        TypeDesc::SzArray(t) | TypeDesc::Ptr(t) | TypeDesc::ByRef(t) | TypeDesc::Pinned(t) => {
-            type_desc_nodes(t)
-        }
-        TypeDesc::Array { element, .. } => type_desc_nodes(element),
-        TypeDesc::GenericInstance { definition, arguments } => {
-            type_desc_nodes(definition) + arguments.iter().map(type_desc_nodes).sum::<usize>()
-        }
-        TypeDesc::CMod { modifier, unmodified, .. } => {
-            type_desc_nodes(modifier) + type_desc_nodes(unmodified)
-        }
-    }
-}
-
 /// Options controlling what the reader loads.
 #[derive(Debug, Clone)]
 pub struct ReadOptions {
@@ -155,11 +120,6 @@ pub struct ReadContext {
     pub(crate) spec_memo: std::cell::RefCell<Vec<Option<TypeDesc>>>,
     /// TypeSpec rids currently being decoded (cycle detection).
     pub(crate) spec_stack: std::cell::RefCell<Vec<u32>>,
-    /// TypeSpec tree nodes materialized so far (see [`MAX_TYPE_SPEC_NODES`]).
-    /// Charged once per fresh decode — including everything a tree embeds via
-    /// memoized clones — so cumulative expansion stays bounded while repeated
-    /// memo-hit queries stay free.
-    pub(crate) spec_nodes_used: std::cell::Cell<u64>,
 }
 
 impl fmt::Debug for ReadContext {
@@ -558,12 +518,20 @@ impl ReadContext {
     /// forward references to later rows), so decoding is fully recursive and
     /// never depends on [`ReadContext::resolve_lazy_tables`] having run;
     /// successful decodes are memoized so DAG-shaped reference graphs (row K
-    /// referencing row K-1 twice) stay linear instead of exponential.
+    /// referencing row K-1 twice) stay linear instead of exponential. The
+    /// memo clone is shallow because [`TypeDesc`] children are `Arc`-shared:
+    /// repeated references alias one allocation instead of re-expanding.
     ///
     /// `depth` is the caller's nesting level; the blob is re-parsed seeded at
     /// that depth, so the [`crate::model::signature`] depth budget is shared
     /// across blob hops instead of resetting per hop. A cycle guard rejects
     /// rows that (transitively) reference themselves.
+    ///
+    /// Known limitation: the WRITER still walks shared trees in expanded form
+    /// (`write_type_element` recurses per reference), so writing a hostile
+    /// doubling DAG costs time proportional to its expanded node count even
+    /// though reading it is linear. A subtree→row cache in the token map
+    /// would close that; out of scope for now.
     fn type_spec_at(&self, md: &MetadataReader, rid: u32, depth: u32) -> Result<TypeDesc> {
         if rid == 0 || rid > md.row_count(TableIndex::TypeSpec) {
             return Err(Error::argument(format!("TypeSpec rid {rid} out of range")));
@@ -597,20 +565,6 @@ impl ReadContext {
         };
         self.spec_stack.borrow_mut().pop();
         let ty = decoded?;
-
-        // Expansion budget: the value model fully materializes shared
-        // references, so a doubling DAG chain would otherwise grow trees
-        // exponentially and exhaust memory. Charging the finished tree
-        // (clones included) converts that into a clean error.
-        let nodes = type_desc_nodes(&ty) as u64;
-        let used = self.spec_nodes_used.get();
-        if used.saturating_add(nodes) > MAX_TYPE_SPEC_NODES {
-            return Err(Error::bad_image(format!(
-                "TypeSpec expansion exceeds {} node budget (hostile image?)",
-                MAX_TYPE_SPEC_NODES
-            )));
-        }
-        self.spec_nodes_used.set(used + nodes);
 
         let mut memo = self.spec_memo.borrow_mut();
         if memo.len() <= idx {
@@ -910,11 +864,14 @@ mod tests {
         let cell = (1u32 << 2) | 2;
         assert_eq!(
             ctx.tdor_to_typedesc(&md, cell).unwrap(),
-            TypeDesc::SzArray(Box::new(TypeDesc::Def(TypeId(0))))
+            TypeDesc::SzArray(std::sync::Arc::new(TypeDesc::Def(TypeId(0))))
         );
         // Cached path (post-resolve_lazy_tables) agrees.
         assert_eq!(ctx.type_specs.len(), 1);
-        assert_eq!(ctx.type_specs[0], TypeDesc::SzArray(Box::new(TypeDesc::Def(TypeId(0)))));
+        assert_eq!(
+            ctx.type_specs[0],
+            TypeDesc::SzArray(std::sync::Arc::new(TypeDesc::Def(TypeId(0))))
+        );
     }
 
     #[test]
@@ -987,7 +944,7 @@ mod tests {
         assert_eq!(vars.len(), 1);
         assert_eq!(vars[0].index, 0);
         assert!(!vars[0].pinned);
-        assert_eq!(vars[0].ty, TypeDesc::SzArray(Box::new(TypeDesc::Def(TypeId(0)))));
+        assert_eq!(vars[0].ty, TypeDesc::SzArray(std::sync::Arc::new(TypeDesc::Def(TypeId(0)))));
     }
 
     #[test]
@@ -1016,10 +973,8 @@ mod tests {
 
     /// Builds a synthetic root whose TypeSpec rows form a sharing DAG: row K
     /// is `SZARRAY(GENERICINST Class TypeDef1 < cell(K-1), cell(K-1) >)`, so
-    /// every row references its predecessor twice. The value-semantics model
-    /// fully expands shared references — 30 rows would materialize ~2^30
-    /// nodes — so the expansion budget must reject it with a clean error
-    /// instead of exhausting memory.
+    /// every row references its predecessor twice. Fully expanded this is
+    /// ~2^rows nodes; `Arc`-shared subgraphs keep it linear.
     fn build_dag_md(rows: u32) -> Vec<u8> {
         let mut b = MetadataBuilder::new("v4.0.30319");
         let mname = b.insert_string("<Module>");
@@ -1047,29 +1002,55 @@ mod tests {
         b.finalize()
     }
 
+    /// ~2^30 nodes when fully expanded: `Arc`-shared subgraphs must keep the
+    /// whole DAG resolving in linear time and memory (the pre-Arc node-budget
+    /// era rejected this image; sharing makes the budget unnecessary).
     #[test]
     fn dag_typespec_resolves_linearly_via_memo() {
         let bytes = build_dag_md(30);
         let md = MetadataReader::parse(&bytes).expect("synthetic root parses");
         let mut ctx = ReadContext::new(&md);
         ctx.type_defs.push(TypeId(0));
-        // ~2^30 nodes when fully expanded: the budget turns the OOM into a
-        // clean bad-image error, and memoization keeps parsing linear on the
-        // rows decoded before the budget trips.
-        let err = ctx.resolve_lazy_tables(&md).expect_err("expansion budget");
-        assert!(err.to_string().contains("node budget"), "unexpected error: {err}");
+        ctx.resolve_lazy_tables(&md).expect("30-row DAG resolves");
+        assert_eq!(ctx.type_specs.len(), 30);
     }
 
-    /// The budget must not fire on legitimate shared references: a DAG chain
-    /// of moderate depth resolves fully within 4M nodes.
+    /// The sharing must be structural, not just value equality: row 30's two
+    /// generic arguments both point at the SAME `Arc` allocation holding row
+    /// 29's tree.
     #[test]
-    fn dag_typespec_within_budget_resolves() {
-        let bytes = build_dag_md(16); // 2^16 = 65536-argument trees at most
+    fn dag_typespec_arguments_share_allocations() {
+        let bytes = build_dag_md(30);
         let md = MetadataReader::parse(&bytes).expect("synthetic root parses");
         let mut ctx = ReadContext::new(&md);
         ctx.type_defs.push(TypeId(0));
-        ctx.resolve_lazy_tables(&md).expect("16-row DAG stays in budget");
-        assert_eq!(ctx.type_specs.len(), 16);
+        ctx.resolve_lazy_tables(&md).expect("30-row DAG resolves");
+
+        // Row 30 = SZARRAY(GI{args: [row29, row29]}).
+        let row30 = &ctx.type_specs[29];
+        let TypeDesc::SzArray(outer) = row30 else {
+            panic!("expected SzArray at row 30, got {row30:?}")
+        };
+        let TypeDesc::GenericInstance { arguments, .. } = outer.as_ref() else {
+            panic!("expected GenericInstance under SzArray, got {outer:?}")
+        };
+        assert_eq!(arguments.len(), 2);
+        let TypeDesc::SzArray(a) = arguments[0].as_ref() else {
+            panic!("expected SzArray argument, got {:?}", arguments[0])
+        };
+        let TypeDesc::SzArray(b) = arguments[1].as_ref() else {
+            panic!("expected SzArray argument, got {:?}", arguments[1])
+        };
+        // Both references to row 29 resolve to the same allocation.
+        assert!(std::sync::Arc::ptr_eq(a, b), "arguments must share one Arc");
+        // ...and that allocation is the memoized row 29 tree itself.
+        let TypeDesc::SzArray(row29_inner) = &ctx.type_specs[28] else {
+            panic!("expected SzArray at row 29")
+        };
+        assert!(
+            std::sync::Arc::ptr_eq(a, row29_inner),
+            "argument must alias the memoized row-29 subtree"
+        );
     }
 
     /// Regression guard: the signature depth budget must be global across

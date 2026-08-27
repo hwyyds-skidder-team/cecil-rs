@@ -171,10 +171,12 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Resul
             Ok(TypeDesc::Internal(primitive_name(code).unwrap().into()))
         }
         ET_VALUE_TYPE | ET_CLASS => ctx.tdor_type(et == ET_VALUE_TYPE, r.compressed_u32()?, depth),
-        ET_PTR => Ok(TypeDesc::Ptr(Box::new(read_type_elem(r, ctx, depth + 1)?))),
-        ET_BYREF => Ok(TypeDesc::ByRef(Box::new(read_type_elem(r, ctx, depth + 1)?))),
-        ET_PINNED => Ok(TypeDesc::Pinned(Box::new(read_type_elem(r, ctx, depth + 1)?))),
-        ET_SZ_ARRAY => Ok(TypeDesc::SzArray(Box::new(read_type_elem(r, ctx, depth + 1)?))),
+        ET_PTR => Ok(TypeDesc::Ptr(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?))),
+        ET_BYREF => Ok(TypeDesc::ByRef(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?))),
+        ET_PINNED => Ok(TypeDesc::Pinned(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?))),
+        ET_SZ_ARRAY => {
+            Ok(TypeDesc::SzArray(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?)))
+        }
         ET_ARRAY => read_array_elem(r, ctx, depth + 1),
         ET_GENERIC_INST => {
             let marker = r.u8()?;
@@ -183,12 +185,15 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Resul
                     "GENERICINST marker 0x{marker:02X} is neither CLASS nor VALUETYPE"
                 )));
             }
-            let definition =
-                Box::new(ctx.tdor_type(marker == ET_VALUE_TYPE, r.compressed_u32()?, depth)?);
+            let definition = std::sync::Arc::new(ctx.tdor_type(
+                marker == ET_VALUE_TYPE,
+                r.compressed_u32()?,
+                depth,
+            )?);
             let arity = r.compressed_u32()?;
             let mut arguments = Vec::new();
             for _ in 0..arity {
-                arguments.push(read_type_elem(r, ctx, depth + 1)?);
+                arguments.push(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?));
             }
             Ok(TypeDesc::GenericInstance { definition, arguments })
         }
@@ -199,8 +204,8 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Resul
             Ok(TypeDesc::FnPtr(Box::new(sig)))
         }
         ET_CMOD_REQD | ET_CMOD_OPT => {
-            let modifier = Box::new(ctx.tdor_type(false, r.compressed_u32()?, depth)?);
-            let unmodified = Box::new(read_type_elem(r, ctx, depth + 1)?);
+            let modifier = std::sync::Arc::new(ctx.tdor_type(false, r.compressed_u32()?, depth)?);
+            let unmodified = std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?);
             Ok(TypeDesc::CMod { required: et == ET_CMOD_REQD, modifier, unmodified })
         }
         ET_SENTINEL => Ok(TypeDesc::Sentinel),
@@ -225,7 +230,7 @@ fn compressed_index(r: &mut ByteReader) -> Result<u16> {
 
 /// Multi-dimensional array element: rank, sizes count + sizes, lower-bound count + bounds.
 fn read_array_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Result<TypeDesc> {
-    let element = Box::new(read_type_elem(r, ctx, depth + 1)?);
+    let element = std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?);
     let rank = r.compressed_u32()?;
     let num_sizes = r.compressed_u32()?;
     let mut sizes = Vec::new();
@@ -852,17 +857,18 @@ mod tests {
     #[test]
     fn method_static_generic_complex_params() {
         let list_of_string = TypeDesc::GenericInstance {
-            definition: Box::new(external("List`1")),
-            arguments: vec![external("String")],
+            definition: std::sync::Arc::new(external("List`1")),
+            arguments: vec![std::sync::Arc::new(external("String"))],
         };
-        let int_ptr_array = TypeDesc::SzArray(Box::new(TypeDesc::Ptr(Box::new(i32t()))));
+        let int_ptr_array =
+            TypeDesc::SzArray(std::sync::Arc::new(TypeDesc::Ptr(std::sync::Arc::new(i32t()))));
         roundtrip_method(MethodSignature {
             has_this: false,
             explicit_this: false,
             convention: SignatureCallingConvention::Default,
             generic_count: 1,
             parameters: vec![list_of_string, int_ptr_array],
-            return_type: TypeDesc::ByRef(Box::new(TypeDesc::Internal("char".into()))),
+            return_type: TypeDesc::ByRef(std::sync::Arc::new(TypeDesc::Internal("char".into()))),
             vararg_start: 2,
         });
     }
@@ -934,8 +940,8 @@ mod tests {
     fn field_with_cmod_roundtrip() {
         let sig = FieldSignature(TypeDesc::CMod {
             required: true,
-            modifier: Box::new(TypeDesc::Def(TypeId(0))),
-            unmodified: Box::new(i32t()),
+            modifier: std::sync::Arc::new(TypeDesc::Def(TypeId(0))),
+            unmodified: std::sync::Arc::new(i32t()),
         });
         let blob = write_field_signature(&sig, &TestCtx::new()).expect("write");
         assert_eq!(blob[0], 0x06);
@@ -946,8 +952,8 @@ mod tests {
         // Optional modifier path too.
         let opt = FieldSignature(TypeDesc::CMod {
             required: false,
-            modifier: Box::new(external("IsVolatile")),
-            unmodified: Box::new(TypeDesc::Internal("float32".into())),
+            modifier: std::sync::Arc::new(external("IsVolatile")),
+            unmodified: std::sync::Arc::new(TypeDesc::Internal("float32".into())),
         });
         let blob = write_field_signature(&opt, &TestCtx::new()).unwrap();
         assert_eq!(blob[1], ET_CMOD_OPT);
@@ -971,7 +977,11 @@ mod tests {
     fn local_var_sig_pinned_and_byref() {
         let vars = vec![
             LocalVariable { index: 0, ty: TypeDesc::Internal("bool".into()), pinned: true },
-            LocalVariable { index: 1, ty: TypeDesc::ByRef(Box::new(i32t())), pinned: false },
+            LocalVariable {
+                index: 1,
+                ty: TypeDesc::ByRef(std::sync::Arc::new(i32t())),
+                pinned: false,
+            },
         ];
         let blob = write_local_var_sig(&vars).expect("write");
         assert_eq!(blob, vec![0x07, 0x02, 0x45, 0x02, 0x10, 0x08]);
@@ -983,7 +993,7 @@ mod tests {
     fn parse_type_element_reports_consumed_bytes() {
         let blob = [ElementType::SzArray as u8, ElementType::I4 as u8];
         let (ty, used) = parse_type_element(&blob, 0, &TestCtx::new(), 0, false).expect("parse");
-        assert_eq!(ty, TypeDesc::SzArray(Box::new(i32t())));
+        assert_eq!(ty, TypeDesc::SzArray(std::sync::Arc::new(i32t())));
         assert_eq!(used, 2);
 
         // Offset start works too.
@@ -997,7 +1007,7 @@ mod tests {
     fn array_with_sizes_and_lobounds_roundtrip() {
         let mut w = ByteWriter::new();
         let ty = TypeDesc::Array {
-            element: Box::new(i32t()),
+            element: std::sync::Arc::new(i32t()),
             sizes: vec![10, 20],
             lobounds: vec![-1, 0],
         };
@@ -1011,8 +1021,8 @@ mod tests {
     fn generic_instance_value_type_marker_roundtrip() {
         // Def(TypeId(2)) is registered as a value type in TestCtx.
         let ty = TypeDesc::GenericInstance {
-            definition: Box::new(TypeDesc::Def(TypeId(2))),
-            arguments: vec![i32t()],
+            definition: std::sync::Arc::new(TypeDesc::Def(TypeId(2))),
+            arguments: vec![std::sync::Arc::new(i32t())],
         };
         let mut w = ByteWriter::new();
         write_type_element(&ty, &mut w, &TestCtx::new()).unwrap();

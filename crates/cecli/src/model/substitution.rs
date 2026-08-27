@@ -33,20 +33,29 @@ pub fn substitute(
 
         // Composite nodes: recurse structurally.
         TypeDesc::SzArray(element) => {
-            TypeDesc::SzArray(Box::new(substitute(element, map_v, map_m)))
+            TypeDesc::SzArray(std::sync::Arc::new(substitute(element, map_v, map_m)))
         }
         TypeDesc::Array { element, sizes, lobounds } => TypeDesc::Array {
-            element: Box::new(substitute(element, map_v, map_m)),
+            element: std::sync::Arc::new(substitute(element, map_v, map_m)),
             sizes: sizes.clone(),
             lobounds: lobounds.clone(),
         },
-        TypeDesc::Ptr(element) => TypeDesc::Ptr(Box::new(substitute(element, map_v, map_m))),
-        TypeDesc::ByRef(element) => TypeDesc::ByRef(Box::new(substitute(element, map_v, map_m))),
-        TypeDesc::Pinned(element) => TypeDesc::Pinned(Box::new(substitute(element, map_v, map_m))),
+        TypeDesc::Ptr(element) => {
+            TypeDesc::Ptr(std::sync::Arc::new(substitute(element, map_v, map_m)))
+        }
+        TypeDesc::ByRef(element) => {
+            TypeDesc::ByRef(std::sync::Arc::new(substitute(element, map_v, map_m)))
+        }
+        TypeDesc::Pinned(element) => {
+            TypeDesc::Pinned(std::sync::Arc::new(substitute(element, map_v, map_m)))
+        }
         TypeDesc::GenericInstance { definition, arguments } => {
-            let arguments = arguments.iter().map(|arg| substitute(arg, map_v, map_m)).collect();
+            let arguments = arguments
+                .iter()
+                .map(|arg| std::sync::Arc::new(substitute(arg, map_v, map_m)))
+                .collect();
             TypeDesc::GenericInstance {
-                definition: Box::new(substitute(definition, map_v, map_m)),
+                definition: std::sync::Arc::new(substitute(definition, map_v, map_m)),
                 arguments,
             }
         }
@@ -55,8 +64,8 @@ pub fn substitute(
         }
         TypeDesc::CMod { required, modifier, unmodified } => TypeDesc::CMod {
             required: *required,
-            modifier: Box::new(substitute(modifier, map_v, map_m)),
-            unmodified: Box::new(substitute(unmodified, map_v, map_m)),
+            modifier: std::sync::Arc::new(substitute(modifier, map_v, map_m)),
+            unmodified: std::sync::Arc::new(substitute(unmodified, map_v, map_m)),
         },
 
         // Ground nodes: nothing to substitute.
@@ -127,13 +136,13 @@ mod tests {
         let dict = ext("System.Collections.Generic", "Dictionary`2");
         let list = ext("System.Collections.Generic", "List`1");
         let ty = TypeDesc::GenericInstance {
-            definition: Box::new(dict),
+            definition: std::sync::Arc::new(dict),
             arguments: vec![
-                ext("System", "String"),
-                TypeDesc::GenericInstance {
-                    definition: Box::new(list),
-                    arguments: vec![TypeDesc::Var(0)],
-                },
+                std::sync::Arc::new(ext("System", "String")),
+                std::sync::Arc::new(TypeDesc::GenericInstance {
+                    definition: std::sync::Arc::new(list),
+                    arguments: vec![std::sync::Arc::new(TypeDesc::Var(0))],
+                }),
             ],
         };
 
@@ -150,13 +159,16 @@ mod tests {
         assert_eq!(
             out,
             TypeDesc::GenericInstance {
-                definition: Box::new(ext("System.Collections.Generic", "Dictionary`2")),
+                definition: std::sync::Arc::new(ext("System.Collections.Generic", "Dictionary`2")),
                 arguments: vec![
-                    ext("System", "String"),
-                    TypeDesc::GenericInstance {
-                        definition: Box::new(ext("System.Collections.Generic", "List`1")),
-                        arguments: vec![ext("System", "Int32")],
-                    },
+                    std::sync::Arc::new(ext("System", "String")),
+                    std::sync::Arc::new(TypeDesc::GenericInstance {
+                        definition: std::sync::Arc::new(ext(
+                            "System.Collections.Generic",
+                            "List`1"
+                        )),
+                        arguments: vec![std::sync::Arc::new(ext("System", "Int32"))],
+                    }),
                 ],
             }
         );
@@ -170,7 +182,10 @@ mod tests {
             explicit_this: false,
             convention: SignatureCallingConvention::Default,
             generic_count: 0,
-            parameters: vec![TypeDesc::SzArray(Box::new(TypeDesc::Var(1))), TypeDesc::MVar(0)],
+            parameters: vec![
+                TypeDesc::SzArray(std::sync::Arc::new(TypeDesc::Var(1))),
+                TypeDesc::MVar(0),
+            ],
             return_type: TypeDesc::Var(0),
             vararg_start: 2,
         };
@@ -193,7 +208,10 @@ mod tests {
         match out {
             TypeDesc::FnPtr(sig) => {
                 assert_eq!(sig.parameters.len(), 2);
-                assert_eq!(sig.parameters[0], TypeDesc::SzArray(Box::new(ext("System", "Byte"))));
+                assert_eq!(
+                    sig.parameters[0],
+                    TypeDesc::SzArray(std::sync::Arc::new(ext("System", "Byte")))
+                );
                 assert_eq!(sig.parameters[1], ext("System", "Int64"));
                 assert_eq!(sig.return_type, ext("System", "Void"));
                 assert_eq!(sig.vararg_start, 2);
@@ -217,8 +235,10 @@ mod tests {
         // modreq(int) T[][] plus Ptr/ByRef wrappers.
         let ty = TypeDesc::CMod {
             required: true,
-            modifier: Box::new(ext("System.Runtime.CompilerServices", "IsVolatile")),
-            unmodified: Box::new(TypeDesc::ByRef(Box::new(TypeDesc::MVar(2)))),
+            modifier: std::sync::Arc::new(ext("System.Runtime.CompilerServices", "IsVolatile")),
+            unmodified: std::sync::Arc::new(TypeDesc::ByRef(std::sync::Arc::new(TypeDesc::MVar(
+                2,
+            )))),
         };
         let map_v = |_p: u16| -> Option<TypeDesc> { None };
         let mut map_m = |pos: u16| {
@@ -232,20 +252,24 @@ mod tests {
             substitute(&ty, &map_v, &mut map_m),
             TypeDesc::CMod {
                 required: true,
-                modifier: Box::new(ext("System.Runtime.CompilerServices", "IsVolatile")),
-                unmodified: Box::new(TypeDesc::ByRef(Box::new(ext("System", "Single")))),
+                modifier: std::sync::Arc::new(
+                    ext("System.Runtime.CompilerServices", "IsVolatile",)
+                ),
+                unmodified: std::sync::Arc::new(TypeDesc::ByRef(std::sync::Arc::new(ext(
+                    "System", "Single",
+                )))),
             }
         );
 
         // Multi-dim array keeps bounds while substituting the element.
         let arr = TypeDesc::Array {
-            element: Box::new(TypeDesc::Var(3)),
+            element: std::sync::Arc::new(TypeDesc::Var(3)),
             sizes: vec![4],
             lobounds: vec![1],
         };
         let map_v = |pos: u16| {
             if pos == 3 {
-                Some(TypeDesc::Ptr(Box::new(ext("System", "Char"))))
+                Some(TypeDesc::Ptr(std::sync::Arc::new(ext("System", "Char"))))
             } else {
                 None
             }
@@ -254,7 +278,9 @@ mod tests {
         assert_eq!(
             substitute(&arr, &map_v, &mut none),
             TypeDesc::Array {
-                element: Box::new(TypeDesc::Ptr(Box::new(ext("System", "Char")))),
+                element: std::sync::Arc::new(TypeDesc::Ptr(std::sync::Arc::new(ext(
+                    "System", "Char",
+                )))),
                 sizes: vec![4],
                 lobounds: vec![1],
             }
@@ -285,26 +311,29 @@ mod tests {
 
         // End-to-end: Dictionary<B, List<C>> with the built context.
         let body = TypeDesc::GenericInstance {
-            definition: Box::new(ext("System.Collections.Generic", "Dictionary`2")),
+            definition: std::sync::Arc::new(ext("System.Collections.Generic", "Dictionary`2")),
             arguments: vec![
-                TypeDesc::Var(1),
-                TypeDesc::GenericInstance {
-                    definition: Box::new(ext("System.Collections.Generic", "List`1")),
-                    arguments: vec![TypeDesc::Var(2)],
-                },
+                std::sync::Arc::new(TypeDesc::Var(1)),
+                std::sync::Arc::new(TypeDesc::GenericInstance {
+                    definition: std::sync::Arc::new(ext("System.Collections.Generic", "List`1")),
+                    arguments: vec![std::sync::Arc::new(TypeDesc::Var(2))],
+                }),
             ],
         };
         let mut no_mvars = |_p: u16| -> Option<TypeDesc> { None };
         assert_eq!(
             substitute(&body, &ctx, &mut no_mvars),
             TypeDesc::GenericInstance {
-                definition: Box::new(ext("System.Collections.Generic", "Dictionary`2")),
+                definition: std::sync::Arc::new(ext("System.Collections.Generic", "Dictionary`2",)),
                 arguments: vec![
-                    ext("System", "String"),
-                    TypeDesc::GenericInstance {
-                        definition: Box::new(ext("System.Collections.Generic", "List`1")),
-                        arguments: vec![ext("System", "Boolean")],
-                    },
+                    std::sync::Arc::new(ext("System", "String")),
+                    std::sync::Arc::new(TypeDesc::GenericInstance {
+                        definition: std::sync::Arc::new(ext(
+                            "System.Collections.Generic",
+                            "List`1",
+                        )),
+                        arguments: vec![std::sync::Arc::new(ext("System", "Boolean"))],
+                    }),
                 ],
             }
         );
@@ -327,8 +356,8 @@ mod tests {
             parameters: vec![
                 TypeDesc::Var(0),
                 TypeDesc::GenericInstance {
-                    definition: Box::new(ext("System.Collections.Generic", "List`1")),
-                    arguments: vec![TypeDesc::Var(0)],
+                    definition: std::sync::Arc::new(ext("System.Collections.Generic", "List`1")),
+                    arguments: vec![std::sync::Arc::new(TypeDesc::Var(0))],
                 },
             ],
             return_type: TypeDesc::Var(0),
@@ -344,8 +373,8 @@ mod tests {
         assert_eq!(
             out.parameters[1],
             TypeDesc::GenericInstance {
-                definition: Box::new(ext("System.Collections.Generic", "List`1")),
-                arguments: vec![ext("System", "String")],
+                definition: std::sync::Arc::new(ext("System.Collections.Generic", "List`1")),
+                arguments: vec![std::sync::Arc::new(ext("System", "String"))],
             }
         );
     }

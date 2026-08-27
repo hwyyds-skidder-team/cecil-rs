@@ -4,6 +4,8 @@
 //! and definition structs. Logic lives in sibling modules (signature codec,
 //! attribute codec, reader, writer).
 
+use std::sync::Arc;
+
 use cecli_core::flags::*;
 use cecli_core::flags::{SecurityAction, SignatureCallingConvention};
 use cecli_core::Token;
@@ -89,6 +91,13 @@ impl std::fmt::Display for Version {
 
 /// Universal type reference used everywhere a CLR type appears (signatures,
 /// base types, interfaces, attribute arguments, exception handlers).
+///
+/// Recursive children are `Arc`-shared: TypeSpec rows that reference other
+/// rows (DAG-shaped generics) share subtrees instead of fully expanding
+/// them, so memory grows linearly with the image rather than exponentially
+/// with reference depth. Clones are shallow (refcount bumps). `Arc` over
+/// `Rc` keeps `Module` Send+Sync for the static stores in `resolution.rs`
+/// and `winrt.rs`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDesc {
     /// A type defined in this module.
@@ -96,22 +105,24 @@ pub enum TypeDesc {
     /// A reference to a type in another scope (`TypeRef` row equivalent).
     External(Box<ExternalType>),
     /// Zero-based single-dimension array with no bounds (`SZARRAY`).
-    SzArray(Box<TypeDesc>),
+    SzArray(Arc<TypeDesc>),
     /// Multi-dimensional array with optional sizes and lower bounds.
     Array {
-        element: Box<TypeDesc>,
+        element: Arc<TypeDesc>,
         /// Upper-bound sizes per dimension (empty when unspecified).
         sizes: Vec<i32>,
         /// Lower bounds per dimension (empty when unspecified).
         lobounds: Vec<i32>,
     },
-    Ptr(Box<TypeDesc>),
-    ByRef(Box<TypeDesc>),
-    Pinned(Box<TypeDesc>),
+    Ptr(Arc<TypeDesc>),
+    ByRef(Arc<TypeDesc>),
+    Pinned(Arc<TypeDesc>),
     /// Instantiated generic type (`GENERICINST`).
     GenericInstance {
-        definition: Box<TypeDesc>,
-        arguments: Vec<TypeDesc>,
+        definition: Arc<TypeDesc>,
+        /// `Arc` per argument so cloning the Vec stays shallow — a doubling
+        /// reference chain would otherwise re-expand on every copy.
+        arguments: Vec<Arc<TypeDesc>>,
     },
     /// Type generic parameter of an owning type or method.
     Var(u16),
@@ -122,8 +133,8 @@ pub enum TypeDesc {
     /// Custom modifier (`CMOD_REQD`/`CMOD_OPT`) applied to `unmodified`.
     CMod {
         required: bool,
-        modifier: Box<TypeDesc>,
-        unmodified: Box<TypeDesc>,
+        modifier: Arc<TypeDesc>,
+        unmodified: Arc<TypeDesc>,
     },
     /// `SENTINEL` marker for vararg call sites.
     Sentinel,
@@ -695,7 +706,7 @@ pub enum NativeTypeSpec {
     },
     SafeArray {
         element_variant: Option<cecli_core::VariantType>,
-        element_desc: Option<Box<TypeDesc>>,
+        element_desc: Option<std::sync::Arc<TypeDesc>>,
     },
     NativeArray {
         element: Option<Box<NativeTypeSpec>>,

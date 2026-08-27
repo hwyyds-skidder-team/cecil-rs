@@ -202,8 +202,8 @@ impl TypeDefinitionRocks for TypeId {
             )));
         }
         Ok(TypeDesc::GenericInstance {
-            definition: Box::new(TypeDesc::Def(*self)),
-            arguments: args,
+            definition: std::sync::Arc::new(TypeDesc::Def(*self)),
+            arguments: args.into_iter().map(std::sync::Arc::new).collect(),
         })
     }
 
@@ -477,7 +477,7 @@ impl TypeReferenceRocks for TypeDesc {
     }
 
     fn make_array_type(&self) -> TypeDesc {
-        TypeDesc::SzArray(Box::new(self.clone()))
+        TypeDesc::SzArray(std::sync::Arc::new(self.clone()))
     }
 
     fn make_array_type_ranked(&self, rank: usize) -> Result<TypeDesc> {
@@ -486,7 +486,7 @@ impl TypeReferenceRocks for TypeDesc {
             return Err(Error::argument("array rank must be at least 1"));
         }
         Ok(TypeDesc::Array {
-            element: Box::new(self.clone()),
+            element: std::sync::Arc::new(self.clone()),
             // Rank-preserving encoding: one zero entry per dimension.
             sizes: vec![0; rank],
             lobounds: vec![0; rank],
@@ -494,30 +494,30 @@ impl TypeReferenceRocks for TypeDesc {
     }
 
     fn make_pointer_type(&self) -> TypeDesc {
-        TypeDesc::Ptr(Box::new(self.clone()))
+        TypeDesc::Ptr(std::sync::Arc::new(self.clone()))
     }
 
     fn make_by_ref_type(&self) -> TypeDesc {
-        TypeDesc::ByRef(Box::new(self.clone()))
+        TypeDesc::ByRef(std::sync::Arc::new(self.clone()))
     }
 
     fn make_pinned_type(&self) -> TypeDesc {
-        TypeDesc::Pinned(Box::new(self.clone()))
+        TypeDesc::Pinned(std::sync::Arc::new(self.clone()))
     }
 
     fn make_required_modifier_type(&self, modifier: TypeDesc) -> TypeDesc {
         TypeDesc::CMod {
             required: true,
-            modifier: Box::new(modifier),
-            unmodified: Box::new(self.clone()),
+            modifier: std::sync::Arc::new(modifier),
+            unmodified: std::sync::Arc::new(self.clone()),
         }
     }
 
     fn make_optional_modifier_type(&self, modifier: TypeDesc) -> TypeDesc {
         TypeDesc::CMod {
             required: false,
-            modifier: Box::new(modifier),
-            unmodified: Box::new(self.clone()),
+            modifier: std::sync::Arc::new(modifier),
+            unmodified: std::sync::Arc::new(self.clone()),
         }
     }
 
@@ -525,7 +525,10 @@ impl TypeReferenceRocks for TypeDesc {
         if args.is_empty() {
             return Err(Error::argument("generic instantiation needs arguments"));
         }
-        Ok(TypeDesc::GenericInstance { definition: Box::new(self.clone()), arguments: args })
+        Ok(TypeDesc::GenericInstance {
+            definition: std::sync::Arc::new(self.clone()),
+            arguments: args.into_iter().map(std::sync::Arc::new).collect(),
+        })
     }
 
     fn make_sentinel_type(&self) -> TypeDesc {
@@ -951,8 +954,11 @@ mod tests {
         assert_eq!(arr.resolve_in(&m), Some(widget));
         // Generic instance over Func resolves to Func.
         let inst = TypeDesc::GenericInstance {
-            definition: Box::new(TypeDesc::Def(TypeId(1))),
-            arguments: vec![string_external(), string_external()],
+            definition: std::sync::Arc::new(TypeDesc::Def(TypeId(1))),
+            arguments: vec![
+                std::sync::Arc::new(string_external()),
+                std::sync::Arc::new(string_external()),
+            ],
         };
         assert_eq!(inst.resolve_in(&m), Some(TypeId(1)));
         // Unbound variables never resolve.
@@ -969,8 +975,11 @@ mod tests {
         assert_eq!(string_external().full_name_td(&m), "[mscorlib]System.String");
         // Generic instances append comma-joined arguments.
         let inst = TypeDesc::GenericInstance {
-            definition: Box::new(TypeDesc::Def(TypeId(1))),
-            arguments: vec![string_external(), TypeDesc::Def(TypeId(0))],
+            definition: std::sync::Arc::new(TypeDesc::Def(TypeId(1))),
+            arguments: vec![
+                std::sync::Arc::new(string_external()),
+                std::sync::Arc::new(TypeDesc::Def(TypeId(0))),
+            ],
         };
         assert_eq!(inst.full_name_td(&m), "System.Func`2[[mscorlib]System.String,NS.Widget]");
         // Specifications.

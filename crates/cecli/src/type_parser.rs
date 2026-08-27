@@ -393,18 +393,18 @@ fn build_type_desc(
         debug_assert_eq!(arguments.len(), info.arity);
         let arguments = arguments
             .into_iter()
-            .map(|arg| build_type_desc(arg, base_scope.clone(), scopes))
+            .map(|arg| std::sync::Arc::new(build_type_desc(arg, base_scope.clone(), scopes)))
             .collect();
-        ty = TypeDesc::GenericInstance { definition: Box::new(ty), arguments };
+        ty = TypeDesc::GenericInstance { definition: std::sync::Arc::new(ty), arguments };
     }
 
     for spec in info.specs {
         ty = match spec {
-            Spec::Ptr => TypeDesc::Ptr(Box::new(ty)),
-            Spec::ByRef => TypeDesc::ByRef(Box::new(ty)),
-            Spec::SzArray => TypeDesc::SzArray(Box::new(ty)),
+            Spec::Ptr => TypeDesc::Ptr(std::sync::Arc::new(ty)),
+            Spec::ByRef => TypeDesc::ByRef(std::sync::Arc::new(ty)),
+            Spec::SzArray => TypeDesc::SzArray(std::sync::Arc::new(ty)),
             Spec::Array { rank: _, sizes, lobounds } => {
-                TypeDesc::Array { element: Box::new(ty), sizes, lobounds }
+                TypeDesc::Array { element: std::sync::Arc::new(ty), sizes, lobounds }
             }
         };
     }
@@ -492,8 +492,8 @@ mod tests {
             TypeDesc::GenericInstance { definition, arguments } => {
                 assert_eq!(*definition, external("System.Collections.Generic", "Dictionary`2"));
                 assert_eq!(arguments.len(), 2);
-                assert_eq!(arguments[0], external("System", "String"));
-                assert_eq!(arguments[1], external("System", "Int32"));
+                assert_eq!(*arguments[0], external("System", "String"));
+                assert_eq!(*arguments[1], external("System", "Int32"));
             }
             other => panic!("expected GenericInstance, got {other:?}"),
         }
@@ -505,8 +505,8 @@ mod tests {
         let TypeDesc::GenericInstance { definition, arguments } = ty else {
             panic!("expected GenericInstance");
         };
-        assert_eq!(arguments, vec![external("Ns", "A")]);
-        let TypeDesc::External(inner) = *definition else { panic!("expected External") };
+        assert_eq!(arguments, vec![std::sync::Arc::new(external("Ns", "A"))]);
+        let TypeDesc::External(inner) = definition.as_ref() else { panic!("expected External") };
         assert_eq!(inner.namespace, "");
         assert_eq!(inner.name, "Inner");
         assert_eq!(inner.nesting.len(), 1);
@@ -518,11 +518,11 @@ mod tests {
     fn pointer_byref_and_arrays() {
         assert_eq!(
             parse_type_name("System.Int32*", ScopeRef::ThisModule).unwrap(),
-            TypeDesc::Ptr(Box::new(external("System", "Int32")))
+            TypeDesc::Ptr(std::sync::Arc::new(external("System", "Int32")))
         );
         assert_eq!(
             parse_type_name("System.Int32&", ScopeRef::ThisModule).unwrap(),
-            TypeDesc::ByRef(Box::new(external("System", "Int32")))
+            TypeDesc::ByRef(std::sync::Arc::new(external("System", "Int32")))
         );
 
         let md = parse_type_name("System.Int32[0...,0:5]", ScopeRef::ThisModule).unwrap();
@@ -538,8 +538,10 @@ mod tests {
         // Jagged: [][] composes as SzArray(SzArray).
         let jagged = parse_type_name("System.Int32[][]", ScopeRef::ThisModule).unwrap();
         match jagged {
-            TypeDesc::SzArray(inner) => match *inner {
-                TypeDesc::SzArray(innermost) => assert_eq!(*innermost, external("System", "Int32")),
+            TypeDesc::SzArray(inner) => match inner.as_ref() {
+                TypeDesc::SzArray(innermost) => {
+                    assert_eq!(**innermost, external("System", "Int32"))
+                }
                 other => panic!("expected SzArray element, got {other:?}"),
             },
             other => panic!("expected SzArray, got {other:?}"),
@@ -656,7 +658,7 @@ mod tests {
         let TypeDesc::GenericInstance { arguments, .. } = ty else {
             panic!("expected GenericInstance")
         };
-        match &arguments[0] {
+        match arguments[0].as_ref() {
             TypeDesc::SzArray(elem) => match elem.as_ref() {
                 TypeDesc::External(ext) => {
                     assert_eq!(ext.namespace, "");
