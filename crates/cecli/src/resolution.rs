@@ -918,9 +918,11 @@ mod tests {
     /// Builds a tiny "mscorlib-like" assembly image in memory (through the
     /// regular writer + `MetadataBuilder` pipeline) for the loader stub.
     fn corlib_image() -> Vec<u8> {
-        let mut m = Module::default();
-        m.name = "mscorlib".into();
-        m.runtime_version = "v4.0.30319".into();
+        let mut m = Module {
+            name: "mscorlib".into(),
+            runtime_version: "v4.0.30319".into(),
+            ..Default::default()
+        };
 
         let t_object = m.add_type(TypeDefinition {
             namespace: "System".into(),

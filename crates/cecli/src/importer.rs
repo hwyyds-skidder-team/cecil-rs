@@ -407,8 +407,7 @@ mod tests {
     /// Builds `src`: type `Point` (field `x:i32`, method `Get(Point)->i32`)
     /// plus optional extra types. Returns (module, point id, x id, get id).
     fn make_source(with_nested: bool) -> (Module, TypeId, FieldId, MethodId) {
-        let mut src = Module::default();
-        src.name = "srcasm".into();
+        let mut src = Module { name: "srcasm".into(), ..Default::default() };
 
         let mut point = TypeDefinition { name: "Point".into(), ..Default::default() };
         src.types.push(point.clone());
@@ -452,8 +451,7 @@ mod tests {
     }
 
     fn make_target() -> Module {
-        let mut target = Module::default();
-        target.name = "target".into();
+        let mut target = Module { name: "target".into(), ..Default::default() };
         target.assembly_refs.push(AssemblyNameReference::new("mscorlib"));
         target
     }

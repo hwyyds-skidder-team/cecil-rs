@@ -278,14 +278,20 @@ fn resolve_token(ctx: &ReadContext, md: &MetadataReader<'_>, token: Token) -> RO
                 Err(_) => ROperand::Token(token),
             }
         }
-        TableIndex::MethodDef => match ctx.method_defs.get((token.rid() - 1) as usize) {
-            Some(id) => ROperand::Method(MethodRef::Def(*id)),
-            None => ROperand::Token(token),
-        },
-        TableIndex::Field => match ctx.field_defs.get((token.rid() - 1) as usize) {
-            Some(id) => ROperand::Field(FieldRef::Def(*id)),
-            None => ROperand::Token(token),
-        },
+        TableIndex::MethodDef => {
+            let slot = token.rid().checked_sub(1).and_then(|rid| ctx.method_defs.get(rid as usize));
+            match slot {
+                Some(id) => ROperand::Method(MethodRef::Def(*id)),
+                None => ROperand::Token(token),
+            }
+        }
+        TableIndex::Field => {
+            let slot = token.rid().checked_sub(1).and_then(|rid| ctx.field_defs.get(rid as usize));
+            match slot {
+                Some(id) => ROperand::Field(FieldRef::Def(*id)),
+                None => ROperand::Token(token),
+            }
+        }
         TableIndex::MemberRef => match ctx.resolve_member_ref(md, token.rid()) {
             Ok(MemberRefRow::Method(em)) => ROperand::Method(MethodRef::External(em)),
             Ok(MemberRefRow::Field(ef)) => ROperand::Field(FieldRef::External(ef)),

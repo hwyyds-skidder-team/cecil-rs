@@ -170,9 +170,9 @@ impl<'a> PdbHeap<'a> {
         let entry_point = r.u32()?;
         let type_system_tables = r.u64()?;
         let mut row_counts = [0u32; 0x38];
-        for i in 0..0x38 {
+        for (i, count) in row_counts.iter_mut().enumerate() {
             if type_system_tables & (1u64 << i) != 0 {
-                row_counts[i] = r.u32()?;
+                *count = r.u32()?;
             }
         }
         Ok(PdbHeap { data, id, entry_point, type_system_tables, row_counts })

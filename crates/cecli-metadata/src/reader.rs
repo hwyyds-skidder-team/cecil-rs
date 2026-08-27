@@ -147,17 +147,17 @@ fn parse_table_heap(heap: &[u8], pdb: Option<&PdbHeap>) -> Result<TableSet> {
 
     let mut counts = [0u32; crate::tables::TABLE_COUNT];
     if let Some(p) = pdb {
-        for i in 0..crate::tables::TABLE_COUNT {
+        for (i, count) in counts.iter_mut().enumerate() {
             if let Some(t) = TableIndex::from_u8(i as u8) {
-                counts[i] = p.row_count(t);
+                *count = p.row_count(t);
             }
         }
     }
-    for i in 0..crate::tables::TABLE_COUNT {
+    for (i, count) in counts.iter_mut().enumerate() {
         if valid >> i & 1 == 0 {
             continue;
         }
-        counts[i] = r.u32()?;
+        *count = r.u32()?;
     }
 
     TableSet::compute_checked(valid, &counts, heap_flags)

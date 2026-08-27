@@ -113,6 +113,10 @@ pub struct LocalConstantInfo {
     pub signature: Vec<u8>,
 }
 
+/// Decoded sequence-point payload for one method: the initial document, the
+/// points, and each point's document reference (records may switch documents).
+type SequencePoints = (u32, Vec<SequencePoint>, Vec<u32>);
+
 /// Reader over one portable PDB file: a metadata root carrying the debug
 /// tables and the `#Pdb` heap.
 #[derive(Debug, Clone)]
@@ -224,10 +228,7 @@ impl<'a> PortablePdbReader<'a> {
     /// Shared decoder for the sequence-point record stream; ports
     /// `AssemblyReader.ReadSequencePoints` exactly, including the hidden
     /// sentinel and document switches.
-    fn decode_sequence_points(
-        &self,
-        method_rid: u32,
-    ) -> Result<Option<(u32, Vec<SequencePoint>, Vec<u32>)>> {
+    fn decode_sequence_points(&self, method_rid: u32) -> Result<Option<SequencePoints>> {
         let count = self.md.row_count(TMethodDebugInformation);
         if method_rid == 0 || method_rid > count {
             return Err(Error::argument(format!(

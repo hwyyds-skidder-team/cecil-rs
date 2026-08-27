@@ -39,6 +39,41 @@ use crate::model::types::{
 /// stack.
 const MAX_TDOR_DEPTH: u32 = 64;
 
+/// Upper bound on the total number of materialized TypeSpec tree nodes per
+/// module. The value-semantics model fully expands shared references, so a
+/// hostile image whose TypeSpec rows form a doubling DAG (row K referencing
+/// row K-1 twice) grows trees exponentially — 30 rows would be ~2^30 nodes.
+/// Real assemblies stay orders of magnitude below this budget; exceeding it
+/// is reported as a bad-image error instead of exhausting memory.
+const MAX_TYPE_SPEC_NODES: u64 = 4 << 20;
+
+/// Node count of a materialized [`TypeDesc`] tree, for the expansion budget
+/// above. `External`/`FnPtr`/flat variants count as single nodes: their
+/// contents come from one blob or one table row, so their size is already
+/// bounded by the image size.
+fn type_desc_nodes(ty: &TypeDesc) -> usize {
+    1 + match ty {
+        TypeDesc::Def(_)
+        | TypeDesc::Var(_)
+        | TypeDesc::MVar(_)
+        | TypeDesc::Sentinel
+        | TypeDesc::TypedByRef
+        | TypeDesc::Internal(_)
+        | TypeDesc::External(_)
+        | TypeDesc::FnPtr(_) => 0,
+        TypeDesc::SzArray(t) | TypeDesc::Ptr(t) | TypeDesc::ByRef(t) | TypeDesc::Pinned(t) => {
+            type_desc_nodes(t)
+        }
+        TypeDesc::Array { element, .. } => type_desc_nodes(element),
+        TypeDesc::GenericInstance { definition, arguments } => {
+            type_desc_nodes(definition) + arguments.iter().map(type_desc_nodes).sum::<usize>()
+        }
+        TypeDesc::CMod { modifier, unmodified, .. } => {
+            type_desc_nodes(modifier) + type_desc_nodes(unmodified)
+        }
+    }
+}
+
 /// Options controlling what the reader loads.
 #[derive(Debug, Clone)]
 pub struct ReadOptions {
@@ -113,11 +148,18 @@ pub struct ReadContext {
 
     /// `#US` heap byte offset of each entry in `us_strings`.
     pub(crate) us_offsets: Vec<u32>,
-    /// On-demand decode memoization for `TypeSpec` blobs (rid-1 slots);
-    /// correctness never depends on it being filled.
+    /// On-demand decode memoization for `TypeSpec` blobs (rid-1 slots).
+    /// Without it, DAG-shaped references (row K referencing row K-1 twice)
+    /// would re-decode shared subtrees exponentially. Correctness never
+    /// depends on it being filled.
     pub(crate) spec_memo: std::cell::RefCell<Vec<Option<TypeDesc>>>,
     /// TypeSpec rids currently being decoded (cycle detection).
     pub(crate) spec_stack: std::cell::RefCell<Vec<u32>>,
+    /// TypeSpec tree nodes materialized so far (see [`MAX_TYPE_SPEC_NODES`]).
+    /// Charged once per fresh decode — including everything a tree embeds via
+    /// memoized clones — so cumulative expansion stays bounded while repeated
+    /// memo-hit queries stay free.
+    pub(crate) spec_nodes_used: std::cell::Cell<u64>,
 }
 
 impl fmt::Debug for ReadContext {
@@ -256,6 +298,14 @@ impl ReadContext {
     /// - `TypeSpec` → decoded on demand from its signature blob (memoized;
     ///   forward references to later TypeSpec rows are supported).
     pub fn tdor_to_typedesc(&self, md: &MetadataReader, cell: u32) -> Result<TypeDesc> {
+        self.tdor_to_typedesc_at(md, cell, 0)
+    }
+
+    /// Depth-aware [`ReadContext::tdor_to_typedesc`]: `depth` is the signature
+    /// reader's current nesting level, threaded through [`SigContext::tdor_type`]
+    /// so TypeSpec hops consume the same global depth budget as composite
+    /// prefixes instead of restarting it per blob.
+    fn tdor_to_typedesc_at(&self, md: &MetadataReader, cell: u32, depth: u32) -> Result<TypeDesc> {
         let Some((table, rid)) = decode_coded(&coded::TYPE_DEF_OR_REF, cell as u64) else {
             return Err(Error::bad_image(format!("nil TypeDefOrRef cell {cell:#x}")));
         };
@@ -264,10 +314,10 @@ impl ReadContext {
             TableIndex::TypeRef => Ok(TypeDesc::External(Box::new(self.type_ref_external(
                 md,
                 rid,
-                0,
+                depth,
                 &mut Default::default(),
             )?))),
-            TableIndex::TypeSpec => self.type_spec_at(md, rid, 0),
+            TableIndex::TypeSpec => self.type_spec_at(md, rid, depth),
             other => Err(Error::bad_image(format!(
                 "unexpected table {} in TypeDefOrRef cell",
                 other.name()
@@ -359,7 +409,7 @@ impl ReadContext {
         let sctx = CtxSigContext { ctx: self, md };
         let mut arguments = Vec::with_capacity(arity as usize);
         for _ in 0..arity {
-            let (ty, consumed) = parse_type_element(blob, r.position(), &sctx, false)?;
+            let (ty, consumed) = parse_type_element(blob, r.position(), &sctx, 0, false)?;
             r.seek(r.position() + consumed)?;
             arguments.push(ty);
         }
@@ -506,13 +556,15 @@ impl ReadContext {
     /// Decodes a TypeSpec row's signature blob on demand, directly from the
     /// metadata bytes. Blobs may reference OTHER TypeSpec rows (including
     /// forward references to later rows), so decoding is fully recursive and
-    /// never depends on [`ReadContext::resolve_lazy_tables`] having run; the
-    /// `spec_memo` field is pure memoization. A cycle guard rejects rows that
-    /// (transitively) reference themselves.
+    /// never depends on [`ReadContext::resolve_lazy_tables`] having run;
+    /// successful decodes are memoized so DAG-shaped reference graphs (row K
+    /// referencing row K-1 twice) stay linear instead of exponential.
+    ///
+    /// `depth` is the caller's nesting level; the blob is re-parsed seeded at
+    /// that depth, so the [`crate::model::signature`] depth budget is shared
+    /// across blob hops instead of resetting per hop. A cycle guard rejects
+    /// rows that (transitively) reference themselves.
     fn type_spec_at(&self, md: &MetadataReader, rid: u32, depth: u32) -> Result<TypeDesc> {
-        if depth > MAX_TDOR_DEPTH {
-            return Err(Error::bad_image("TypeSpec chain deeper than 64 levels"));
-        }
         if rid == 0 || rid > md.row_count(TableIndex::TypeSpec) {
             return Err(Error::argument(format!("TypeSpec rid {rid} out of range")));
         }
@@ -520,8 +572,20 @@ impl ReadContext {
         if let Some(Some(cached)) = self.spec_memo.borrow().get(idx) {
             return Ok(cached.clone());
         }
-        if self.spec_stack.borrow().contains(&rid) {
-            return Err(Error::bad_image(format!("cyclic TypeSpec reference through rid {rid}")));
+        {
+            let stack = self.spec_stack.borrow();
+            // The caller-supplied depth only tracks one bridge path; the
+            // active chain length below also bounds blob-cell chains that
+            // re-enter this function with a stale depth (TypeSpec[1] ->
+            // cell -> TypeSpec[2] -> ...).
+            if depth > MAX_TDOR_DEPTH || stack.len() >= MAX_TDOR_DEPTH as usize {
+                return Err(Error::bad_image("TypeSpec chain deeper than 64 levels"));
+            }
+            if stack.contains(&rid) {
+                return Err(Error::bad_image(format!(
+                    "cyclic TypeSpec reference through rid {rid}"
+                )));
+            }
         }
         let blob_idx = md.column(TableIndex::TypeSpec, rid, 0)? as u32;
         let blob = md.heaps().blob.get(blob_idx)?;
@@ -529,10 +593,24 @@ impl ReadContext {
         self.spec_stack.borrow_mut().push(rid);
         let decoded = {
             let sctx = CtxSigContext { ctx: self, md };
-            parse_type_element(blob, 0, &sctx, false).map(|(ty, _)| ty)
+            parse_type_element(blob, 0, &sctx, depth, false).map(|(ty, _)| ty)
         };
         self.spec_stack.borrow_mut().pop();
         let ty = decoded?;
+
+        // Expansion budget: the value model fully materializes shared
+        // references, so a doubling DAG chain would otherwise grow trees
+        // exponentially and exhaust memory. Charging the finished tree
+        // (clones included) converts that into a clean error.
+        let nodes = type_desc_nodes(&ty) as u64;
+        let used = self.spec_nodes_used.get();
+        if used.saturating_add(nodes) > MAX_TYPE_SPEC_NODES {
+            return Err(Error::bad_image(format!(
+                "TypeSpec expansion exceeds {} node budget (hostile image?)",
+                MAX_TYPE_SPEC_NODES
+            )));
+        }
+        self.spec_nodes_used.set(used + nodes);
 
         let mut memo = self.spec_memo.borrow_mut();
         if memo.len() <= idx {
@@ -672,11 +750,12 @@ impl<'c, 'd> SigContext for CtxSigContext<'c, 'd> {
         Err(Error::unsupported("read-side SigContext cannot classify value types"))
     }
 
-    fn tdor_type(&self, _value_type: bool, cell: u32) -> Result<TypeDesc> {
+    fn tdor_type(&self, _value_type: bool, cell: u32, depth: u32) -> Result<TypeDesc> {
         // The CLASS/VALUETYPE marker is irrelevant here: TypeDesc trees do not
         // record it, and the blob position already told the codec which branch
-        // to take.
-        self.ctx.tdor_to_typedesc(self.md, cell)
+        // to take. The reader's nesting level rides along so TypeSpec hops
+        // share one global depth budget.
+        self.ctx.tdor_to_typedesc_at(self.md, cell, depth)
     }
 }
 
@@ -690,9 +769,9 @@ mod tests {
     use crate::model::signature::parse_local_var_sig;
     use cecli_metadata::{encode_coded, MetadataBuilder};
 
-    /// Synthetic root: Module + AssemblyRef(mscorlib) + TypeRef(System.Object)
-    /// + nested TypeRef + TypeDef + MemberRef(object.ToString()) +
-    /// TypeSpec(SzArray of TypeDef) + MethodSpec + StandAloneSig + #US entry.
+    /// Synthetic root: Module, AssemblyRef(mscorlib), TypeRef(System.Object),
+    /// nested TypeRef, TypeDef, MemberRef(object.ToString()),
+    /// TypeSpec(SzArray of TypeDef), MethodSpec, StandAloneSig, #US entry.
     fn build_test_md() -> (Vec<u8>, u32 /* us offset */) {
         let mut b = MetadataBuilder::new("v4.0.30319");
 
@@ -933,5 +1012,103 @@ mod tests {
         // TypeRef resolution is fully independent of arenas and still works.
         let tr_cell = (1u32 << 2) | 1;
         assert!(matches!(ctx.tdor_to_typedesc(&md, tr_cell).unwrap(), TypeDesc::External(_)));
+    }
+
+    /// Builds a synthetic root whose TypeSpec rows form a sharing DAG: row K
+    /// is `SZARRAY(GENERICINST Class TypeDef1 < cell(K-1), cell(K-1) >)`, so
+    /// every row references its predecessor twice. The value-semantics model
+    /// fully expands shared references — 30 rows would materialize ~2^30
+    /// nodes — so the expansion budget must reject it with a clean error
+    /// instead of exhausting memory.
+    fn build_dag_md(rows: u32) -> Vec<u8> {
+        let mut b = MetadataBuilder::new("v4.0.30319");
+        let mname = b.insert_string("<Module>");
+        let mvid = b.insert_guid(&[7u8; 16]);
+        b.add_row(TableIndex::Module, &[0, mname as u64, mvid as u64, 0, 0]).unwrap();
+        let def_name = b.insert_string("Mine");
+        let def_ns = b.insert_string("TestNs");
+        b.add_row(TableIndex::TypeDef, &[0x0010_0001, def_name as u64, def_ns as u64, 0, 1, 1])
+            .unwrap(); // rid 1
+
+        // TypeDef rid 1 cell: TypeDef tag 0.
+        let td_cell: u8 = 4;
+        for k in 1..=rows {
+            let blob = if k == 1 {
+                // Base case: SZARRAY of I4.
+                vec![0x1D, 0x08]
+            } else {
+                let prev = ((k - 1) << 2) | 2; // TypeSpec tag 2, rid k-1
+                                               // SZARRAY + GENERICINST Class TypeDef1 < Class prev, Class prev >
+                vec![0x1D, 0x15, 0x12, td_cell, 0x02, 0x12, prev as u8, 0x12, prev as u8]
+            };
+            let idx = b.insert_blob(&blob);
+            b.add_row(TableIndex::TypeSpec, &[idx as u64]).unwrap();
+        }
+        b.finalize()
+    }
+
+    #[test]
+    fn dag_typespec_resolves_linearly_via_memo() {
+        let bytes = build_dag_md(30);
+        let md = MetadataReader::parse(&bytes).expect("synthetic root parses");
+        let mut ctx = ReadContext::new(&md);
+        ctx.type_defs.push(TypeId(0));
+        // ~2^30 nodes when fully expanded: the budget turns the OOM into a
+        // clean bad-image error, and memoization keeps parsing linear on the
+        // rows decoded before the budget trips.
+        let err = ctx.resolve_lazy_tables(&md).expect_err("expansion budget");
+        assert!(err.to_string().contains("node budget"), "unexpected error: {err}");
+    }
+
+    /// The budget must not fire on legitimate shared references: a DAG chain
+    /// of moderate depth resolves fully within 4M nodes.
+    #[test]
+    fn dag_typespec_within_budget_resolves() {
+        let bytes = build_dag_md(16); // 2^16 = 65536-argument trees at most
+        let md = MetadataReader::parse(&bytes).expect("synthetic root parses");
+        let mut ctx = ReadContext::new(&md);
+        ctx.type_defs.push(TypeId(0));
+        ctx.resolve_lazy_tables(&md).expect("16-row DAG stays in budget");
+        assert_eq!(ctx.type_specs.len(), 16);
+    }
+
+    /// Regression guard: the signature depth budget must be global across
+    /// TypeSpec hops, not reset per blob. A chain of TypeSpec rows whose
+    /// blobs each nest several composite levels and reference the NEXT row
+    /// (forward references bypass memoization, forcing real recursion) must
+    /// fail once the combined depth crosses the cap.
+    #[test]
+    fn typespec_hop_depth_is_global_not_per_blob() {
+        let per_blob_prefix: u32 = 8; // SZARRAY layers inside each blob
+        let rows = (MAX_TDOR_DEPTH / per_blob_prefix) + 2;
+
+        let mut b = MetadataBuilder::new("v4.0.30319");
+        let mname = b.insert_string("<Module>");
+        let mvid = b.insert_guid(&[7u8; 16]);
+        b.add_row(TableIndex::Module, &[0, mname as u64, mvid as u64, 0, 0]).unwrap();
+        let def_name = b.insert_string("Mine");
+        let def_ns = b.insert_string("TestNs");
+        b.add_row(TableIndex::TypeDef, &[0x0010_0001, def_name as u64, def_ns as u64, 0, 1, 1])
+            .unwrap();
+
+        for k in 1..=rows {
+            let mut blob = vec![0x1Du8; per_blob_prefix as usize];
+            blob.push(0x12); // CLASS
+            if k == rows {
+                blob.push(0x04); // terminal: TypeDef rid 1
+            } else {
+                blob.push(((k + 1) << 2 | 2) as u8); // forward ref to row k+1
+            }
+            let idx = b.insert_blob(&blob);
+            b.add_row(TableIndex::TypeSpec, &[idx as u64]).unwrap();
+        }
+        let bytes = b.finalize();
+        let md = MetadataReader::parse(&bytes).expect("synthetic root parses");
+        let mut ctx = ReadContext::new(&md);
+        ctx.type_defs.push(TypeId(0));
+        // Combined depth ~ rows * per_blob_prefix exceeds the cap; a per-hop
+        // reset would let it through, the global budget must not.
+        let err = ctx.resolve_lazy_tables(&md).expect_err("depth budget must be global");
+        assert!(err.to_string().contains("deeper than"), "unexpected error: {err}");
     }
 }

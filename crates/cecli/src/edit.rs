@@ -62,7 +62,6 @@ fn recompute_offsets(body: &mut ResolvedBody) {
 /// `skip` is `Some(index)`, the instruction at that position keeps its
 /// operand untouched (used when the moved instruction carries a freshly
 /// authored operand of its own).
-
 fn shift_targets(body: &mut ResolvedBody, from: i32, delta: i32, skip: Option<usize>) {
     if delta == 0 {
         return;
@@ -397,7 +396,6 @@ fn simplify_instructions(body: &mut ResolvedBody) {
             Code::Ldc_I4_8 => expand_macro(instr, op::LDC_I4, ROperand::Int32(8)),
             Code::Ldc_I4_S => {
                 if let ROperand::Int8(value) = instr.operand {
-                    let value = value;
                     expand_macro(instr, op::LDC_I4, ROperand::Int32(value as i32));
                 }
             }
@@ -487,7 +485,6 @@ fn optimize_instructions(body: &mut ResolvedBody) {
             }
             Code::Ldc_I4 => {
                 if let ROperand::Int32(value) = instr.operand {
-                    let value = value;
                     match value {
                         -1 => make_macro(instr, op::LDC_I4_M1),
                         0 => make_macro(instr, op::LDC_I4_0),
@@ -627,7 +624,6 @@ fn optimize_longs(body: &mut ResolvedBody) {
         let instr = &mut body.instructions[index];
         instr.opcode = op::LDC_I4;
         instr.operand = ROperand::Int32(value as i32);
-        drop(instr);
         // The narrowed load is 4 bytes shorter; everything after it slides.
         shift_targets(body, old_end, -4, Some(index));
         // Insert conv.i8 right behind the load (one byte back).

@@ -252,11 +252,11 @@ impl MetadataBuilder {
     pub fn finalize(self) -> Vec<u8> {
         let mut counts = [0u32; TABLE_COUNT];
         let mut valid = 0u64;
-        for i in 0..TABLE_COUNT {
+        for (i, count) in counts.iter_mut().enumerate() {
             if self.rows[i].is_empty() {
                 continue;
             }
-            counts[i] = self.rows[i].len() as u32;
+            *count = self.rows[i].len() as u32;
             valid |= 1u64 << i;
         }
 
@@ -275,11 +275,11 @@ impl MetadataBuilder {
         tw.u64(valid);
         tw.u64(SORTED_MASK_DEFAULT);
 
-        for i in 0..TABLE_COUNT {
+        for (i, &count) in counts.iter().enumerate() {
             if valid >> i & 1 == 0 {
                 continue;
             }
-            tw.u32(counts[i]);
+            tw.u32(count);
         }
 
         for i in 0..TABLE_COUNT {

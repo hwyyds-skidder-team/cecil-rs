@@ -28,6 +28,10 @@ use super::custom_attribute::{
 };
 use super::types::TypeDesc;
 
+/// One decoded `<IPermission>` entry: the permission class name plus its
+/// string-valued property arguments.
+type PermissionEntry = (String, Vec<(String, CArgument)>);
+
 /// First byte selecting the binary attribute-set form.
 const BINARY_MARKER: u8 = b'.';
 
@@ -241,7 +245,7 @@ fn unescape_xml(s: &str) -> String {
 /// Extracts `(class, properties)` from each `<IPermission …/>` element of the
 /// permission-set XML, in document order. `version` is implied and dropped;
 /// every other attribute becomes a string-valued property argument.
-fn parse_ipermissions(xml: &str) -> Result<Vec<(String, Vec<(String, CArgument)>)>> {
+fn parse_ipermissions(xml: &str) -> Result<Vec<PermissionEntry>> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some(off) = xml[i..].find("<IPermission") {

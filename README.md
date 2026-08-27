@@ -55,7 +55,7 @@ asm.write_file("patched.dll")?;
 ## 测试
 
 ```sh
-cargo test --workspace          # 347 个测试,含真实程序集夹具的读→写→重读等价套件
+cargo test --workspace          # 356 个测试,含真实程序集夹具的读→写→重读等价套件
 cargo test -p cecli --features strongname   # 强名签名套件
 ```
 

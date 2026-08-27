@@ -455,6 +455,10 @@ fn full_name(ty: &TypeDesc, m: &Module) -> String {
 }
 
 impl TypeReferenceRocks for TypeDesc {
+    // The `m` parameter is only forwarded down recursive arms here (leaf
+    // shapes resolve through the module elsewhere); the trait signature is
+    // fixed, so silence the only-used-in-recursion lint.
+    #[allow(clippy::only_used_in_recursion)]
     fn resolve_in(&self, m: &Module) -> Option<TypeId> {
         match self {
             TypeDesc::Def(id) => Some(*id),
@@ -631,8 +635,7 @@ mod tests {
     /// (two generic parameters), and the nested chain `NS.Outer > Inner >
     /// Deeper` where both levels define a virtual `get_Score`.
     fn sample_module() -> Module {
-        let mut m = Module::default();
-        m.name = "sample.dll".into();
+        let mut m = Module { name: "sample.dll".into(), ..Default::default() };
 
         let widget = add_type(
             &mut m,

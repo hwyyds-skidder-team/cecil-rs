@@ -138,16 +138,24 @@ pub type TdorResolver<'a> = dyn FnMut(u32) -> Result<TypeDesc> + 'a;
 /// (encoded cell). Used while writing enum types and `System.Type` values.
 pub type TdorEncoder<'a> = dyn FnMut(&TypeDesc) -> Result<u32> + 'a;
 
+/// A named custom-attribute argument: `(name, value)`.
+pub type NamedArgument = (String, CArgument);
+
+/// Decoded custom-attribute arguments: the fixed (positional) arguments
+/// followed by the named ones.
+pub type AttributeArguments = (Vec<CArgument>, Vec<NamedArgument>);
+
+/// A named custom-attribute argument retaining its kind byte
+/// (`NAMED_FIELD` | `NAMED_PROPERTY`).
+pub type NamedArgumentWithKind = (u8, String, CArgument);
+
 /// Decodes a custom attribute blob in the *self-described synthetic form*
 /// into its fixed (positional) and named arguments, validating the `0x0001`
 /// prolog. Real images use the constructor-signature-driven layout instead:
 /// see [`decode_attribute_args_for`].
 ///
 /// `r` resolves `TypeDefOrRef` cells for enum types and `System.Type` values.
-pub fn decode_attribute_args(
-    blob: &[u8],
-    r: &mut TdorResolver,
-) -> Result<(Vec<CArgument>, Vec<(String, CArgument)>)> {
+pub fn decode_attribute_args(blob: &[u8], r: &mut TdorResolver) -> Result<AttributeArguments> {
     let mut rd = ByteReader::new(blob);
     if rd.remaining() < 2 || rd.u16()? != PROLOG {
         return Err(Error::bad_image("custom attribute blob must start with the 0x0001 prolog"));
@@ -771,7 +779,7 @@ fn read_named_argument_for(
 pub fn decode_attribute_args_for(
     blob: &[u8],
     ctor_params: &[TypeDesc],
-) -> Result<(Vec<CArgument>, Vec<(String, CArgument)>)> {
+) -> Result<AttributeArguments> {
     decode_attribute_args_for_ctx(blob, ctor_params, None)
 }
 
@@ -781,7 +789,7 @@ pub fn decode_attribute_args_for_ctx(
     blob: &[u8],
     ctor_params: &[TypeDesc],
     enum_underlying: Option<&EnumUnderlying>,
-) -> Result<(Vec<CArgument>, Vec<(String, CArgument)>)> {
+) -> Result<AttributeArguments> {
     let mut rd = ByteReader::new(blob);
     if rd.remaining() < 2 || rd.u16()? != PROLOG {
         return Err(Error::bad_image("custom attribute blob must start with the 0x0001 prolog"));
@@ -1035,7 +1043,7 @@ pub fn write_attribute_args_for_ctx(
 fn decode_with_kinds(
     blob: &[u8],
     r: &mut TdorResolver,
-) -> Result<(Vec<CArgument>, Vec<(u8, String, CArgument)>)> {
+) -> Result<(Vec<CArgument>, Vec<NamedArgumentWithKind>)> {
     let mut rd = ByteReader::new(blob);
     if rd.remaining() < 2 || rd.u16()? != PROLOG {
         return Err(Error::bad_image("custom attribute blob must start with the 0x0001 prolog"));
@@ -1088,7 +1096,7 @@ impl CustomAttribute {
     /// Note that [`encode_attribute_args`] serialises every named entry with
     /// the field tag (`0x53`), so round-tripped blobs surface all named
     /// arguments under [`Self::fields`] and none here.
-    pub fn properties(&self, r: &mut TdorResolver) -> Result<Vec<(String, CArgument)>> {
+    pub fn properties(&self, r: &mut TdorResolver) -> Result<Vec<NamedArgument>> {
         Ok(decode_with_kinds(&self.blob, r)?
             .1
             .into_iter()
@@ -1099,7 +1107,7 @@ impl CustomAttribute {
 
     /// Named arguments targeting public fields (`0x53`). Port of
     /// Mono.Cecil `CustomAttribute.Fields`.
-    pub fn fields(&self, r: &mut TdorResolver) -> Result<Vec<(String, CArgument)>> {
+    pub fn fields(&self, r: &mut TdorResolver) -> Result<Vec<NamedArgument>> {
         Ok(decode_with_kinds(&self.blob, r)?
             .1
             .into_iter()
@@ -1189,7 +1197,7 @@ mod tests {
         }
     }
 
-    fn fixture() -> (Vec<CArgument>, Vec<(String, CArgument)>) {
+    fn fixture() -> AttributeArguments {
         let fixed = vec![
             CArgument::Bool(true),
             CArgument::Bool(false),

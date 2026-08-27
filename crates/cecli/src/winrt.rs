@@ -1334,16 +1334,18 @@ fn redirect_interface_methods(
     for mid in &def.methods {
         let src = m.method_def(*mid);
         let sig = substitute_signature(&src.signature, &map_v, &mut no_map);
-        let mut md = MethodDefinition::default();
-        md.name = src.name.clone();
-        md.attributes = MethodAttributes::PUBLIC
-            | MethodAttributes::VIRTUAL
-            | MethodAttributes::FINAL
-            | MethodAttributes::NEW_SLOT;
-        md.impl_attributes = MethodImplAttributes::RUNTIME;
-        md.signature = sig.clone();
-        md.parameters = src.parameters.clone();
-        md.return_parameter = src.return_parameter.clone();
+        let md = MethodDefinition {
+            name: src.name.clone(),
+            attributes: MethodAttributes::PUBLIC
+                | MethodAttributes::VIRTUAL
+                | MethodAttributes::FINAL
+                | MethodAttributes::NEW_SLOT,
+            impl_attributes: MethodImplAttributes::RUNTIME,
+            signature: sig.clone(),
+            parameters: src.parameters.clone(),
+            return_parameter: src.return_parameter.clone(),
+            ..Default::default()
+        };
         out.push(GeneratedMethod {
             def: md,
             declaration: MethodRef::External(ExternalMethod {
@@ -1643,9 +1645,7 @@ fn project_method_definition(
     let mut other = false;
 
     if is_windows_runtime(dt_attrs) {
-        if dt_is_clr_impl {
-            treatment = MethodDefinitionTreatment::NONE;
-        } else if dt_nested {
+        if dt_is_clr_impl || dt_nested {
             treatment = MethodDefinitionTreatment::NONE;
         } else if dt_interface {
             treatment =
@@ -1930,8 +1930,7 @@ mod tests {
     use cecli_core::io::ByteWriter;
 
     fn fixture_module(kind: MetadataKind, seed: u8) -> Module {
-        let mut m = Module::default();
-        m.metadata_kind = kind;
+        let mut m = Module { metadata_kind: kind, ..Default::default() };
         m.guid = [seed; 16];
         m.guid[15] = seed.wrapping_add(1); // unique per fixture
         let mut corlib = AssemblyNameReference::new("mscorlib");
@@ -1942,11 +1941,12 @@ mod tests {
     }
 
     fn ty(namespace: &str, name: &str, attributes: TypeAttributes) -> TypeDefinition {
-        let mut t = TypeDefinition::default();
-        t.namespace = namespace.into();
-        t.name = name.into();
-        t.attributes = attributes;
-        t
+        TypeDefinition {
+            namespace: namespace.into(),
+            name: name.into(),
+            attributes,
+            ..Default::default()
+        }
     }
 
     fn wr_public() -> TypeAttributes {
@@ -1977,10 +1977,8 @@ mod tests {
         attributes: MethodAttributes,
         signature: MethodSignature,
     ) -> MethodId {
-        let mut md = MethodDefinition::default();
-        md.name = name.into();
-        md.attributes = attributes;
-        md.signature = signature;
+        let md =
+            MethodDefinition { name: name.into(), attributes, signature, ..Default::default() };
         m.add_method(owner, md)
     }
 
@@ -2375,7 +2373,7 @@ mod tests {
     // -- fields -----------------------------------------------------------------
 
     #[test]
-    fn enum_value__field_becomes_public() {
+    fn enum_value_field_becomes_public() {
         let mut m = fixture_module(MetadataKind::WindowsMetadata, 0x1d);
         let mut en = ty("F", "MyEnum", wr_public() | TypeAttributes::SEALED);
         en.base_type = Some(ext("System", "Enum"));

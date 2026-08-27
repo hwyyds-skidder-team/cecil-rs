@@ -730,26 +730,19 @@ mod tests {
 
     /// Builds a tiny in-memory assembly: Ns.Outer/Nested with one method.
     fn sample_assembly() -> AssemblyDefinition {
-        let mut module = Module::default();
-        module.name = "sample".into();
-        let outer = {
-            let mut t = TypeDefinition::default();
-            t.namespace = "Ns".into();
-            t.name = "Outer".into();
-            module.add_type(t)
-        };
-        let nested = {
-            let mut t = TypeDefinition::default();
-            t.namespace = "Ns".into();
-            t.name = "Nested".into();
-            t.declaring_type = Some(outer);
-            module.add_type(t)
-        };
-        let method = {
-            let mut m = MethodDefinition::default();
-            m.name = "Bar".into();
-            m
-        };
+        let mut module = Module { name: "sample".into(), ..Default::default() };
+        let outer = module.add_type(TypeDefinition {
+            namespace: "Ns".into(),
+            name: "Outer".into(),
+            ..Default::default()
+        });
+        let nested = module.add_type(TypeDefinition {
+            namespace: "Ns".into(),
+            name: "Nested".into(),
+            declaring_type: Some(outer),
+            ..Default::default()
+        });
+        let method = MethodDefinition { name: "Bar".into(), ..Default::default() };
         let mid = module.add_method(nested, method);
 
         let mut ad = AssemblyDefinition::default();
@@ -778,13 +771,15 @@ mod tests {
 
     #[test]
     fn carrier_image_parses_and_preserves_identity() {
-        let mut module = Module::default();
-        module.kind = cecli_core::flags::ModuleKind::Dll;
-        module.architecture = cecli_core::flags::TargetArchitecture::AMD64;
-        module.characteristics = cecli_core::flags::ModuleCharacteristics::NX_COMPAT;
-        module.attributes = cecli_core::flags::ModuleAttributes::IL_ONLY
-            | cecli_core::flags::ModuleAttributes::IL_LIBRARY;
-        module.entry_point_token = cecli_core::Token::new(cecli_core::TableIndex::MethodDef, 7);
+        let module = Module {
+            kind: cecli_core::flags::ModuleKind::Dll,
+            architecture: cecli_core::flags::TargetArchitecture::AMD64,
+            characteristics: cecli_core::flags::ModuleCharacteristics::NX_COMPAT,
+            attributes: cecli_core::flags::ModuleAttributes::IL_ONLY
+                | cecli_core::flags::ModuleAttributes::IL_LIBRARY,
+            entry_point_token: cecli_core::Token::new(cecli_core::TableIndex::MethodDef, 7),
+            ..Default::default()
+        };
         let image = carrier_image(&module).expect("carrier parses");
         assert_eq!(image.architecture.0, 0x8664);
         assert_eq!(image.kind, cecli_pe::ModuleKind::Dll);
@@ -886,10 +881,12 @@ mod tests {
         let out_dir = unique_test_dir("multimodule");
         std::fs::copy(&netmodule, out_dir.join("moda.netmodule")).expect("satellite copied");
 
-        let mut module = Module::default();
-        module.name = "multi".into();
-        module.kind = ModuleKind::Dll;
-        module.runtime_version = "v4.0.30319".into();
+        let mut module = Module {
+            name: "multi".into(),
+            kind: ModuleKind::Dll,
+            runtime_version: "v4.0.30319".into(),
+            ..Default::default()
+        };
         module.file_rows.push(crate::module_def::FileRow {
             name: "moda.netmodule".into(),
             attributes: cecli_core::flags::FileRowAttributes::empty(),

@@ -469,11 +469,12 @@ mod tests {
     use super::*;
 
     fn named_type(ns: &str, name: &str, declaring: Option<TypeId>) -> TypeDefinition {
-        let mut t = TypeDefinition::default();
-        t.namespace = ns.into();
-        t.name = name.into();
-        t.declaring_type = declaring;
-        t
+        TypeDefinition {
+            namespace: ns.into(),
+            name: name.into(),
+            declaring_type: declaring,
+            ..Default::default()
+        }
     }
 
     fn sample_module() -> Module {
@@ -522,10 +523,12 @@ mod tests {
         let mut m = sample_module();
         let outer = m.get_type_id("Ns", "Outer").unwrap();
 
-        let mut meth = MethodDefinition::default();
-        meth.name = "Do".into();
         // A stale declaring type gets overwritten by add_method.
-        meth.declaring_type = TypeId(99);
+        let meth = MethodDefinition {
+            name: "Do".into(),
+            declaring_type: TypeId(99),
+            ..Default::default()
+        };
         let mid = m.add_method(outer, meth);
         assert_eq!(m.method_def(mid).name, "Do");
         assert_eq!(m.method_def(mid).declaring_type, outer);
@@ -550,24 +553,20 @@ mod tests {
     #[test]
     fn generic_parameters_register_on_their_owner() {
         let mut m = Module::default();
-        let ty = {
-            let mut t = TypeDefinition::default();
-            t.name = "Box".into();
-            m.add_type(t)
-        };
-        let mut gp_t = GenericParameter::default();
-        gp_t.name = "T".into();
-        gp_t.owner = GenericOwner::Type(ty);
-        let gid = m.add_generic_parameter(gp_t);
+        let ty = m.add_type(TypeDefinition { name: "Box".into(), ..Default::default() });
+        let gid = m.add_generic_parameter(GenericParameter {
+            name: "T".into(),
+            owner: GenericOwner::Type(ty),
+            ..Default::default()
+        });
         assert_eq!(m.type_def(ty).generic_parameters, vec![gid]);
 
-        let mut meth = MethodDefinition::default();
-        meth.name = "Get".into();
-        let mid = m.add_method(ty, meth);
-        let mut gp_m = GenericParameter::default();
-        gp_m.name = "R".into();
-        gp_m.owner = GenericOwner::Method(mid);
-        let gid2 = m.add_generic_parameter(gp_m);
+        let mid = m.add_method(ty, MethodDefinition { name: "Get".into(), ..Default::default() });
+        let gid2 = m.add_generic_parameter(GenericParameter {
+            name: "R".into(),
+            owner: GenericOwner::Method(mid),
+            ..Default::default()
+        });
         assert_eq!(m.method_def(mid).generic_parameters, vec![gid2]);
         assert_eq!(m.generic_parameter_def(gid2).owner, GenericOwner::Method(mid));
     }
@@ -577,15 +576,13 @@ mod tests {
         let mut m = Module::default();
         let outer = m.add_type(named_type("Ns", "Outer", None));
         let inner = m.add_type(named_type("Ns", "Inner", Some(outer)));
-        let mut meth = MethodDefinition::default();
-        meth.name = "Bar".into();
-        let mid = m.add_method(inner, meth);
+        let mid =
+            m.add_method(inner, MethodDefinition { name: "Bar".into(), ..Default::default() });
         assert_eq!(m.method_name_chain(mid), "Ns.Outer/Inner::Bar");
 
         let top = m.add_type(named_type("Sys", "Console", None));
-        let mut w = MethodDefinition::default();
-        w.name = "WriteLine".into();
-        let wid = m.add_method(top, w);
+        let wid =
+            m.add_method(top, MethodDefinition { name: "WriteLine".into(), ..Default::default() });
         assert_eq!(m.method_name_chain(wid), "Sys.Console::WriteLine");
 
         let displayed = format!("{}", m);

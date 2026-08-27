@@ -236,7 +236,7 @@ impl TableSet {
         let mut probe = TableSet { layouts: Vec::new(), counts: *row_counts, valid, heap_flags };
         let mut offset = 0u64;
 
-        for i in 0..TABLE_COUNT {
+        for (i, layout) in layouts.iter_mut().enumerate() {
             if valid >> i & 1 == 0 {
                 continue;
             }
@@ -254,7 +254,7 @@ impl TableSet {
                 row_offset += probe.kind_width(&kind) as u16;
             }
 
-            layouts[i] = Some(TableLayout { row_size: row_offset, offset, columns });
+            *layout = Some(TableLayout { row_size: row_offset, offset, columns });
             offset += row_offset as u64 * probe.counts[i] as u64;
         }
 

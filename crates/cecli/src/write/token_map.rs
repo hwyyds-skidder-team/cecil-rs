@@ -860,7 +860,7 @@ mod tests {
         fn is_value_type(&self, ty: &TypeDesc) -> Result<bool> {
             self.tm.is_value_type(ty, self.m)
         }
-        fn tdor_type(&self, value_type: bool, cell: u32) -> Result<TypeDesc> {
+        fn tdor_type(&self, value_type: bool, cell: u32, _depth: u32) -> Result<TypeDesc> {
             let rid = cell >> 2;
             let (_, ty) = self
                 .seen
@@ -911,7 +911,7 @@ mod tests {
         write_type_element(&foo, &mut fw, &ctx).unwrap();
         let fblob = fw.into_vec();
         let (foo_back, consumed) =
-            crate::model::signature::parse_type_element(&fblob, 0, &ctx, false).unwrap();
+            crate::model::signature::parse_type_element(&fblob, 0, &ctx, 0, false).unwrap();
         assert_eq!(foo_back, foo);
         assert_eq!(consumed, fblob.len());
     }
@@ -1032,25 +1032,30 @@ mod tests {
     fn value_type_classification_rules() {
         let mut m = Module::default();
         // struct Derived : System.ValueType -> value type
-        let mut derived = crate::model::types::TypeDefinition::default();
-        derived.base_type = Some(ext("System", "ValueType"));
-        m.types.push(derived);
+        m.types.push(crate::model::types::TypeDefinition {
+            base_type: Some(ext("System", "ValueType")),
+            ..Default::default()
+        });
         // enum Color : System.Enum -> value type
-        let mut color = crate::model::types::TypeDefinition::default();
-        color.base_type = Some(ext("System", "Enum"));
-        m.types.push(color);
+        m.types.push(crate::model::types::TypeDefinition {
+            base_type: Some(ext("System", "Enum")),
+            ..Default::default()
+        });
         // class Node : object -> class
-        let mut node = crate::model::types::TypeDefinition::default();
-        node.base_type = Some(ext("System", "Object"));
-        m.types.push(node);
+        m.types.push(crate::model::types::TypeDefinition {
+            base_type: Some(ext("System", "Object")),
+            ..Default::default()
+        });
         // interface IFoo -> class
-        let mut iface = crate::model::types::TypeDefinition::default();
-        iface.attributes = TypeAttributes::INTERFACE;
-        m.types.push(iface);
+        m.types.push(crate::model::types::TypeDefinition {
+            attributes: TypeAttributes::INTERFACE,
+            ..Default::default()
+        });
         // struct Wrapper : Derived (transitive)
-        let mut wrapper = crate::model::types::TypeDefinition::default();
-        wrapper.base_type = Some(TypeDesc::Def(TypeId(0)));
-        m.types.push(wrapper);
+        m.types.push(crate::model::types::TypeDefinition {
+            base_type: Some(TypeDesc::Def(TypeId(0))),
+            ..Default::default()
+        });
 
         let mut b = MetadataBuilder::new("v4.0.30319");
         let tm = TokenMap::new(&mut b);

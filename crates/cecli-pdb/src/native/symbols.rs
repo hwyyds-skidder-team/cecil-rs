@@ -509,6 +509,10 @@ struct RawFunction {
 // Stream parsers (ports of the PdbFile.cs static methods)
 // ---------------------------------------------------------------------------
 
+/// Name-index payload of the info stream: upper-cased name -> stream-index
+/// map plus version, signature, age, and GUID.
+type NameIndex = (HashMap<String, u32>, u32, u32, u32, [u8; 16]);
+
 /// PDB identity triple read from the info stream.
 #[derive(Debug, Clone, Copy)]
 pub struct PdbId {
@@ -519,9 +523,7 @@ pub struct PdbId {
 
 /// Port of `PdbFile.LoadNameIndex`: parses the info stream, returning the
 /// upper-cased name -> stream-index map plus version/signature/age/GUID.
-fn load_name_index(
-    bits: &mut BitReader<'_>,
-) -> Result<(HashMap<String, u32>, u32, u32, u32, [u8; 16])> {
+fn load_name_index(bits: &mut BitReader<'_>) -> Result<NameIndex> {
     let ver = bits.read_i32()?; // 0..3 Version
     let sig = bits.read_i32()?; // 4..7 Signature
     let age = bits.read_i32()?; // 8..11 Age

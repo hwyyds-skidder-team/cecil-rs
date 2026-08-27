@@ -86,7 +86,6 @@ pub fn read_image(raw: Vec<u8>) -> Result<Image> {
         &sections,
         raw.len(),
     )?;
-    drop(r);
 
     Ok(Image::from_parts(
         raw,
@@ -172,27 +171,27 @@ fn read_cli_header(
 ) -> Result<CliHeader> {
     r.seek(resolve_rva_offset(directory.virtual_address as u64, sections)?)?;
 
-    let mut h = CliHeader::default();
-    h.cb = r.u32()?;
-    h.runtime_major = r.u16()?;
-    h.runtime_minor = r.u16()?;
-    h.metadata_rva = r.u32()? as u64;
-    h.metadata_size = r.u32()? as u64;
-    h.flags = r.u32()?;
-    h.entry_point_token = cecli_core::Token(r.u32()?);
-    h.resources_rva = r.u32()? as u64;
-    h.resources_size = r.u32()? as u64;
-    h.strong_name_rva = r.u32()? as u64;
-    h.strong_name_size = r.u32()? as u64;
-    h.code_manager_table_rva = r.u32()? as u64;
-    h.code_manager_table_size = r.u32()? as u64;
-    h.vtable_fixups_rva = r.u32()? as u64;
-    h.vtable_fixups_size = r.u32()? as u64;
-    h.export_address_table_jumps_rva = r.u32()? as u64;
-    h.export_address_table_jumps_size = r.u32()? as u64;
-    h.managed_native_header_rva = r.u32()? as u64;
-    h.managed_native_header_size = r.u32()? as u64;
-    Ok(h)
+    Ok(CliHeader {
+        cb: r.u32()?,
+        runtime_major: r.u16()?,
+        runtime_minor: r.u16()?,
+        metadata_rva: r.u32()? as u64,
+        metadata_size: r.u32()? as u64,
+        flags: r.u32()?,
+        entry_point_token: cecli_core::Token(r.u32()?),
+        resources_rva: r.u32()? as u64,
+        resources_size: r.u32()? as u64,
+        strong_name_rva: r.u32()? as u64,
+        strong_name_size: r.u32()? as u64,
+        code_manager_table_rva: r.u32()? as u64,
+        code_manager_table_size: r.u32()? as u64,
+        vtable_fixups_rva: r.u32()? as u64,
+        vtable_fixups_size: r.u32()? as u64,
+        export_address_table_jumps_rva: r.u32()? as u64,
+        export_address_table_jumps_size: r.u32()? as u64,
+        managed_native_header_rva: r.u32()? as u64,
+        managed_native_header_size: r.u32()? as u64,
+    })
 }
 
 type MetadataInfo = (usize, String, Vec<crate::image::MetadataStream>);

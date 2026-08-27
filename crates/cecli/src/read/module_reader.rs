@@ -95,6 +95,17 @@ fn bad(msg: String) -> Error {
     Error::bad_image(msg)
 }
 
+/// Validates a 1-based row id against an arena/table length and returns the
+/// 0-based slot. Centralizes the `rid < 1 || rid > len` guard so coded-index
+/// consumers cannot forget it — a rid of 0 would otherwise underflow `rid - 1`
+/// or index out of bounds.
+fn checked_slot(rid: usize, len: usize, what: &str) -> Result<usize> {
+    if rid < 1 || rid > len {
+        return Err(bad(format!("{what} out of range")));
+    }
+    Ok(rid - 1)
+}
+
 /// End (exclusive) of a `*List` run: the next row's start, or `count + 1`.
 fn list_end(starts: &[u32], i: usize, count: u32) -> u32 {
     if i + 1 < starts.len() {
@@ -493,21 +504,18 @@ fn read_properties_events_semantics(
             rid,
             0,
         )?);
-        let method = cell_u32(md, T::MethodSemantics, rid, 1)? as usize;
+        let method_cell = cell_u32(md, T::MethodSemantics, rid, 1)? as usize;
         let assoc_cell = md.column(T::MethodSemantics, rid, 2)?;
         let (table, target) = decode_group(&coded::HAS_SEMANTICS, assoc_cell)?;
-        if method == 0 || method > module.methods.len() {
-            return Err(bad(format!("MethodSemantics row {rid} references method outside table")));
-        }
-        let method = MethodId(method as u32 - 1);
+        let method =
+            MethodId(
+                checked_slot(method_cell, module.methods.len(), "MethodSemantics method")? as u32
+            );
         match table {
             T::Event => {
-                if target < 1 || target as usize > module.events.len() {
-                    return Err(bad(format!(
-                        "MethodSemantics row {rid} references event outside table"
-                    )));
-                }
-                let event = &mut module.events[target as usize - 1];
+                let slot =
+                    checked_slot(target as usize, module.events.len(), "MethodSemantics event")?;
+                let event = &mut module.events[slot];
                 if semantics.contains(MethodSemanticsAttributes::ADD_ON) {
                     event.add_on = Some(method);
                 }
@@ -522,12 +530,12 @@ fn read_properties_events_semantics(
                 }
             }
             T::Property => {
-                if target < 1 || target as usize > module.properties.len() {
-                    return Err(bad(format!(
-                        "MethodSemantics row {rid} references property outside table"
-                    )));
-                }
-                let property = &mut module.properties[target as usize - 1];
+                let slot = checked_slot(
+                    target as usize,
+                    module.properties.len(),
+                    "MethodSemantics property",
+                )?;
+                let property = &mut module.properties[slot];
                 if semantics.contains(MethodSemanticsAttributes::GETTER) {
                     property.get_method = Some(method);
                 }
@@ -564,22 +572,22 @@ fn read_generic_params(
 
         let owner = match owner_table {
             T::TypeDef => {
-                if owner_rid as usize > module.types.len() {
-                    return Err(bad(format!("GenericParam row {rid}: owner type out of range")));
-                }
-                module.types[owner_rid as usize - 1]
-                    .generic_parameters
-                    .push(GenericParamId(rid - 1));
-                GenericOwner::Type(TypeId(owner_rid - 1))
+                let slot = checked_slot(
+                    owner_rid as usize,
+                    module.types.len(),
+                    "GenericParam owner type",
+                )?;
+                module.types[slot].generic_parameters.push(GenericParamId(rid - 1));
+                GenericOwner::Type(TypeId(slot as u32))
             }
             T::MethodDef => {
-                if owner_rid as usize > module.methods.len() {
-                    return Err(bad(format!("GenericParam row {rid}: owner method out of range")));
-                }
-                module.methods[owner_rid as usize - 1]
-                    .generic_parameters
-                    .push(GenericParamId(rid - 1));
-                GenericOwner::Method(MethodId(owner_rid - 1))
+                let slot = checked_slot(
+                    owner_rid as usize,
+                    module.methods.len(),
+                    "GenericParam owner method",
+                )?;
+                module.methods[slot].generic_parameters.push(GenericParamId(rid - 1));
+                GenericOwner::Method(MethodId(slot as u32))
             }
             _ => return Err(bad("TypeOrMethodDef cell with unexpected tag".into())),
         };
@@ -599,10 +607,8 @@ fn read_generic_params(
     for rid in 1..=md.row_count(T::GenericParamConstraint) {
         let owner = cell_u32(md, T::GenericParamConstraint, rid, 0)? as usize;
         let constraint_cell = md.column(T::GenericParamConstraint, rid, 1)?;
-        if owner < 1 || owner > constraints.len() {
-            return Err(bad(format!("GenericParamConstraint row {rid}: owner out of range")));
-        }
-        constraints[owner - 1].push(constraint_cell as u32);
+        let slot = checked_slot(owner, constraints.len(), "GenericParamConstraint owner")?;
+        constraints[slot].push(constraint_cell as u32);
     }
     for (i, cells) in constraints.iter().enumerate() {
         for cell_value in cells {
@@ -635,11 +641,9 @@ fn read_base_types_and_interfaces(
     for rid in 1..=md.row_count(T::InterfaceImpl) {
         let class = cell_u32(md, T::InterfaceImpl, rid, 0)? as usize;
         let iface_cell = cell_u32(md, T::InterfaceImpl, rid, 1)?;
-        if class < 1 || class > module.types.len() {
-            return Err(bad(format!("InterfaceImpl row {rid}: class out of range")));
-        }
         let iface = ctx.tdor_to_typedesc(md, iface_cell)?;
-        module.types[class - 1].interfaces.push(iface);
+        let slot = checked_slot(class, module.types.len(), "InterfaceImpl class")?;
+        module.types[slot].interfaces.push(iface);
     }
     Ok(())
 }
@@ -649,10 +653,8 @@ fn read_class_layouts(module: &mut Module, md: &MetadataReader) -> Result<()> {
         let packing_size = cell_u16(md, T::ClassLayout, rid, 0)? as i16 as i32;
         let class_size = cell_u32(md, T::ClassLayout, rid, 1)? as i32;
         let parent = cell_u32(md, T::ClassLayout, rid, 2)? as usize;
-        if parent < 1 || parent > module.types.len() {
-            return Err(bad(format!("ClassLayout row {rid}: parent out of range")));
-        }
-        module.types[parent - 1].class_layout = Some(ClassLayout { packing_size, class_size });
+        let slot = checked_slot(parent, module.types.len(), "ClassLayout parent")?;
+        module.types[slot].class_layout = Some(ClassLayout { packing_size, class_size });
     }
     Ok(())
 }
@@ -661,10 +663,8 @@ fn read_field_layouts(module: &mut Module, md: &MetadataReader) -> Result<()> {
     for rid in 1..=md.row_count(T::FieldLayout) {
         let offset = cell_u32(md, T::FieldLayout, rid, 0)? as i32;
         let field = cell_u32(md, T::FieldLayout, rid, 1)? as usize;
-        if field < 1 || field > module.fields.len() {
-            return Err(bad(format!("FieldLayout row {rid}: field out of range")));
-        }
-        module.fields[field - 1].offset = Some(offset);
+        let slot = checked_slot(field, module.fields.len(), "FieldLayout field")?;
+        module.fields[slot].offset = Some(offset);
     }
     Ok(())
 }
@@ -703,11 +703,9 @@ fn read_field_rvas(
     for rid in 1..=md.row_count(T::FieldRva) {
         let rva = cell_u32(md, T::FieldRva, rid, 0)? as u64;
         let field = cell_u32(md, T::FieldRva, rid, 1)? as usize;
-        if field < 1 || field > module.fields.len() {
-            return Err(bad(format!("FieldRVA row {rid}: field out of range")));
-        }
-        let size = field_type_size(module, &module.fields[field - 1].signature.0, pointer_size);
-        let field_def = &mut module.fields[field - 1];
+        let slot = checked_slot(field, module.fields.len(), "FieldRVA field")?;
+        let size = field_type_size(module, &module.fields[slot].signature.0, pointer_size);
+        let field_def = &mut module.fields[slot];
         field_def.rva = rva;
         if field_def.attributes.contains(FieldAttributes::HAS_FIELD_RVA) && rva != 0 && size > 0 {
             let raw = image.rva(rva)?;
@@ -754,16 +752,12 @@ fn read_constants(
         let (table, target) = decode_group(&coded::HAS_CONSTANT, parent_cell)?;
         match table {
             T::Field => {
-                if target as usize > module.fields.len() {
-                    return Err(bad(format!("Constant row {rid}: field out of range")));
-                }
-                module.fields[target as usize - 1].constant = value;
+                let slot = checked_slot(target as usize, module.fields.len(), "Constant field")?;
+                module.fields[slot].constant = value;
             }
             T::Param => {
-                if target as usize > param_owners.len() {
-                    return Err(bad(format!("Constant row {rid}: param out of range")));
-                }
-                if let Some((method, sequence)) = param_owners[target as usize - 1] {
+                let slot = checked_slot(target as usize, param_owners.len(), "Constant param")?;
+                if let Some((method, sequence)) = param_owners[slot] {
                     let method_def = &mut module.methods[method.index()];
                     if sequence == 0 {
                         method_def.return_parameter.constant = value;
@@ -775,10 +769,9 @@ fn read_constants(
                 }
             }
             T::Property => {
-                if target as usize > module.properties.len() {
-                    return Err(bad(format!("Constant row {rid}: property out of range")));
-                }
-                module.properties[target as usize - 1].constant = value;
+                let slot =
+                    checked_slot(target as usize, module.properties.len(), "Constant property")?;
+                module.properties[slot].constant = value;
             }
             _ => return Err(bad("HasConstant cell with unexpected tag".into())),
         }
@@ -801,16 +794,13 @@ fn read_marshal_specs(
         let (table, target) = decode_group(&coded::HAS_FIELD_MARSHAL, parent_cell)?;
         match table {
             T::Field => {
-                if target as usize > module.fields.len() {
-                    return Err(bad(format!("FieldMarshal row {rid}: field out of range")));
-                }
-                module.fields[target as usize - 1].marshal_info = Some(info);
+                let slot =
+                    checked_slot(target as usize, module.fields.len(), "FieldMarshal field")?;
+                module.fields[slot].marshal_info = Some(info);
             }
             T::Param => {
-                if target as usize > param_owners.len() {
-                    return Err(bad(format!("FieldMarshal row {rid}: param out of range")));
-                }
-                if let Some((method, sequence)) = param_owners[target as usize - 1] {
+                let slot = checked_slot(target as usize, param_owners.len(), "FieldMarshal param")?;
+                if let Some((method, sequence)) = param_owners[slot] {
                     let method_def = &mut module.methods[method.index()];
                     if sequence == 0 {
                         method_def.return_parameter.marshal_info = Some(info);
@@ -837,10 +827,8 @@ fn read_impl_maps(module: &mut Module, md: &MetadataReader) -> Result<()> {
         let forwarded_cell = md.column(T::ImplMap, rid, 1)?;
         let entry_point = cell_str(md, T::ImplMap, rid, 2)?;
         let scope = cell_u32(md, T::ImplMap, rid, 3)? as usize;
-        if scope < 1 || scope as usize > md.row_count(T::ModuleRef) as usize {
-            return Err(bad(format!("ImplMap row {rid}: ModuleRef scope out of range")));
-        }
-        let module_name = cell_str(md, T::ModuleRef, scope as u32, 0)?;
+        let scope = checked_slot(scope, md.row_count(T::ModuleRef) as usize, "ImplMap scope")?;
+        let module_name = cell_str(md, T::ModuleRef, scope as u32 + 1, 0)?;
 
         let (table, target) = decode_group(&coded::MEMBER_FORWARDED, forwarded_cell)?;
         if table != T::MethodDef {
@@ -848,10 +836,8 @@ fn read_impl_maps(module: &mut Module, md: &MetadataReader) -> Result<()> {
             // field model.
             continue;
         }
-        if target as usize > module.methods.len() {
-            return Err(bad(format!("ImplMap row {rid}: method out of range")));
-        }
-        module.methods[target as usize - 1].pinvoke =
+        let slot = checked_slot(target as usize, module.methods.len(), "ImplMap method")?;
+        module.methods[slot].pinvoke =
             Some(PInvokeInfo { attributes, entry_point, module: module_name });
     }
     Ok(())
@@ -907,16 +893,13 @@ fn read_decl_security(
         let (table, target) = decode_group(&coded::HAS_DECL_SECURITY, parent_cell)?;
         match table {
             T::TypeDef => {
-                if target as usize > module.types.len() {
-                    return Err(bad(format!("DeclSecurity row {rid}: type out of range")));
-                }
-                module.types[target as usize - 1].security_declarations.push(declaration);
+                let slot = checked_slot(target as usize, module.types.len(), "DeclSecurity type")?;
+                module.types[slot].security_declarations.push(declaration);
             }
             T::MethodDef => {
-                if target as usize > module.methods.len() {
-                    return Err(bad(format!("DeclSecurity row {rid}: method out of range")));
-                }
-                module.methods[target as usize - 1].security_declarations.push(declaration);
+                let slot =
+                    checked_slot(target as usize, module.methods.len(), "DeclSecurity method")?;
+                module.methods[slot].security_declarations.push(declaration);
             }
             T::Assembly => match ctx.assembly_row.as_mut() {
                 Some(row) => row.security_declarations.push(declaration),
@@ -943,10 +926,12 @@ fn attribute_ctor(ctx: &ReadContext, _md: &MetadataReader, ctor_cell: u64) -> Re
     let (table, rid) = decode_group(&coded::CUSTOM_ATTRIBUTE_TYPE, ctor_cell)?;
     match table {
         T::MethodDef => {
-            if rid as usize > ctx.method_defs.len() {
-                return Err(bad("custom attribute constructor method out of range".into()));
-            }
-            Ok(MethodRef::Def(ctx.method_defs[rid as usize - 1]))
+            let slot = checked_slot(
+                rid as usize,
+                ctx.method_defs.len(),
+                "custom attribute constructor method",
+            )?;
+            Ok(MethodRef::Def(ctx.method_defs[slot]))
         }
         T::MemberRef => match ctx.member_ref_row(rid) {
             Some(MemberRefRow::Method(external)) => Ok(MethodRef::External(external.clone())),
@@ -980,11 +965,7 @@ fn read_custom_attributes(
         let (table, target) = decode_group(&coded::HAS_CUSTOM_ATTRIBUTE, parent_cell)?;
         // Checked parent index; keeps every arm a one-liner.
         let idx = |len: usize| -> Result<usize> {
-            if target < 1 || target as usize > len {
-                Err(bad(format!("CustomAttribute row {rid}: parent out of range")))
-            } else {
-                Ok(target as usize - 1)
-            }
+            checked_slot(target as usize, len, "CustomAttribute parent")
         };
         match table {
             T::MethodDef => {
@@ -1000,10 +981,9 @@ fn read_custom_attributes(
                 module.types[i].custom_attributes.push(attribute);
             }
             T::Param => {
-                if target as usize > param_owners.len() {
-                    return Err(bad(format!("CustomAttribute row {rid}: param out of range")));
-                }
-                let Some((method, sequence)) = param_owners[target as usize - 1] else {
+                let slot =
+                    checked_slot(target as usize, param_owners.len(), "CustomAttribute param")?;
+                let Some((method, sequence)) = param_owners[slot] else {
                     continue;
                 };
                 let method_def = &mut module.methods[method.index()];
@@ -1119,18 +1099,28 @@ fn read_files_exported_types_resources(
         let (impl_table, impl_rid) = decode_group(&coded::IMPLEMENTATION, impl_cell)?;
         let implementation = match impl_table {
             T::File => {
-                if impl_rid as usize > module.file_rows.len() {
-                    return Err(bad(format!("ExportedType row {rid}: file out of range")));
-                }
-                ExportedImpl::File(impl_rid as usize - 1)
+                let slot =
+                    checked_slot(impl_rid as usize, module.file_rows.len(), "ExportedType file")?;
+                ExportedImpl::File(slot)
             }
             T::AssemblyRef => {
-                if impl_rid as usize > ctx.asm_refs.len() {
-                    return Err(bad(format!("ExportedType row {rid}: assembly ref out of range")));
-                }
-                ExportedImpl::AssemblyRef(impl_rid as usize - 1)
+                let slot = checked_slot(
+                    impl_rid as usize,
+                    ctx.asm_refs.len(),
+                    "ExportedType assembly ref",
+                )?;
+                ExportedImpl::AssemblyRef(slot)
             }
-            T::ExportedType => ExportedImpl::ExportedType(impl_rid),
+            T::ExportedType => {
+                // Nested exported types may reference later rows, so validate
+                // against the full table rather than the rows read so far.
+                checked_slot(
+                    impl_rid as usize,
+                    md.row_count(T::ExportedType) as usize,
+                    "ExportedType exported type",
+                )?;
+                ExportedImpl::ExportedType(impl_rid)
+            }
             _ => return Err(bad("Implementation cell with unexpected tag".into())),
         };
         module.exported_types.push(ExportedTypeRow {
@@ -1163,25 +1153,27 @@ fn read_files_exported_types_resources(
             let (impl_table, impl_rid) = decode_group(&coded::IMPLEMENTATION, impl_cell)?;
             match impl_table {
                 T::AssemblyRef => {
-                    if impl_rid as usize > ctx.asm_refs.len() {
-                        return Err(bad(format!(
-                            "ManifestResource row {rid}: assembly ref out of range"
-                        )));
-                    }
+                    let slot = checked_slot(
+                        impl_rid as usize,
+                        ctx.asm_refs.len(),
+                        "ManifestResource assembly ref",
+                    )?;
                     Resource::AssemblyLinked {
                         name,
                         attributes: flags,
-                        assembly: ctx.asm_refs[impl_rid as usize - 1].clone(),
+                        assembly: ctx.asm_refs[slot].clone(),
                     }
                 }
                 T::File => {
-                    if impl_rid as usize > module.file_rows.len() {
-                        return Err(bad(format!("ManifestResource row {rid}: file out of range")));
-                    }
+                    let slot = checked_slot(
+                        impl_rid as usize,
+                        module.file_rows.len(),
+                        "ManifestResource file",
+                    )?;
                     Resource::Linked {
                         name,
                         attributes: flags,
-                        file: module.file_rows[impl_rid as usize - 1].name.clone(),
+                        file: module.file_rows[slot].name.clone(),
                     }
                 }
                 _ => return Err(bad("Implementation cell with unexpected tag".into())),
@@ -1406,5 +1398,35 @@ mod tests {
                 "{file} has no assembly-level security declarations"
             );
         }
+    }
+
+    /// Regression guard: coded-index consumers must reject rid 0 instead of
+    /// computing `rid - 1` (usize underflow / out-of-bounds indexing).
+    #[test]
+    fn zero_rid_coded_parent_is_an_error_not_a_panic() {
+        use cecli_metadata::{encode_coded, MetadataBuilder};
+
+        let mut b = MetadataBuilder::new("v4.0.30319");
+        let mname = b.insert_string("<Module>");
+        let mvid = b.insert_guid(&[7u8; 16]);
+        b.add_row(T::Module, &[0, mname as u64, mvid as u64, 0, 0]).unwrap();
+
+        // One Field row; the arena stays empty to prove the rid<1 check
+        // fires before any bounds arithmetic.
+        let fname = b.insert_string("F");
+        let fsig = b.insert_blob(&[0x06, 0x08]); // FIELD + I4
+        b.add_row(T::Field, &[0u64, fname as u64, fsig as u64]).unwrap();
+
+        // Constant row whose HasConstant parent encodes Field rid 0.
+        let cell = encode_coded(&coded::HAS_CONSTANT, T::Field, 0).unwrap();
+        let cblob = b.insert_blob(&[0u8; 4]);
+        b.add_row(T::Constant, &[ElementType::I4 as u64, 0, cell, cblob as u64]).unwrap();
+
+        let bytes = b.finalize();
+        let md = MetadataReader::parse(&bytes).expect("synthetic root parses");
+        let mut module = Module::default();
+
+        let err = read_constants(&mut module, &md, &[]).expect_err("rid-0 parent must be rejected");
+        assert!(err.to_string().contains("out of range"), "unexpected error: {err}");
     }
 }

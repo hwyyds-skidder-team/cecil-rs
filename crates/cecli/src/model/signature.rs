@@ -43,11 +43,14 @@ pub trait SigContext {
     /// [`TypeDesc::Def`] or [`TypeDesc::External`]. `value_type` mirrors the
     /// marker byte that preceded the cell.
     ///
+    /// `depth` is the reader's current nesting level; contexts that recurse
+    /// into other blobs (e.g. TypeSpec rows) must thread it through so the
+    /// per-image budget stays global rather than per-blob.
+    ///
     /// The default implementation always fails; contexts backed by real metadata
     /// token maps override it.
-    fn tdor_type(&self, value_type: bool, cell: u32) -> Result<TypeDesc> {
-        let _ = value_type;
-        let _ = cell;
+    fn tdor_type(&self, value_type: bool, cell: u32, depth: u32) -> Result<TypeDesc> {
+        let _ = (value_type, cell, depth);
         Err(Error::unsupported("this SigContext cannot decode TypeDefOrRef cells"))
     }
 }
@@ -144,11 +147,21 @@ fn bad_element(code: u8) -> Error {
 // Reading
 // ---------------------------------------------------------------------------
 
+/// Maximum total nesting depth for type elements and embedded method
+/// signatures while decoding. The budget is global: contexts that hop into
+/// other blobs (TypeSpec rows) thread their current depth both into
+/// [`SigContext::tdor_type`] and into the seeded re-parse, so hostile images
+/// built from many shallow blobs cannot multiply the frame count.
+const MAX_SIG_DEPTH: u32 = 64;
+
 /// Reads one type element at the reader's current position.
 ///
 /// `ELEMENT_TYPE_VOID` is tolerated anywhere (C++/CLI mixed images; Cecil does
 /// the same), so no return-slot flag is needed.
-fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> {
+fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Result<TypeDesc> {
+    if depth > MAX_SIG_DEPTH {
+        return Err(Error::bad_image("signature nesting deeper than 64 levels"));
+    }
     let et = r.u8()?;
     match et {
         // ELEMENT_TYPE_VOID outside return slots appears in C++/CLI mixed
@@ -157,12 +170,12 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> 
         code if primitive_name(code).is_some() => {
             Ok(TypeDesc::Internal(primitive_name(code).unwrap().into()))
         }
-        ET_VALUE_TYPE | ET_CLASS => ctx.tdor_type(et == ET_VALUE_TYPE, r.compressed_u32()?),
-        ET_PTR => Ok(TypeDesc::Ptr(Box::new(read_type_elem(r, ctx)?))),
-        ET_BYREF => Ok(TypeDesc::ByRef(Box::new(read_type_elem(r, ctx)?))),
-        ET_PINNED => Ok(TypeDesc::Pinned(Box::new(read_type_elem(r, ctx)?))),
-        ET_SZ_ARRAY => Ok(TypeDesc::SzArray(Box::new(read_type_elem(r, ctx)?))),
-        ET_ARRAY => read_array_elem(r, ctx),
+        ET_VALUE_TYPE | ET_CLASS => ctx.tdor_type(et == ET_VALUE_TYPE, r.compressed_u32()?, depth),
+        ET_PTR => Ok(TypeDesc::Ptr(Box::new(read_type_elem(r, ctx, depth + 1)?))),
+        ET_BYREF => Ok(TypeDesc::ByRef(Box::new(read_type_elem(r, ctx, depth + 1)?))),
+        ET_PINNED => Ok(TypeDesc::Pinned(Box::new(read_type_elem(r, ctx, depth + 1)?))),
+        ET_SZ_ARRAY => Ok(TypeDesc::SzArray(Box::new(read_type_elem(r, ctx, depth + 1)?))),
+        ET_ARRAY => read_array_elem(r, ctx, depth + 1),
         ET_GENERIC_INST => {
             let marker = r.u8()?;
             if marker != ET_VALUE_TYPE && marker != ET_CLASS {
@@ -170,23 +183,24 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> 
                     "GENERICINST marker 0x{marker:02X} is neither CLASS nor VALUETYPE"
                 )));
             }
-            let definition = Box::new(ctx.tdor_type(marker == ET_VALUE_TYPE, r.compressed_u32()?)?);
+            let definition =
+                Box::new(ctx.tdor_type(marker == ET_VALUE_TYPE, r.compressed_u32()?, depth)?);
             let arity = r.compressed_u32()?;
             let mut arguments = Vec::new();
             for _ in 0..arity {
-                arguments.push(read_type_elem(r, ctx)?);
+                arguments.push(read_type_elem(r, ctx, depth + 1)?);
             }
             Ok(TypeDesc::GenericInstance { definition, arguments })
         }
         ET_VAR => Ok(TypeDesc::Var(compressed_index(r)?)),
         ET_MVAR => Ok(TypeDesc::MVar(compressed_index(r)?)),
         ET_FNPTR => {
-            let sig = get_method_signature(r, ctx)?;
+            let sig = get_method_signature(r, ctx, depth + 1)?;
             Ok(TypeDesc::FnPtr(Box::new(sig)))
         }
         ET_CMOD_REQD | ET_CMOD_OPT => {
-            let modifier = Box::new(ctx.tdor_type(false, r.compressed_u32()?)?);
-            let unmodified = Box::new(read_type_elem(r, ctx)?);
+            let modifier = Box::new(ctx.tdor_type(false, r.compressed_u32()?, depth)?);
+            let unmodified = Box::new(read_type_elem(r, ctx, depth + 1)?);
             Ok(TypeDesc::CMod { required: et == ET_CMOD_REQD, modifier, unmodified })
         }
         ET_SENTINEL => Ok(TypeDesc::Sentinel),
@@ -210,8 +224,8 @@ fn compressed_index(r: &mut ByteReader) -> Result<u16> {
 }
 
 /// Multi-dimensional array element: rank, sizes count + sizes, lower-bound count + bounds.
-fn read_array_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc> {
-    let element = Box::new(read_type_elem(r, ctx)?);
+fn read_array_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Result<TypeDesc> {
+    let element = Box::new(read_type_elem(r, ctx, depth + 1)?);
     let rank = r.compressed_u32()?;
     let num_sizes = r.compressed_u32()?;
     let mut sizes = Vec::new();
@@ -235,8 +249,13 @@ fn read_array_elem(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<TypeDesc>
 }
 
 /// Reads a method signature body starting at its convention byte
-/// (port of `SignatureReader.ReadMethodSignature`).
-fn get_method_signature(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<MethodSignature> {
+/// (port of `SignatureReader.ReadMethodSignature`). Depth is inherited from
+/// the caller; `read_type_elem`'s guard bounds both directions.
+fn get_method_signature(
+    r: &mut ByteReader,
+    ctx: &dyn SigContext,
+    depth: u32,
+) -> Result<MethodSignature> {
     let raw = r.u8()?;
     let has_this = raw & CALL_CONVENTION_HAS_THIS != 0;
     let explicit_this = raw & CALL_CONVENTION_EXPLICIT_THIS != 0;
@@ -263,7 +282,7 @@ fn get_method_signature(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<Meth
     };
 
     let param_count = r.compressed_u32()?;
-    let return_type = read_type_elem(r, ctx)?;
+    let return_type = read_type_elem(r, ctx, depth + 1)?;
 
     let mut parameters = Vec::new();
     let mut vararg: Option<usize> = None;
@@ -281,7 +300,7 @@ fn get_method_signature(r: &mut ByteReader, ctx: &dyn SigContext) -> Result<Meth
             r.seek(pos + 1)?;
             vararg = Some(parameters.len());
         }
-        parameters.push(read_type_elem(r, ctx)?);
+        parameters.push(read_type_elem(r, ctx, depth + 1)?);
     }
 
     let vararg_start = vararg.unwrap_or(parameters.len());
@@ -454,14 +473,14 @@ fn put_method_signature(
 /// Parses a full method reference/definition signature (ECMA-335 II §23.2.1/23.2.2).
 pub fn parse_method_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<MethodSignature> {
     let mut r = ByteReader::new(blob);
-    get_method_signature(&mut r, ctx)
+    get_method_signature(&mut r, ctx, 0)
 }
 
 /// Parses a field signature: `0x06` followed by the field type.
 pub fn parse_field_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<FieldSignature> {
     let mut r = ByteReader::new(blob);
     expect_prolog(&mut r, ET_FIELD, "field")?;
-    Ok(FieldSignature(read_type_elem(&mut r, ctx)?))
+    Ok(FieldSignature(read_type_elem(&mut r, ctx, 0)?))
 }
 
 /// Parses a property signature (ECMA-335 II §23.2.5): `0x08 [| HAS_THIS]`,
@@ -474,10 +493,10 @@ pub fn parse_property_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<Pro
         return Err(Error::bad_image(format!("expected PROPERTY prolog 0x08, found 0x{raw:02X}")));
     }
     let param_count = r.compressed_u32()?;
-    let property_type = read_type_elem(&mut r, ctx)?;
+    let property_type = read_type_elem(&mut r, ctx, 0)?;
     let mut parameters = Vec::new();
     for _ in 0..param_count {
-        parameters.push(read_type_elem(&mut r, ctx)?);
+        parameters.push(read_type_elem(&mut r, ctx, 0)?);
     }
     Ok(PropertySignature { has_this, parameters, property_type })
 }
@@ -502,7 +521,7 @@ pub fn parse_local_var_sig(blob: &[u8], ctx: &dyn SigContext) -> Result<Vec<Loca
         vars.push(LocalVariable {
             index: u16::try_from(index)
                 .map_err(|_| Error::bad_image(format!("local slot {index} exceeds u16")))?,
-            ty: read_type_elem(&mut r, ctx)?,
+            ty: read_type_elem(&mut r, ctx, 0)?,
             pinned,
         });
     }
@@ -512,12 +531,17 @@ pub fn parse_local_var_sig(blob: &[u8], ctx: &dyn SigContext) -> Result<Vec<Loca
 /// Parses one type element starting at `pos`; returns the descriptor and the
 /// number of bytes consumed. Reused by constant/attribute decoding paths.
 ///
+/// `seed` is the starting nesting level for the depth budget; callers that
+/// re-enter parsing from an already-nested context (TypeSpec row decoding)
+/// pass their own depth so the budget is shared across blob hops.
+///
 /// `allow_void` is accepted for call-site compatibility but is advisory only:
 /// `ELEMENT_TYPE_VOID` is tolerated in any position, matching Cecil.
 pub fn parse_type_element(
     blob: &[u8],
     pos: usize,
     ctx: &dyn SigContext,
+    seed: u32,
     _allow_void: bool,
 ) -> Result<(TypeDesc, usize)> {
     if pos > blob.len() {
@@ -527,7 +551,7 @@ pub fn parse_type_element(
         )));
     }
     let mut r = ByteReader::at(blob, pos);
-    let ty = read_type_elem(&mut r, ctx)?;
+    let ty = read_type_elem(&mut r, ctx, seed)?;
     Ok((ty, r.position() - pos))
 }
 
@@ -782,7 +806,7 @@ mod tests {
             })
         }
 
-        fn tdor_type(&self, value_type: bool, cell: u32) -> Result<TypeDesc> {
+        fn tdor_type(&self, value_type: bool, cell: u32, _depth: u32) -> Result<TypeDesc> {
             if self.vt_cells.get(&cell) != Some(&value_type) {
                 return Err(Error::bad_image(format!(
                     "cell {cell}#{value_type} contradicts context classification"
@@ -958,13 +982,13 @@ mod tests {
     #[test]
     fn parse_type_element_reports_consumed_bytes() {
         let blob = [ElementType::SzArray as u8, ElementType::I4 as u8];
-        let (ty, used) = parse_type_element(&blob, 0, &TestCtx::new(), false).expect("parse");
+        let (ty, used) = parse_type_element(&blob, 0, &TestCtx::new(), 0, false).expect("parse");
         assert_eq!(ty, TypeDesc::SzArray(Box::new(i32t())));
         assert_eq!(used, 2);
 
         // Offset start works too.
         let blob = [0xFF, ElementType::MVar as u8, 0x03];
-        let (ty, used) = parse_type_element(&blob, 1, &TestCtx::new(), false).expect("parse");
+        let (ty, used) = parse_type_element(&blob, 1, &TestCtx::new(), 0, false).expect("parse");
         assert_eq!(ty, TypeDesc::MVar(3));
         assert_eq!(used, 2);
     }
@@ -979,7 +1003,7 @@ mod tests {
         };
         write_type_element(&ty, &mut w, &TestCtx::new()).unwrap();
         let blob = w.into_vec();
-        let (parsed, _) = parse_type_element(&blob, 0, &TestCtx::new(), false).unwrap();
+        let (parsed, _) = parse_type_element(&blob, 0, &TestCtx::new(), 0, false).unwrap();
         assert_eq!(parsed, ty);
     }
 
@@ -995,7 +1019,7 @@ mod tests {
         let blob = w.into_vec();
         assert_eq!(blob[0], ET_GENERIC_INST);
         assert_eq!(blob[1], ET_VALUE_TYPE, "value-type definition must use VALUETYPE marker");
-        let (parsed, _) = parse_type_element(&blob, 0, &TestCtx::new(), false).unwrap();
+        let (parsed, _) = parse_type_element(&blob, 0, &TestCtx::new(), 0, false).unwrap();
         assert_eq!(parsed, ty);
     }
 
@@ -1119,7 +1143,7 @@ mod tests {
         let ctx = ();
         assert!(ctx.tdor_cell(&TypeDesc::Def(TypeId(0))).is_err());
         assert!(ctx.is_value_type(&TypeDesc::Def(TypeId(0))).is_err());
-        assert!(ctx.tdor_type(true, 4).is_err());
+        assert!(ctx.tdor_type(true, 4, 0).is_err());
     }
 
     #[test]
@@ -1148,5 +1172,15 @@ mod tests {
             vararg_start: 0,
         };
         assert!(write_method_signature(&sig, &TestCtx::new()).is_err());
+    }
+
+    /// Regression guard: hostile signatures built from repeated composite
+    /// prefixes must fail with an error, not exhaust the stack (MAX_SIG_DEPTH).
+    #[test]
+    fn deep_composite_nesting_errors_instead_of_overflowing() {
+        let mut blob = vec![0x06u8]; // FIELD prolog
+        blob.extend(std::iter::repeat_n(ElementType::SzArray as u8, MAX_SIG_DEPTH as usize + 1));
+        blob.push(ElementType::I4 as u8);
+        assert!(parse_field_signature(&blob, &TestCtx::new()).is_err());
     }
 }

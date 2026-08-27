@@ -265,6 +265,9 @@ impl PortablePdbBuilder {
     /// `kind` is accepted for parity with the Cecil scope model; the
     /// Cecil-compatible six-column `LocalScope` layout carries no Kind
     /// column, so readers always observe `0`.
+    // Eight parameters mirror Cecil's Scope aggregate (method, import scope,
+    // variables, constants, kind, range) and have no natural grouping object.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_local_scope(
         &mut self,
         method: Token,
