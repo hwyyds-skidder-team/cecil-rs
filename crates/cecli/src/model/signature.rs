@@ -53,6 +53,26 @@ pub trait SigContext {
         let _ = (value_type, cell, depth);
         Err(Error::unsupported("this SigContext cannot decode TypeDefOrRef cells"))
     }
+
+    /// Hoists a composite child element into its own encodable unit and
+    /// returns the `TypeDefOrRef` cell that refers to it. Called for inline
+    /// child positions (array/pointer elements, generic arguments, cmod
+    /// targets) when the context supports subtree interning.
+    ///
+    /// This is the write-side counterpart of Arc sharing: a shared subtree
+    /// becomes one `TypeSpec` row referenced by `CLASS + cell` from every
+    /// parent, so DAG-shaped type graphs stay linear in write time AND
+    /// output size (inline expansion would re-emit the subtree per
+    /// reference). The default (`None`) keeps elements inline — exact
+    /// legacy formatting — for contexts without a token map.
+    ///
+    /// The wire stays legal either way: a `CLASS`/`VALUETYPE` element with a
+    /// TypeSpec cell is a valid type element anywhere a bare one is (the
+    /// reader resolves it through the same `TypeDefOrRef` path).
+    fn hoist_element(&self, e: &std::sync::Arc<TypeDesc>) -> Result<Option<u32>> {
+        let _ = e;
+        Ok(None)
+    }
 }
 
 impl SigContext for () {
@@ -342,12 +362,12 @@ pub fn write_type_element(ty: &TypeDesc, w: &mut ByteWriter, ctx: &dyn SigContex
             w.compressed_u32(ctx.tdor_cell(definition)?);
             w.compressed_u32(arguments.len() as u32);
             for arg in arguments {
-                write_type_element(arg, w, ctx)?;
+                put_child_elem(w, arg, ctx)?;
             }
         }
         TypeDesc::SzArray(e) => {
             w.u8(ElementType::SzArray as u8);
-            write_type_element(e, w, ctx)?;
+            put_child_elem(w, e, ctx)?;
         }
         TypeDesc::Array { element, sizes, lobounds } => {
             // Rank is not stored separately in the model; it is the larger of the
@@ -357,7 +377,7 @@ pub fn write_type_element(ty: &TypeDesc, w: &mut ByteWriter, ctx: &dyn SigContex
                 return Err(Error::argument("array type carries no rank information"));
             }
             w.u8(ElementType::Array as u8);
-            write_type_element(element, w, ctx)?;
+            put_child_elem(w, element, ctx)?;
             w.compressed_u32(rank as u32);
             w.compressed_u32(sizes.len() as u32);
             for &s in sizes {
@@ -373,15 +393,15 @@ pub fn write_type_element(ty: &TypeDesc, w: &mut ByteWriter, ctx: &dyn SigContex
         }
         TypeDesc::Ptr(e) => {
             w.u8(ElementType::Ptr as u8);
-            write_type_element(e, w, ctx)?;
+            put_child_elem(w, e, ctx)?;
         }
         TypeDesc::ByRef(e) => {
             w.u8(ElementType::ByRef as u8);
-            write_type_element(e, w, ctx)?;
+            put_child_elem(w, e, ctx)?;
         }
         TypeDesc::Pinned(e) => {
             w.u8(ElementType::Pinned as u8);
-            write_type_element(e, w, ctx)?;
+            put_child_elem(w, e, ctx)?;
         }
         TypeDesc::Var(i) => {
             w.u8(ET_VAR);
@@ -398,12 +418,30 @@ pub fn write_type_element(ty: &TypeDesc, w: &mut ByteWriter, ctx: &dyn SigContex
         TypeDesc::CMod { required, modifier, unmodified } => {
             w.u8(if *required { ET_CMOD_REQD } else { ET_CMOD_OPT });
             w.compressed_u32(ctx.tdor_cell(modifier)?);
-            write_type_element(unmodified, w, ctx)?;
+            put_child_elem(w, unmodified, ctx)?;
         }
         TypeDesc::Sentinel => w.u8(ET_SENTINEL),
         TypeDesc::TypedByRef => w.u8(ElementType::TypedByRef as u8),
     }
     Ok(())
+}
+
+/// Writes one inline child element, hoisting it to its own encodable unit
+/// when the context supports it (token-map backed writers intern the subtree
+/// as a `TypeSpec` row and reference it by cell; unit contexts keep the
+/// element inline).
+fn put_child_elem(
+    w: &mut ByteWriter,
+    e: &std::sync::Arc<TypeDesc>,
+    ctx: &dyn SigContext,
+) -> Result<()> {
+    if let Some(cell) = ctx.hoist_element(e)? {
+        w.u8(ET_CLASS);
+        w.compressed_u32(cell);
+        Ok(())
+    } else {
+        write_type_element(e, w, ctx)
+    }
 }
 
 /// Writes the `CLASS|VALUETYPE + cell` pair for a definition/reference type.

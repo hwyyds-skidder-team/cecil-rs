@@ -527,11 +527,10 @@ impl ReadContext {
     /// across blob hops instead of resetting per hop. A cycle guard rejects
     /// rows that (transitively) reference themselves.
     ///
-    /// Known limitation: the WRITER still walks shared trees in expanded form
-    /// (`write_type_element` recurses per reference), so writing a hostile
-    /// doubling DAG costs time proportional to its expanded node count even
-    /// though reading it is linear. A subtree→row cache in the token map
-    /// would close that; out of scope for now.
+    /// The writer mirrors this linearity: `TokenMap`'s per-allocation
+    /// encoding cache (`SigContext::cached_element` / `remember_element`)
+    /// encodes each shared `Arc` subtree once, so DAG-shaped graphs stay
+    /// linear in both directions.
     fn type_spec_at(&self, md: &MetadataReader, rid: u32, depth: u32) -> Result<TypeDesc> {
         if rid == 0 || rid > md.row_count(TableIndex::TypeSpec) {
             return Err(Error::argument(format!("TypeSpec rid {rid} out of range")));

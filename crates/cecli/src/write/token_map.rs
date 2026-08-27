@@ -43,6 +43,7 @@
 //!   the writer.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use cecli_core::flags::TypeAttributes;
 use cecli_core::io::ByteWriter;
@@ -176,6 +177,35 @@ struct State {
 
     standalone_ids: BTreeMap<Vec<u8>, u32>,
     ssigs: Vec<Vec<u8>>,
+
+    /// Fast path for subtree hoisting: `Arc` allocation -> interned rid.
+    /// Without it the second reference to a shared subtree would re-encode
+    /// the entire subtree just to hit the blob-bytes dedup inside
+    /// `intern_type_spec` — and that re-encode recursively re-hoists, which
+    /// is exponential on doubling DAGs. The value pins the `Arc` so the
+    /// pointer key stays valid. Pure accelerator: blob dedup remains the
+    /// correctness-level identity for structurally equal distinct
+    /// allocations.
+    hoist_ids: std::collections::HashMap<usize, (std::sync::Arc<TypeDesc>, u32)>,
+}
+
+/// Whether a child element is worth hoisting to its own `TypeSpec` row.
+/// Composite shapes benefit (their subtree may be shared or large); leaves
+/// would add a row per reference for nothing. `FnPtr` stays inline too —
+/// its payload is a method signature, not a type subtree, and hoisting
+/// would change calli/local-sig blob shapes that the SAS pass-through
+/// compares by bytes.
+fn is_hoistable(e: &TypeDesc) -> bool {
+    matches!(
+        e,
+        TypeDesc::SzArray(_)
+            | TypeDesc::Array { .. }
+            | TypeDesc::Ptr(_)
+            | TypeDesc::ByRef(_)
+            | TypeDesc::Pinned(_)
+            | TypeDesc::GenericInstance { .. }
+            | TypeDesc::CMod { .. }
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +362,13 @@ impl<'b> TokenMap<'b> {
     }
 
     /// Interns a composite type as a `TypeSpec` row and returns its rid.
+    ///
+    /// Children of composite shapes are hoisted recursively (via
+    /// [`SigContext::hoist_element`]), so this re-enters itself down the
+    /// tree: recursion depth equals tree depth (read trees are depth-bounded
+    /// by the signature decoder; user-built deep trees recurse the same way
+    /// inline encoding always has), and the row count is bounded by the
+    /// number of distinct composite subtrees.
     fn intern_type_spec(&self, ty: &TypeDesc, m: &Module) -> Result<u32> {
         let is_value = match ty {
             TypeDesc::GenericInstance { definition, .. } => self.is_value_type(definition, m)?,
@@ -350,6 +387,29 @@ impl<'b> TokenMap<'b> {
         st.tspecs.push((ty.clone(), is_value, blob.clone()));
         st.type_spec_ids.insert(blob, rid);
         Ok(rid)
+    }
+
+    /// Hoists a composite child element to its own `TypeSpec` row so shared
+    /// subtrees encode once and the parent references them by cell (the
+    /// write-side counterpart of Arc sharing; see
+    /// [`SigContext::hoist_element`]). Leaf shapes stay inline — interning
+    /// those would add rows without saving any expansion.
+    ///
+    /// The pointer cache is load-bearing, not just an accelerator: blob
+    /// dedup checks happen after a full encode, so without it the second
+    /// reference to a shared subtree re-encodes it (recursively re-hoisting
+    /// its children), which is exponential on DAG-shaped trees.
+    fn hoist_element(&self, e: &Arc<TypeDesc>, m: &Module) -> Result<Option<u32>> {
+        if !is_hoistable(e) {
+            return Ok(None);
+        }
+        let key = Arc::as_ptr(e) as usize;
+        if let Some(&(_, rid)) = self.state.borrow().hoist_ids.get(&key) {
+            return Ok(Some((rid << 2) | 2)); // TypeSpec tag in TypeDefOrRef
+        }
+        let rid = self.intern_type_spec(e, m)?;
+        self.state.borrow_mut().hoist_ids.insert(key, (e.clone(), rid));
+        Ok(Some((rid << 2) | 2))
     }
 
     // -- members -----------------------------------------------------------
@@ -598,6 +658,10 @@ impl<'m, 'x, 'b> SigContext for SigEncoder<'m, 'x, 'b> {
     fn is_value_type(&self, ty: &TypeDesc) -> Result<bool> {
         self.tm.is_value_type(ty, self.m)
     }
+
+    fn hoist_element(&self, e: &Arc<TypeDesc>) -> Result<Option<u32>> {
+        self.tm.hoist_element(e, self.m)
+    }
 }
 
 /// Private bridge used inside allocation paths where a fresh shared view is
@@ -614,6 +678,10 @@ impl<'m, 'x, 't> SigContext for SigBridge<'m, 'x, 't> {
 
     fn is_value_type(&self, ty: &TypeDesc) -> Result<bool> {
         self.tm.is_value_type(ty, self.m)
+    }
+
+    fn hoist_element(&self, e: &Arc<TypeDesc>) -> Result<Option<u32>> {
+        self.tm.hoist_element(e, self.m)
     }
 }
 
@@ -1070,5 +1138,86 @@ mod tests {
         assert!(!tm.is_value_type(&ext("System", "String"), &m).unwrap());
         assert!(!tm.is_value_type(&ext("System", "ValueType"), &m).unwrap());
         assert!(!tm.is_value_type(&ext("Example", "MyStruct"), &m).unwrap());
+    }
+
+    /// Builds a doubling shared DAG: level K wraps level K-1 twice as
+    /// generic arguments, with the two argument Arcs sharing the previous
+    /// level's children (the shape the reader produces for TypeSpec rows
+    /// that reference one another). Fully expanded this is 2^levels nodes;
+    /// the per-allocation encoding cache keeps write time linear.
+    fn build_dag_tree(levels: u32) -> TypeDesc {
+        let mut t = ext("System", "Int32");
+        for _ in 0..levels {
+            let shared = Arc::new(t);
+            t = TypeDesc::GenericInstance {
+                definition: Arc::new(ext("System.Collections", "Tuple")),
+                arguments: vec![shared.clone(), shared],
+            };
+        }
+        t
+    }
+
+    #[test]
+    fn write_dag_encodes_linearly_via_elem_cache() {
+        let m = module_with_refs();
+        let mut b = MetadataBuilder::new("v4.0.30319");
+        let tm = TokenMap::new(&mut b);
+
+        // ~2^30 expanded nodes without hoisting (would effectively hang);
+        // with subtree hoisting every level becomes one TypeSpec row and the
+        // shared argument hits the pointer cache without re-encoding.
+        let tree = build_dag_tree(30);
+        let cell = tm.tdor_cell(&tree, &m).expect("30-level DAG encodes");
+        let (_, pending) = tm.into_parts();
+        // One row per level: each doubling level is one distinct composite
+        // subtree, referenced by cell from its parent.
+        assert_eq!(pending.type_specs.len(), 30);
+        assert_eq!(cell >> 2, 30, "outermost level interns last (rid 30)");
+    }
+
+    /// The cache must be invisible on the wire: encoding the same shared DAG
+    /// through two fresh token maps (each starting with an empty hoist
+    /// cache) yields identical row sets and blobs — hoisting is
+    /// deterministic.
+    #[test]
+    fn elem_cache_preserves_bytes() {
+        let m = module_with_refs();
+        let tree = build_dag_tree(3);
+
+        let mut b = MetadataBuilder::new("v4.0.30319");
+        let tm = TokenMap::new(&mut b);
+        let cell = tm.tdor_cell(&tree, &m).unwrap();
+        let (_, pending) = tm.into_parts();
+
+        let mut b2 = MetadataBuilder::new("v4.0.30319");
+        let tm2 = TokenMap::new(&mut b2);
+        let cell2 = tm2.tdor_cell(&tree, &m).unwrap();
+        let (_, pending2) = tm2.into_parts();
+
+        // Blob indexes are assigned in first-encounter order during drain,
+        // so row-for-row equality implies identical wire bytes.
+        assert_eq!(
+            pending.type_specs, pending2.type_specs,
+            "two fresh maps produce identical rows"
+        );
+        assert_eq!(cell, cell2);
+    }
+
+    /// Repeated interning of the same shared tree must hit the pointer
+    /// cache rather than re-walking the expanded view, and must still
+    /// deduplicate to one row per distinct composite subtree.
+    #[test]
+    fn repeated_intern_of_shared_tree_dedups() {
+        let m = module_with_refs();
+        let mut b = MetadataBuilder::new("v4.0.30319");
+        let tm = TokenMap::new(&mut b);
+
+        let tree = build_dag_tree(10);
+        let c1 = tm.tdor_cell(&tree, &m).unwrap();
+        let c2 = tm.tdor_cell(&tree, &m).unwrap();
+        assert_eq!(c1, c2, "same tree dedups to one TypeSpec row");
+        let (_, pending) = tm.into_parts();
+        // 10 rows: one per doubling level; re-interning the root adds none.
+        assert_eq!(pending.type_specs.len(), 10);
     }
 }
