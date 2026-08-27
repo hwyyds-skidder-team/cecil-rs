@@ -455,13 +455,15 @@ mod tests {
     fn env_var_splits_on_platform_delimiter() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Semicolon-separated absolute paths (plus empty entries to skip).
+        // Platform-delimiter-separated absolute paths (plus an empty entry to
+        // skip): ';' on Windows, ':' elsewhere — matching split_paths.
         let var = format!("CECLI_TEST_DIRS_{}", next_unique_tag());
         let d1 = make_temp_dir(&next_unique_tag());
         let d2 = make_temp_dir(&next_unique_tag());
         std::fs::write(d1.join("split.dll"), b"d1").expect("write d1");
         std::fs::write(d2.join("split.dll"), b"d2").expect("write d2");
-        std::env::set_var(&var, format!("{};;{}", d1.display(), d2.display()));
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        std::env::set_var(&var, format!("{}{sep}{sep}{}", d1.display(), d2.display()));
 
         let mut resolver = DefaultAssemblyResolver::new();
         resolver.add_search_directory_from_env_var(&var);
