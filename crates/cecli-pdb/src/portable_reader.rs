@@ -23,9 +23,10 @@ use cecli_metadata::{MetadataReader, PdbHeap};
 use crate::document::Document;
 
 use TableIndex::{
-    Document as TDocument, LocalConstant as TLocalConstant, LocalScope as TLocalScope,
-    LocalVariable as TLocalVariable, MethodDebugInformation as TMethodDebugInformation,
-    MethodDef as TMethodDef, StateMachineMethod as TStateMachineMethod,
+    CustomDebugInformation as T, Document as TDocument, LocalConstant as TLocalConstant,
+    LocalScope as TLocalScope, LocalVariable as TLocalVariable,
+    MethodDebugInformation as TMethodDebugInformation, MethodDef as TMethodDef,
+    StateMachineMethod as TStateMachineMethod,
 };
 
 /// Source line recorded for compiler-generated ("hidden") sequence points.
@@ -56,6 +57,19 @@ impl SequencePoint {
     pub fn is_hidden(&self) -> bool {
         self.start_line == HIDDEN_LINE && self.start_line == self.end_line
     }
+}
+
+/// One `CustomDebugInformation` row: the parent token, the kind GUID, and
+/// the raw value blob (verbatim `#Blob` payload).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomDebugInfo {
+    /// Owning entity (Module/MethodDef/... — whatever participates in the
+    /// `HasCustomDebugInformation` coded group).
+    pub parent: Token,
+    /// Well-known kind GUID (SourceLink, embedded source, ...).
+    pub kind: [u8; 16],
+    /// Raw payload blob.
+    pub value: Vec<u8>,
 }
 
 /// One `LocalScope` table row: an IL range owning variables and constants.
@@ -345,6 +359,32 @@ impl<'a> PortablePdbReader<'a> {
             });
         }
         Ok(scopes)
+    }
+
+    /// Reads every `CustomDebugInformation` row, in table order, as
+    /// `(parent token, kind GUID, raw value blob)`. The value bytes are the
+    /// verbatim `#Blob` payload — Source Link JSON, embedded source,
+    /// async/state-machine hints all come back untouched.
+    pub fn custom_debug_informations(&self) -> Result<Vec<CustomDebugInfo>> {
+        let mut out = Vec::new();
+        let count = self.md.row_count(T);
+        for rid in 1..=count {
+            let cells = self.md.row(T, rid)?;
+            let (table, rid) = cecli_metadata::decode_coded(
+                &cecli_core::token::coded::HAS_CUSTOM_DEBUG_INFORMATION,
+                cells[0],
+            )
+            .ok_or_else(|| {
+                Error::bad_image(format!(
+                    "CustomDebugInformation row {rid}: nil parent cell {:#x}",
+                    cells[0]
+                ))
+            })?;
+            let kind = self.md.heaps().guid.get(cells[1] as u32)?;
+            let value = self.md.heaps().blob.get(cells[2] as u32)?.to_vec();
+            out.push(CustomDebugInfo { parent: Token::new(table, rid), kind, value });
+        }
+        Ok(out)
     }
 
     /// List-range resolution shared with Cecil's `ReadListRange`: a row's

@@ -128,6 +128,23 @@ pub struct ModuleDebugInfo {
     pub points: BTreeMap<u32, Vec<(u32, Vec<SequencePoint>)>>,
     /// Local scopes per method rid, in table order.
     pub scopes: BTreeMap<u32, Vec<LocalScope>>,
+    /// `CustomDebugInformation` rows (Source Link, embedded source,
+    /// async/state-machine hints), in table order. Values round-trip as raw
+    /// blobs (Cecil `Binary` semantics).
+    pub custom_debug_info: Vec<CustomDebugInformation>,
+}
+
+/// One `CustomDebugInformation` row: the owning entity's metadata token,
+/// the well-known kind GUID, and the raw value blob.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomDebugInformation {
+    /// Owning entity (Module/MethodDef/TypeDef/Field/Property/Event/Param/
+    /// LocalScope participate in the `HasCustomDebugInformation` group).
+    pub parent: cecli_core::Token,
+    /// Kind GUID (e.g. SourceLink `CC110556-A091-4D38-9F8C-6ABDDE2DB5D6`).
+    pub kind: [u8; 16],
+    /// Raw payload blob, verbatim.
+    pub value: Vec<u8>,
 }
 
 /// A manifest resource.

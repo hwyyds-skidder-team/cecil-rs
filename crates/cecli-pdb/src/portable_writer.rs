@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 
 use cecli_core::io::ByteWriter;
+use cecli_core::token::coded;
 use cecli_core::token::{TableIndex, Token};
 use cecli_core::{Error, Result};
 use cecli_metadata::MetadataBuilder;
@@ -82,6 +83,17 @@ struct LocalConstantRow {
     signature_blob: u32,
 }
 
+/// One buffered `CustomDebugInformation` row.
+#[derive(Debug, Clone, Copy)]
+struct CustomDebugInformationRow {
+    /// Encoded `HasCustomDebugInformation` cell of the parent.
+    parent_cell: u32,
+    /// `#GUID` index of the kind GUID.
+    kind_guid: u32,
+    /// `#Blob` index of the raw value.
+    value_blob: u32,
+}
+
 /// One buffered `LocalScope` row.
 #[derive(Debug, Clone, Copy)]
 struct LocalScopeRow {
@@ -109,6 +121,8 @@ pub struct PortablePdbBuilder {
     variable_rows: Vec<LocalVariableRow>,
     constant_rows: Vec<LocalConstantRow>,
     scope_rows: Vec<LocalScopeRow>,
+    /// Buffered `CustomDebugInformation` rows, in `add` order.
+    cdi_rows: Vec<CustomDebugInformationRow>,
     /// `MethodDef` rid -> debug-information slot.
     method_debug: HashMap<u32, MethodDebugEntry>,
     entry_point: Token,
@@ -140,6 +154,7 @@ impl PortablePdbBuilder {
             variable_rows: Vec::new(),
             constant_rows: Vec::new(),
             scope_rows: Vec::new(),
+            cdi_rows: Vec::new(),
             method_debug: HashMap::new(),
             entry_point: Token::NIL,
             pdb_id: [0; 20],
@@ -331,6 +346,32 @@ impl PortablePdbBuilder {
         self.module_guid = Some(guid);
     }
 
+    /// Adds one `CustomDebugInformation` row (Source Link, embedded source,
+    /// async/state-machine hints, ...): `parent` names the owning entity by
+    /// metadata token (Module/MethodDef/TypeDef/Field/Property/Event/Param/
+    /// LocalScope all participate in the `HasCustomDebugInformation` coded
+    /// group), `kind` is the well-known kind GUID, and `value` is the raw
+    /// payload blob — the bytes round-trip verbatim (Cecil's `Binary`
+    /// semantics), so callers encode higher-level kinds themselves.
+    pub fn add_custom_debug_information(
+        &mut self,
+        parent: Token,
+        kind: [u8; 16],
+        value: &[u8],
+    ) -> Result<()> {
+        let cell = cecli_metadata::encode_coded(
+            &coded::HAS_CUSTOM_DEBUG_INFORMATION,
+            parent.table(),
+            parent.rid(),
+        )?;
+        self.cdi_rows.push(CustomDebugInformationRow {
+            parent_cell: cell as u32,
+            kind_guid: self.metadata.insert_guid(&kind),
+            value_blob: self.metadata.insert_blob(value),
+        });
+        Ok(())
+    }
+
     /// Serializes the complete standalone portable PDB image: a BSJB root
     /// with `#~`, `#Strings`, `#GUID`, `#Blob`, and `#Pdb` streams, the
     /// classic tables unpopulated except the mandatory single `Module` row.
@@ -415,6 +456,13 @@ impl PortablePdbBuilder {
                     row.start_offset as u32 as u64,
                     row.length as u32 as u64,
                 ],
+            )?;
+        }
+
+        for row in &self.cdi_rows {
+            self.metadata.add_row(
+                TableIndex::CustomDebugInformation,
+                &[row.parent_cell as u64, row.kind_guid as u64, row.value_blob as u64],
             )?;
         }
 

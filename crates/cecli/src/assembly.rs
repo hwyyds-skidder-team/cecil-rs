@@ -176,15 +176,21 @@ impl AssemblyDefinition {
                         ),
                     ))
                 })?,
-                None => load_symbol_bytes(origin_path).ok_or_else(|| {
-                    Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!(
-                            "no symbol file (.pdb/.mdb) found next to '{}'",
-                            origin_path.display()
-                        ),
-                    ))
-                })?,
+                // Default: sidecar files first, then an embedded portable PDB
+                // in the image's own debug directory (Cecil's
+                // DefaultSymbolReaderProvider prefers whatever the image
+                // carries when no sidecar exists).
+                None => load_symbol_bytes(origin_path)
+                    .or_else(|| embedded_symbol_bytes(&image).map(|(bytes, _)| bytes))
+                    .ok_or_else(|| {
+                        Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!(
+                                "no symbol file (.pdb/.mdb) or embedded PDB found for '{}'",
+                                origin_path.display()
+                            ),
+                        ))
+                    })?,
             };
             attach_symbols(&mut module, &symbol_bytes)?;
         }
@@ -375,6 +381,30 @@ impl AssemblyDefinition {
 // Symbol + satellite-module plumbing (facade-integration parity phase)
 // ---------------------------------------------------------------------------
 
+/// Locates an embedded portable PDB (debug-directory entry of type
+/// `EmbeddedPortablePdb`) in `image` and inflates it. Returns the PDB bytes
+/// plus the checksum entry's digest when present.
+fn embedded_symbol_bytes(image: &cecli_pe::Image) -> Option<(Vec<u8>, Option<[u8; 32]>)> {
+    use cecli_pdb::embedded::image_debug_type as ty;
+    let mut embedded = None;
+    let mut checksum = None;
+    for entry in &image.debug_entries {
+        match entry.directory.kind {
+            ty::EMBEDDED_PORTABLE_PDB => {
+                embedded = cecli_pdb::embedded::unwrap_embedded(&entry.data).ok();
+            }
+            // "<algorithm>\0" + digest; only SHA-256 entries are recorded.
+            ty::PDB_CHECKSUM
+                if entry.data.starts_with(b"SHA256\0") && entry.data.len() >= 7 + 32 =>
+            {
+                checksum = Some(entry.data[7..39].try_into().expect("length checked above"));
+            }
+            _ => {}
+        }
+    }
+    embedded.map(|pdb| (pdb, checksum))
+}
+
 /// Default symbol lookup next to `origin`: `<file>.pdb`, `<stem>.pdb`
 /// (portable or native, told apart by magic at attach time), then
 /// `<file>.mdb` / `<stem>.mdb` (Mono). Returns `None` when no candidate
@@ -450,7 +480,18 @@ fn attach_portable_symbols(module: &mut Module, pdb_bytes: &[u8]) -> Result<()> 
         }
     }
 
-    module.debug = Some(crate::module_def::ModuleDebugInfo { documents, points, scopes });
+    let custom_debug_info = reader
+        .custom_debug_informations()?
+        .into_iter()
+        .map(|info| crate::module_def::CustomDebugInformation {
+            parent: info.parent,
+            kind: info.kind,
+            value: info.value,
+        })
+        .collect();
+
+    module.debug =
+        Some(crate::module_def::ModuleDebugInfo { documents, points, scopes, custom_debug_info });
     Ok(())
 }
 
@@ -510,6 +551,7 @@ fn attach_native_symbols(module: &mut Module, pdb_bytes: &[u8]) -> Result<()> {
         documents,
         points,
         scopes: std::collections::BTreeMap::new(),
+        custom_debug_info: Vec::new(),
     });
     Ok(())
 }
@@ -566,6 +608,7 @@ fn attach_mdb_symbols(module: &mut Module, mdb_bytes: &[u8]) -> Result<()> {
         documents,
         points,
         scopes: std::collections::BTreeMap::new(),
+        custom_debug_info: Vec::new(),
     });
     Ok(())
 }
@@ -702,6 +745,25 @@ const CLI_HEADER_CB: usize = 0x48;
 /// duplicated here because cecli-pe does not re-export the constant).
 const TEXT_RVA: u32 = 0x2000;
 
+/// How debug symbols are emitted alongside the image (Cecil
+/// `ISymbolWriterProvider` selection, as an enum instead of a trait object).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SymbolOutput {
+    /// No symbol output (the default).
+    #[default]
+    None,
+    /// Standalone portable PDB sidecar (`<stem>.pdb`), the
+    /// `write_symbols: true` shorthand.
+    PortablePdb,
+    /// Portable PDB embedded into the image's own debug directory as an
+    /// MPDB entry (`EmbeddedPortablePdbWriter`): `"MPDB"` + uncompressed
+    /// length + raw-Deflate PDB, plus a `PdbChecksum` (SHA-256) entry.
+    EmbeddedPortablePdb,
+    /// Mono MDB sidecar (`<file>.mdb`); the image's debug directory is left
+    /// untouched (Cecil's MdbWriter produces an empty debug header).
+    Mdb,
+}
+
 /// Writer configuration carrier. Port of the fields Mono.Cecil's
 /// `WriterParameters` carries that matter here.
 #[derive(Debug, Clone, Default)]
@@ -736,6 +798,22 @@ pub struct WriteParameters {
     /// MVID slot zeroed, and the hash becomes the new RFC 4122 version-4
     /// GUID.
     pub deterministic_mvid: bool,
+    /// Symbol output selection (Cecil `WriterParameters.SymbolWriterProvider`).
+    /// `None` defers to [`Self::write_symbols`] (sidecar portable PDB when
+    /// true); any other value overrides it.
+    pub symbol_output: Option<SymbolOutput>,
+}
+
+impl WriteParameters {
+    /// The effective [`SymbolOutput`]: an explicit `symbol_output` wins;
+    /// otherwise `write_symbols` means [`SymbolOutput::PortablePdb`].
+    pub fn effective_symbol_output(&self) -> SymbolOutput {
+        match self.symbol_output {
+            Some(output) => output,
+            None if self.write_symbols => SymbolOutput::PortablePdb,
+            None => SymbolOutput::None,
+        }
+    }
 }
 
 impl WriteParameters {
@@ -809,13 +887,16 @@ impl AssemblyDefinition {
         let strongname_size = strong_name_signature_size(&effective_name, module);
 
         #[allow(unused_mut)] // signed in place under the strongname feature
-        let mut image = write_module_image(
+        let (mut image, portable_pdb) = write_module_image(
             module,
             Some(&effective_name),
             self.entry_point,
             opts,
             strongname_size,
         )?;
+        // Sidecar bytes for `write_file_with`; discarded for plain
+        // `write_with` (the checksum entry is already inside the image).
+        let _ = portable_pdb;
 
         // Strong-name sign the finished image in place (Cecil calls
         // CryptoService.StrongName right after ImageWriter.WriteImage).
@@ -827,24 +908,42 @@ impl AssemblyDefinition {
         Ok(image)
     }
 
-    /// Writes the serialized image to `path`, optionally emitting a portable
-    /// PDB sidecar next to it.
+    /// Writes the serialized image to `path`, emitting symbols according to
+    /// the effective [`SymbolOutput`] (Cecil `ISymbolWriterProvider`):
     ///
-    /// With `opts.write_symbols` set and the manifest module carrying debug
-    /// information ([`Module::debug`]), a `<output-stem>.pdb` file is written
-    /// alongside the image via [`build_portable_pdb`]. Modules without debug
-    /// information silently skip the sidecar.
+    /// * [`SymbolOutput::PortablePdb`] / `write_symbols` — standalone
+    ///   `<stem>.pdb` sidecar via [`build_portable_pdb`];
+    /// * [`SymbolOutput::EmbeddedPortablePdb`] — no sidecar (the PDB is
+    ///   already inside the image's debug directory);
+    /// * [`SymbolOutput::Mdb`] — `<file>.mdb` sidecar via `cecli_mdb`.
+    ///
+    /// Modules without debug information silently skip symbol output.
     pub fn write_file_with<P: AsRef<std::path::Path>>(
         &self,
         path: P,
         opts: &WriteParameters,
     ) -> Result<()> {
         let path = path.as_ref();
-        std::fs::write(path, self.write_with(opts)?).map_err(Error::Io)?;
-        if opts.write_symbols && self.main.debug.is_some() {
-            let pdb_bytes = build_portable_pdb(&self.main)?;
-            let sidecar = path.with_extension("pdb");
-            std::fs::write(sidecar, pdb_bytes).map_err(Error::Io)?;
+        let image = self.write_with(opts)?;
+        std::fs::write(path, image).map_err(Error::Io)?;
+        if let Some(debug) = self.main.debug.as_ref() {
+            match opts.effective_symbol_output() {
+                SymbolOutput::PortablePdb => {
+                    let pdb_bytes = build_portable_pdb(&self.main)?;
+                    let sidecar = path.with_extension("pdb");
+                    std::fs::write(sidecar, pdb_bytes).map_err(Error::Io)?;
+                }
+                SymbolOutput::Mdb => {
+                    let mdb_bytes = build_mdb(&self.main, debug);
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let sidecar = path.with_file_name(format!("{name}.mdb"));
+                    std::fs::write(sidecar, mdb_bytes).map_err(Error::Io)?;
+                }
+                SymbolOutput::EmbeddedPortablePdb | SymbolOutput::None => {}
+            }
         }
         Ok(())
     }
@@ -874,7 +973,7 @@ fn write_module_image(
     entry_point: Option<MethodId>,
     opts: &WriteParameters,
     strongname_size: u32,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
     // 1. Managed resources blob. Offsets become ManifestResource.Offset
     //    columns; bytes fill the CLI-header Resources directory.
     let resources = crate::write::resources::build_resources_blob(&module.resources)?;
@@ -986,7 +1085,79 @@ fn write_module_image(
         make_mvid_deterministic(&mut emitted.root, &module.guid);
     }
 
-    // 5. Rebuild the PE image. Identity fields travel through a minimal
+    // 5. Symbol output (Cecil wires this through MetadataBuilder's symbol
+    //    writer; here the PDB is built up front and the debug directory is
+    //    assembled locally). When symbols are emitted, the stale symbol
+    //    entries captured at read time are replaced; non-symbol entries
+    //    (Deterministic, ...) survive. Modules without debug info skip
+    //    symbol output entirely.
+    let mut debug_entries = module.debug_entries.clone();
+    let mut portable_pdb: Option<Vec<u8>> = None;
+    if let Some(debug) = module.debug.as_ref() {
+        match opts.effective_symbol_output() {
+            SymbolOutput::EmbeddedPortablePdb => {
+                let pdb = build_portable_pdb(module)?;
+                let payload = cecli_pdb::embedded::wrap_embedded(&pdb)?;
+                let checksum = cecli_pdb::embedded::pdb_checksum_payload(&pdb);
+                debug_entries.retain(|e| {
+                    !matches!(
+                        e.directory.kind,
+                        cecli_pdb::embedded::image_debug_type::CODEVIEW
+                            | cecli_pdb::embedded::image_debug_type::EMBEDDED_PORTABLE_PDB
+                            | cecli_pdb::embedded::image_debug_type::PDB_CHECKSUM
+                    )
+                });
+                debug_entries.push(cecli_pe::ImageDebugEntry {
+                    directory: cecli_pe::ImageDebugDirectory {
+                        major_version: 0x0100,
+                        minor_version: 0x0100,
+                        kind: cecli_pdb::embedded::image_debug_type::EMBEDDED_PORTABLE_PDB,
+                        size_of_data: payload.len() as i32,
+                        ..Default::default()
+                    },
+                    data: payload,
+                });
+                debug_entries.push(cecli_pe::ImageDebugEntry {
+                    directory: cecli_pe::ImageDebugDirectory {
+                        major_version: 1,
+                        kind: cecli_pdb::embedded::image_debug_type::PDB_CHECKSUM,
+                        size_of_data: checksum.len() as i32,
+                        ..Default::default()
+                    },
+                    data: checksum,
+                });
+                let _ = debug;
+            }
+            SymbolOutput::PortablePdb => {
+                // The sidecar bytes are written by `write_file_with` (it
+                // knows the output path); the image gets a fresh
+                // PdbChecksum pointing at the same content.
+                let pdb = build_portable_pdb(module)?;
+                let checksum = cecli_pdb::embedded::pdb_checksum_payload(&pdb);
+                debug_entries.retain(|e| {
+                    !matches!(
+                        e.directory.kind,
+                        cecli_pdb::embedded::image_debug_type::CODEVIEW
+                            | cecli_pdb::embedded::image_debug_type::EMBEDDED_PORTABLE_PDB
+                            | cecli_pdb::embedded::image_debug_type::PDB_CHECKSUM
+                    )
+                });
+                debug_entries.push(cecli_pe::ImageDebugEntry {
+                    directory: cecli_pe::ImageDebugDirectory {
+                        major_version: 1,
+                        kind: cecli_pdb::embedded::image_debug_type::PDB_CHECKSUM,
+                        size_of_data: checksum.len() as i32,
+                        ..Default::default()
+                    },
+                    data: checksum,
+                });
+                portable_pdb = Some(pdb);
+            }
+            SymbolOutput::Mdb | SymbolOutput::None => {}
+        }
+    }
+
+    // 6. Rebuild the PE image. Identity fields travel through a minimal
     //    carrier image; the Win32 resources and debug directory captured
     //    at read time ride along in the parts (their RVAs/addresses are
     //    recomputed by the PE writer).
@@ -998,7 +1169,7 @@ fn write_module_image(
         metadata: emitted.root,
         strongname_size,
         win32_resources: module.win32_resources.as_ref().map(|r| r.bytes.clone()),
-        debug_entries: module.debug_entries.clone(),
+        debug_entries,
         // A7-F2: take the token from the metadata emission (resolved via
         // `entry`), not the stale read-time `module.entry_point_token`.
         entry_point_token: emitted.entry_point_token,
@@ -1009,7 +1180,7 @@ fn write_module_image(
     if let Some(timestamp) = opts.timestamp {
         writer.set_timestamp(timestamp);
     }
-    writer.emit()
+    Ok((writer.emit()?, portable_pdb))
 }
 
 /// Serializes a standalone module (netmodule) into a complete PE32/PE32+
@@ -1032,7 +1203,8 @@ pub fn write_module_with(module: &Module, opts: &WriteParameters) -> Result<Vec<
             "strong-name signing applies to assemblies, not standalone modules".to_string(),
         ));
     }
-    write_module_image(module, None, None, opts, 0)
+    let (image, _sidecar) = write_module_image(module, None, None, opts, 0)?;
+    Ok(image)
 }
 
 /// Serializes a standalone module (netmodule) with default write parameters.
@@ -1101,7 +1273,44 @@ pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
         }
     }
 
+    for info in &debug.custom_debug_info {
+        builder.add_custom_debug_information(info.parent, info.kind, &info.value)?;
+    }
+
     builder.finalize()
+}
+
+/// Serializes a module's debug information into Mono MDB bytes
+/// (`SymbolOutput::Mdb` sidecar): documents become source files, sequence
+/// points become per-method line tables (all of a method's points land in
+/// one compile unit — the facade model does not retain per-document split),
+/// and document order fixes compile-unit indices.
+fn build_mdb(module: &Module, debug: &crate::module_def::ModuleDebugInfo) -> Vec<u8> {
+    let mut writer = cecli_mdb::writer::MdbWriter::new(module.guid);
+    // Source ids are 1-based; the facade document index maps directly.
+    let mut source_ids = Vec::with_capacity(debug.documents.len());
+    for doc in &debug.documents {
+        source_ids.push(writer.add_source(&doc.name));
+    }
+    // One compile unit per document (points keep their document index).
+    let cu_ids: Vec<u32> =
+        (0..debug.documents.len()).map(|i| writer.add_compile_unit(&[source_ids[i]])).collect();
+
+    for (&method_rid, entries) in &debug.points {
+        let method = cecli_core::Token::new(cecli_core::TableIndex::MethodDef, method_rid);
+        // Flatten the per-document groups into one line table (the MDB line
+        // table carries a single compile unit per method).
+        let (first_doc, mut lines) = (entries.first().map(|e| e.0).unwrap_or(0), Vec::new());
+        for (_, points) in entries.iter() {
+            for p in points.iter() {
+                lines.push((p.offset, p.start_line as i32));
+            }
+        }
+        let cu = *cu_ids.get(first_doc as usize).unwrap_or(&1);
+        writer.add_method_lines(method, cu, &lines, 0);
+    }
+
+    writer.finalize()
 }
 
 fn arch_is_pe64(arch: cecli_core::flags::TargetArchitecture) -> bool {
@@ -1995,5 +2204,193 @@ mod tests {
         let blob_idx = md.column(cecli_core::TableIndex::Field, 1, 2).ok()? as u32;
         let blob = md.heaps().blob.get(blob_idx).ok()?;
         blob.get(1).copied()
+    }
+
+    /// Embedded portable PDB end-to-end: write with
+    /// `SymbolOutput::EmbeddedPortablePdb`, re-read with `read_symbols`, and
+    /// the symbols come back from the image's own debug directory (no
+    /// sidecar). The debug directory carries the MPDB entry plus a matching
+    /// SHA-256 PdbChecksum; stale symbol entries are replaced.
+    #[test]
+    fn embedded_pdb_roundtrips_through_the_image() {
+        use crate::model::types::TypeDefinition;
+        use cecli_pdb::embedded::{image_debug_type as ty, sha256};
+
+        let mut module = Module {
+            name: "emb".into(),
+            runtime_version: "v4.0.30319".into(),
+            ..Default::default()
+        };
+        module.add_type(TypeDefinition {
+            namespace: "E".into(),
+            name: "T".into(),
+            ..Default::default()
+        });
+        module.debug = Some(crate::module_def::ModuleDebugInfo {
+            documents: vec![cecli_pdb::document::Document {
+                name: "/src/a.cs".into(),
+                hash_algorithm: [0; 16],
+                hash: vec![1, 2, 3],
+                language: [0; 16],
+            }],
+            points: [(
+                1u32,
+                vec![(
+                    0u32,
+                    vec![cecli_pdb::portable_reader::SequencePoint {
+                        offset: 0,
+                        start_line: 3,
+                        start_column: 1,
+                        end_line: 3,
+                        end_column: 10,
+                    }],
+                )],
+            )]
+            .into_iter()
+            .collect(),
+            scopes: Default::default(),
+            custom_debug_info: vec![crate::module_def::CustomDebugInformation {
+                parent: cecli_core::Token::new(cecli_core::TableIndex::Module, 1),
+                kind: [0xAA; 16],
+                value: br#"{"key":"value"}"#.to_vec(),
+            }],
+        });
+        // A stale CodeView entry that must be replaced.
+        module.debug_entries.push(cecli_pe::ImageDebugEntry {
+            directory: cecli_pe::ImageDebugDirectory {
+                kind: ty::CODEVIEW,
+                size_of_data: 4,
+                ..Default::default()
+            },
+            data: vec![0, 0, 0, 0],
+        });
+        let asm = AssemblyDefinition {
+            name: AssemblyNameDefinition { name: "emb".into(), ..Default::default() },
+            main: module,
+            ..Default::default()
+        };
+
+        let image_bytes = asm
+            .write_with(&WriteParameters {
+                symbol_output: Some(SymbolOutput::EmbeddedPortablePdb),
+                ..Default::default()
+            })
+            .expect("embedded write");
+
+        // Debug directory: stale CodeView gone, MPDB + PdbChecksum present
+        // and the checksum matches the embedded PDB's content.
+        let image = cecli_pe::Image::parse(&image_bytes).expect("image parses");
+        let kinds: Vec<i32> = image.debug_entries.iter().map(|e| e.directory.kind).collect();
+        assert!(!kinds.contains(&ty::CODEVIEW), "stale CodeView replaced");
+        assert!(kinds.contains(&ty::EMBEDDED_PORTABLE_PDB), "MPDB entry present");
+        assert!(kinds.contains(&ty::PDB_CHECKSUM), "PdbChecksum present");
+        let emb = image
+            .debug_entries
+            .iter()
+            .find(|e| e.directory.kind == ty::EMBEDDED_PORTABLE_PDB)
+            .unwrap();
+        let pdb = cecli_pdb::embedded::unwrap_embedded(&emb.data).expect("MPDB inflates");
+        let chk =
+            image.debug_entries.iter().find(|e| e.directory.kind == ty::PDB_CHECKSUM).unwrap();
+        assert_eq!(&chk.data[..7], b"SHA256\0");
+        assert_eq!(&chk.data[7..], &sha256(&pdb)[..], "checksum covers the PDB");
+
+        // Plain read attaches nothing; read_symbols (via a temp file so the
+        // embedded fallback can probe the image) brings everything back.
+        let re = AssemblyDefinition::read(&image_bytes).expect("re-parse");
+        assert!(re.main.debug.is_none(), "plain read attaches nothing");
+        let dir = unique_test_dir("embedded");
+        let exe = dir.join("emb.dll");
+        std::fs::write(&exe, &image_bytes).expect("write temp exe");
+        let mut params = crate::resolver::ReaderParameters::new();
+        params.read_symbols = true;
+        let re = AssemblyDefinition::read_file_with(&exe, &params).expect("read with symbols");
+        let debug = re.main.debug.as_ref().expect("embedded symbols attached");
+        assert_eq!(debug.documents.len(), 1);
+        assert_eq!(debug.documents[0].name, "/src/a.cs");
+        assert!(debug.points.contains_key(&1), "sequence points survive");
+        assert_eq!(debug.custom_debug_info.len(), 1, "CDI survives");
+        assert_eq!(debug.custom_debug_info[0].value, br#"{"key":"value"}"#);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CDI rows round-trip through build_portable_pdb -> portable reader.
+    #[test]
+    fn cdi_roundtrips_through_pdb_builder() {
+        let debug = crate::module_def::ModuleDebugInfo {
+            documents: vec![cecli_pdb::document::Document {
+                name: "x.cs".into(),
+                hash_algorithm: [0; 16],
+                hash: Vec::new(),
+                language: [0; 16],
+            }],
+            points: Default::default(),
+            scopes: Default::default(),
+            custom_debug_info: vec![
+                crate::module_def::CustomDebugInformation {
+                    parent: cecli_core::Token::new(cecli_core::TableIndex::Module, 1),
+                    kind: [1; 16],
+                    value: vec![9, 9],
+                },
+                crate::module_def::CustomDebugInformation {
+                    parent: cecli_core::Token::new(cecli_core::TableIndex::MethodDef, 3),
+                    kind: [2; 16],
+                    value: b"async-hint".to_vec(),
+                },
+            ],
+        };
+
+        let pdb = build_portable_pdb(&Module { debug: Some(debug), ..Default::default() })
+            .expect("pdb builds");
+        let reader = cecli_pdb::portable_reader::PortablePdbReader::parse(&pdb).expect("parses");
+        let cdi = reader.custom_debug_informations().expect("cdi reads");
+        assert_eq!(cdi.len(), 2);
+        assert_eq!(cdi[0].parent.table(), cecli_core::TableIndex::Module);
+        assert_eq!(cdi[0].kind, [1; 16]);
+        assert_eq!(cdi[0].value, vec![9, 9]);
+        assert_eq!(cdi[1].parent.table(), cecli_core::TableIndex::MethodDef);
+        assert_eq!(cdi[1].value, b"async-hint".to_vec());
+    }
+
+    /// MDB sidecar: `SymbolOutput::Mdb` writes a `<file>.mdb` next to the
+    /// image that the MDB reader can open, with documents as sources.
+    #[test]
+    fn mdb_sidecar_written_and_opens() {
+        let mut module =
+            Module { name: "m".into(), runtime_version: "v4.0.30319".into(), ..Default::default() };
+        module.debug = Some(crate::module_def::ModuleDebugInfo {
+            documents: vec![cecli_pdb::document::Document {
+                name: "C:\\src\\m.cs".into(),
+                hash_algorithm: [0; 16],
+                hash: vec![7; 16],
+                language: [0; 16],
+            }],
+            points: Default::default(),
+            scopes: Default::default(),
+            custom_debug_info: Vec::new(),
+        });
+        let asm = AssemblyDefinition {
+            name: AssemblyNameDefinition { name: "m".into(), ..Default::default() },
+            main: module,
+            ..Default::default()
+        };
+
+        let dir = unique_test_dir("mdbside");
+        let out = dir.join("m.dll");
+        asm.write_file_with(
+            &out,
+            &WriteParameters { symbol_output: Some(SymbolOutput::Mdb), ..Default::default() },
+        )
+        .expect("write with mdb");
+
+        let sidecar = dir.join("m.dll.mdb");
+        assert!(sidecar.exists(), "mdb sidecar next to the image");
+        let bytes = std::fs::read(&sidecar).expect("sidecar readable");
+        let reader = cecli_mdb::reader::MdbReader::open(&bytes).expect("mdb opens");
+        assert_eq!(reader.source_files().len(), 1);
+        assert_eq!(reader.source_files()[0].path, "C:\\src\\m.cs");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

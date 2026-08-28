@@ -52,8 +52,13 @@ asm.write_file("patched.dll")?;
 - 自定义特性:构造函数签名驱动的真实镜像解码 + 类型化参数视图
 - 方法体编辑:`BodyEditor`(插入/替换/删除/发射辅助)、`simplify_macros` / `optimize_macros` / `renumber`
 - 符号:三格式接入主读流程(`read_symbols` 自动嗅探 Portable PDB / 原生
-  PDB / Mono MDB,`SymbolReaderProvider` 可注入自定义来源)、Portable PDB
-  读写(文档、序列点、局部作用域)、原生 PDB 行号读取、MDB 读写
+  PDB / Mono MDB,`SymbolReaderProvider` 可注入自定义来源;无 sidecar 时
+  回退到镜像内嵌 PDB)、Portable PDB 读写(文档、序列点、局部作用域、
+  CustomDebugInformation 原始透传)、原生 PDB 行号读取、MDB 读写
+- 符号输出注入(`WriteParameters::symbol_output`,Cecil
+  `ISymbolWriterProvider` 对应物):standalone Portable PDB sidecar /
+  **MPDB 内嵌 PDB**("MPDB"+长度+raw Deflate,附 SHA-256 PdbChecksum 条目,
+  读侧自动回退)/ Mono MDB sidecar
 - P/Invoke、封送规范全量 NativeTypeSpec、安全声明(XML/二进制两种线格式)
 - WinRT 投影(`apply_projections` / `remove_projections`,移植自 WindowsRuntimeProjections.cs)
 - 强名签名:`.snk` 密钥解析与 PE 签名;`WriteParameters::strong_name_key`
