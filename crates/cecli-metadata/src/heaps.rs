@@ -141,7 +141,10 @@ impl<'a> GuidHeap<'a> {
     /// out-of-range indices return zero bytes, matching Mono.Cecil.
     pub fn get(&self, index: u32) -> Result<[u8; 16]> {
         const GUID_SIZE: usize = 16;
-        if index == 0 || ((index as usize - 1) + GUID_SIZE) > self.data.len() {
+        // The byte offset is (index-1)*16 — the bound must multiply too,
+        // or an index inside `len/16 + 15` passes the check and the slice
+        // below panics.
+        if index == 0 || ((index as usize - 1) + 1).saturating_mul(GUID_SIZE) > self.data.len() {
             return Ok([0u8; GUID_SIZE]);
         }
         let mut guid = [0u8; GUID_SIZE];
