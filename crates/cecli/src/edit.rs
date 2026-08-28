@@ -32,7 +32,11 @@ use cecli_cil::opcode_table as op;
 use cecli_cil::{Code, OpCode, OperandType};
 use cecli_core::Token;
 
-use crate::model::types::{MethodRef, RInstruction, ROperand, ResolvedBody};
+use crate::model::types::{
+    FieldId, FieldRef, MethodId, MethodRef, RInstruction, ROperand, ResolvedBody,
+};
+use crate::Module;
+use cecli_core::{Error, Result};
 
 // ---------------------------------------------------------------------------
 // Offset / target maintenance
@@ -999,5 +1003,183 @@ mod tests {
         let codes: Vec<Code> = b.instructions.iter().map(|i| i.opcode.code).collect();
         assert_eq!(codes, [Code::Ldc_I8, Code::Ldc_I8, Code::Ret]);
         assert_eq!(b.instructions[2].offset, 18);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Call / field redirection (xref-powered patching)
+// ---------------------------------------------------------------------------
+
+/// Rewrites every direct call site of `from` to invoke `to` instead:
+/// instruction operands (`call`/`callvirt`/`newobj`, including targets
+/// nested inside generic `MethodRef::Spec` instantiations) and
+/// `MethodImpl` body references. Returns the number of rewritten sites.
+///
+/// The hook/patching primitive (Cecil users hand-roll this with full-module
+/// walks). Signatures must be call-compatible: the parameter count
+/// (including the implicit `this`) must match, and a void `to` cannot
+/// replace a value-returning `from` — the caller would pop a value nobody
+/// pushed.
+pub fn redirect_calls(module: &mut Module, from: MethodId, to: MethodId) -> Result<usize> {
+    use crate::model::types::TypeDesc;
+
+    let check = || -> Result<()> {
+        let f = &module.methods[from.index()];
+        let t = &module.methods[to.index()];
+        let f_arity = f.signature.parameters.len() + usize::from(f.signature.has_this);
+        let t_arity = t.signature.parameters.len() + usize::from(t.signature.has_this);
+        if f_arity != t_arity {
+            return Err(Error::invalid_op(format!(
+                "redirect: arity mismatch ({} takes {f_arity}, {} takes {t_arity})",
+                f.name, t.name
+            )));
+        }
+        let f_void = matches!(&f.signature.return_type, TypeDesc::Internal(s) if s == "void");
+        let t_void = matches!(&t.signature.return_type, TypeDesc::Internal(s) if s == "void");
+        if f_void != t_void && t_void {
+            return Err(Error::invalid_op(format!(
+                "redirect: {} returns void but {} expects a value",
+                t.name, f.name
+            )));
+        }
+        Ok(())
+    };
+    check()?;
+
+    let mut rewritten = 0usize;
+    for method in module.methods.iter_mut() {
+        let Some(body) = &mut method.body else { continue };
+        for ins in &mut body.instructions {
+            if let ROperand::Method(mr) = &mut ins.operand {
+                if rewrite_method_ref(mr, from, to) {
+                    rewritten += 1;
+                }
+            }
+        }
+        // MethodImpl bodies pointing at `from` retarget too.
+        for ov in &mut method.overrides {
+            if rewrite_method_ref(&mut ov.body, from, to) {
+                rewritten += 1;
+            }
+        }
+    }
+    Ok(rewritten)
+}
+
+/// Same redirect for field accesses — instruction operands only
+/// (`ldfld`/`stfld`/`ldsfld`/`stsfld`/address-of). Returns the rewritten
+/// site count.
+pub fn redirect_field_accesses(module: &mut Module, from: FieldId, to: FieldId) -> usize {
+    let mut rewritten = 0usize;
+    for method in module.methods.iter_mut() {
+        let Some(body) = &mut method.body else { continue };
+        for ins in &mut body.instructions {
+            if let ROperand::Field(FieldRef::Def(id)) = &mut ins.operand {
+                if *id == from {
+                    *id = to;
+                    rewritten += 1;
+                }
+            }
+        }
+    }
+    rewritten
+}
+
+/// Rewrites `from` inside a method reference tree (Spec nesting included).
+fn rewrite_method_ref(mr: &mut MethodRef, from: MethodId, to: MethodId) -> bool {
+    match mr {
+        MethodRef::Def(id) => {
+            if *id == from {
+                *id = to;
+                true
+            } else {
+                false
+            }
+        }
+        MethodRef::Spec { method, .. } => rewrite_method_ref(method, from, to),
+        MethodRef::External(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+    use crate::model::types::{
+        FieldDefinition, FieldSignature, MethodDefinition, RInstruction, TypeDefinition,
+    };
+
+    fn TypeDesc_int() -> crate::model::types::TypeDesc {
+        crate::model::types::TypeDesc::Internal("int32".into())
+    }
+
+    /// T with Orig/Hook/Caller methods; Caller calls Orig and loads field a.
+    fn sample() -> Module {
+        let mut module = Module { name: "s".into(), ..Default::default() };
+        let t = module.add_type(TypeDefinition {
+            namespace: "Ns".into(),
+            name: "T".into(),
+            ..Default::default()
+        });
+        let orig =
+            module.add_method(t, MethodDefinition { name: "Orig".into(), ..Default::default() });
+        let hook =
+            module.add_method(t, MethodDefinition { name: "Hook".into(), ..Default::default() });
+        let caller =
+            module.add_method(t, MethodDefinition { name: "Caller".into(), ..Default::default() });
+        let f1 = module.add_field(
+            t,
+            FieldDefinition {
+                name: "a".into(),
+                signature: FieldSignature(TypeDesc_int()),
+                ..Default::default()
+            },
+        );
+        module.methods[caller.index()].body = Some(crate::model::types::ResolvedBody {
+            max_stack: 1,
+            instructions: vec![
+                RInstruction {
+                    offset: 0,
+                    opcode: cecli_cil::opcodes::CALL,
+                    operand: ROperand::Method(MethodRef::Def(orig)),
+                },
+                RInstruction {
+                    offset: 5,
+                    opcode: cecli_cil::opcodes::LDSFLD,
+                    operand: ROperand::Field(FieldRef::Def(f1)),
+                },
+                RInstruction {
+                    offset: 10,
+                    opcode: cecli_cil::opcodes::RET,
+                    operand: ROperand::None,
+                },
+            ],
+            ..Default::default()
+        });
+        module
+    }
+
+    #[test]
+    fn redirects_calls_and_fields() {
+        let mut m = sample();
+        // Call: Orig(0) -> Hook(1); one site.
+        assert_eq!(redirect_calls(&mut m, MethodId(0), MethodId(1)).unwrap(), 1);
+        let body = m.methods[2].body.as_ref().unwrap();
+        assert_eq!(body.instructions[0].operand, ROperand::Method(MethodRef::Def(MethodId(1))));
+        // Second redirect: no sites left.
+        assert_eq!(redirect_calls(&mut m, MethodId(0), MethodId(1)).unwrap(), 0);
+
+        // Field: a(0) -> b(1); one site.
+        assert_eq!(redirect_field_accesses(&mut m, FieldId(0), FieldId(1)), 1);
+        let body = m.methods[2].body.as_ref().unwrap();
+        assert_eq!(body.instructions[1].operand, ROperand::Field(FieldRef::Def(FieldId(1))));
+    }
+
+    #[test]
+    fn arity_mismatch_rejected() {
+        let mut m = sample();
+        // Give Hook an extra parameter.
+        m.methods[1].signature.parameters.push(TypeDesc_int());
+        let err = redirect_calls(&mut m, MethodId(0), MethodId(1)).unwrap_err();
+        assert!(err.to_string().contains("arity"), "{err}");
     }
 }

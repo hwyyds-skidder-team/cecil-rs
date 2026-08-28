@@ -9,6 +9,7 @@
 //! * `diff <a> <b>`     — semantic difference report
 //! * `xref <file> <n>`  — bidirectional cross-references (callers/callees,
 //!   readers/writers, dependencies)
+//! * `unused <file>`    — dead-code report over the conservative root set
 
 use std::process::ExitCode;
 
@@ -23,6 +24,7 @@ fn main() -> ExitCode {
         Some("roundtrip") => cmd_roundtrip(&args[2..]),
         Some("diff") => cmd_diff(&args[2..]),
         Some("xref") => cmd_xref(&args[2..]),
+        Some("unused") => cmd_unused(&args[2..]),
         None | Some("--help" | "-h") => {
             print_help();
             ExitCode::SUCCESS
@@ -45,7 +47,8 @@ USAGE:
     cecli verify    <file>           CFG + max-stack validation of every body
     cecli roundtrip <file> [-o out]  read -> write -> re-read, count checks
     cecli diff      <a> <b>          semantic difference report
-    cecli xref      <file> <name>    cross-references of a type/method/field"
+    cecli xref      <file> <name>    cross-references of a type/method/field
+    cecli unused    <file>           unreachable private members (dead code)"
     );
 }
 
@@ -133,7 +136,12 @@ fn dump(path: &str, with_il: bool) -> Result<(), String> {
             if with_il {
                 if let Some(body) = &md.body {
                     for ins in &body.instructions {
-                        println!("    IL_{:04}: {}", ins.offset, ins.opcode.name);
+                        let op = operand_display(m, &ins.operand);
+                        if op.is_empty() {
+                            println!("    IL_{:04}: {}", ins.offset, ins.opcode.name);
+                        } else {
+                            println!("    IL_{:04}: {} {}", ins.offset, ins.opcode.name, op);
+                        }
                     }
                 }
             }
@@ -452,4 +460,148 @@ fn xref(path: &str, query: &str) -> Result<(), String> {
     }
 
     Err(format!("{query}: not found (type, Type::Member, member name, or external Ns.T::M)"))
+}
+
+// -- IL operand rendering (dump --il) ---------------------------------------
+
+fn type_desc_display(m: &cecli::Module, ty: &cecli::model::types::TypeDesc) -> String {
+    use cecli::model::types::TypeDesc;
+    match ty {
+        TypeDesc::Def(id) => m.type_full_name(*id),
+        TypeDesc::External(ext) => cecli::xref::external_full_name(ext),
+        TypeDesc::GenericInstance { definition, arguments } => {
+            let args: Vec<String> = arguments.iter().map(|a| type_desc_display(m, a)).collect();
+            format!("{}<{}>", type_desc_display(m, definition), args.join(", "))
+        }
+        TypeDesc::SzArray(e) => format!("{}[]", type_desc_display(m, e)),
+        TypeDesc::Ptr(e) => format!("{}*", type_desc_display(m, e)),
+        TypeDesc::ByRef(e) => format!("{}&", type_desc_display(m, e)),
+        TypeDesc::Pinned(e) => type_desc_display(m, e),
+        TypeDesc::Array { element, sizes, .. } => {
+            // Rank is the larger of the two bound-vector lengths.
+            let rank = sizes.len().max(1);
+            format!("{}[{}]", type_desc_display(m, element), ",".repeat(rank.saturating_sub(1)))
+        }
+        TypeDesc::Var(n) => format!("!{n}"),
+        TypeDesc::MVar(n) => format!("!!{n}"),
+        other => format!("{other:?}"),
+    }
+}
+
+fn method_ref_display(m: &cecli::Module, mr: &cecli::model::types::MethodRef) -> String {
+    use cecli::model::types::MethodRef;
+    match mr {
+        MethodRef::Def(id) => method_display(m, *id),
+        MethodRef::External(ext) => format!("{}::{}", type_desc_display(m, &ext.parent), ext.name),
+        MethodRef::Spec { method, arguments } => {
+            let args: Vec<String> = arguments.iter().map(|a| type_desc_display(m, a)).collect();
+            format!("{}<{}>", method_ref_display(m, method), args.join(", "))
+        }
+    }
+}
+
+fn operand_display(m: &cecli::Module, op: &cecli::model::types::ROperand) -> String {
+    use cecli::model::types::ROperand;
+    match op {
+        ROperand::None => String::new(),
+        ROperand::Int8(v) => format!("{v}"),
+        ROperand::Int32(v) => format!("{v}"),
+        ROperand::Int64(v) => format!("{v}"),
+        ROperand::Float32(v) => format!("{v}"),
+        ROperand::Float64(v) => format!("{v}"),
+        ROperand::Branch(t) => format!("IL_{t:04X}"),
+        ROperand::Switch(list) => {
+            let targets: Vec<String> = list.iter().map(|t| format!("IL_{t:04X}")).collect();
+            format!("({})", targets.join(", "))
+        }
+        ROperand::Type(ty) => type_desc_display(m, ty),
+        ROperand::Method(mr) => method_ref_display(m, mr),
+        ROperand::Field(fr) => match fr {
+            cecli::model::types::FieldRef::Def(id) => {
+                // Find the declaring type for context.
+                let f = &m.fields[id.index()];
+                for ty in &m.types {
+                    if ty.fields.contains(id) {
+                        let tid = m
+                            .types
+                            .iter()
+                            .position(|t| std::ptr::eq(t, ty))
+                            .map(|i| cecli::model::types::TypeId(i as u32));
+                        if let Some(tid) = tid {
+                            return format!("{}::{}", m.type_full_name(tid), f.name);
+                        }
+                    }
+                }
+                f.name.clone()
+            }
+            cecli::model::types::FieldRef::External(ext) => {
+                format!("{}::{}", type_desc_display(m, &ext.parent), ext.name)
+            }
+        },
+        ROperand::String(s) => format!("{s:?}"),
+        ROperand::UserString(off) => format!("us@{off:#x}"),
+        ROperand::Token(tok) => format!("token {tok}"),
+        ROperand::Rva(rva) => format!("{rva:#x}"),
+        ROperand::Var(slot) => format!("slot {slot}"),
+        ROperand::CallSite(sig) => {
+            let ret = type_desc_display(m, &sig.return_type);
+            let params: Vec<String> =
+                sig.parameters.iter().map(|p| type_desc_display(m, p)).collect();
+            format!("fn({}) -> {ret}", params.join(", "))
+        }
+    }
+}
+
+// -- unused (dead-code detection) -------------------------------------------
+
+fn cmd_unused(args: &[String]) -> ExitCode {
+    let Some(path) = args.first() else {
+        eprintln!("usage: cecli unused <file>");
+        return ExitCode::from(2);
+    };
+    match unused(path) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn unused(path: &str) -> Result<(), String> {
+    let asm = read(path)?;
+    let m = asm.main_module();
+    let dead = cecli::callgraph::dead_members(m, &cecli::callgraph::RootPolicy::default());
+
+    if dead.methods.is_empty() && dead.fields.is_empty() && dead.types.is_empty() {
+        println!("{path}: no unreachable private members");
+        return Ok(());
+    }
+
+    for &tid in &dead.types {
+        println!("type   {}", m.type_full_name(tid));
+    }
+    for &mid in &dead.methods {
+        println!("method {}", method_display(m, mid));
+    }
+    for &fid in &dead.fields {
+        // Find the declaring type for context.
+        let mut owner = String::new();
+        for (i, ty) in m.types.iter().enumerate() {
+            if ty.fields.contains(&fid) {
+                owner = m.type_full_name(cecli::model::types::TypeId(i as u32));
+                break;
+            }
+        }
+        println!("field  {}::{}", owner, m.fields[fid.index()].name);
+    }
+    println!(
+        "{} type(s), {} method(s), {} field(s) unreachable \
+         (roots: entry point, virtual/override, accessors, .cctor, P/Invoke, \
+         externally visible)",
+        dead.types.len(),
+        dead.methods.len(),
+        dead.fields.len()
+    );
+    Ok(())
 }

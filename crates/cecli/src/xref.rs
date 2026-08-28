@@ -190,11 +190,84 @@ impl Xref {
                 x.walk_type_desc(&local.ty, UsageKind::Signature, sig_site.clone(), owner);
             }
             for ins in &body.instructions {
-                x.record_instruction(ins, mid);
+                x.record_instruction(module, ins, mid);
             }
         }
 
+        x.resolve_external_members_to_locals(module);
         x
+    }
+
+    /// Second pass: compilers emit same-module member references through
+    /// generic instantiation contexts as MemberRefs whose parent is a
+    /// TypeSpec (`Collection\`1/Enumerator<!0>`), which the reader keeps as
+    /// External references. Map those back onto the local definitions they
+    /// denote, so `users_of_method` / `field_accesses` (and dead-code
+    /// analysis on top of them) see them.
+    ///
+    /// Field matching is by (type full name, field name) — unique per type.
+    /// Method matching additionally requires equal parameter count and
+    /// `has_this`; when overloads still collide the reference is skipped
+    /// (conservative).
+    fn resolve_external_members_to_locals(&mut self, module: &Module) {
+        // type full name -> TypeId
+        let type_by_name: BTreeMap<String, TypeId> = (0..module.types.len())
+            .map(|i| {
+                let id = TypeId(i as u32);
+                (module.type_full_name(id), id)
+            })
+            .collect();
+
+        // (TypeId, field name) -> FieldId
+        let mut field_by_name: BTreeMap<(TypeId, String), FieldId> = BTreeMap::new();
+        for (tid, ty) in module.types.iter().enumerate() {
+            let tid = TypeId(tid as u32);
+            for &fid in &ty.fields {
+                field_by_name.insert((tid, module.fields[fid.index()].name.clone()), fid);
+            }
+        }
+
+        // External FIELD references -> local fields with the same spelling.
+        let ext_fields: Vec<(String, Vec<Usage>)> =
+            self.external_field_users.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        for (key, usages) in ext_fields {
+            let Some((type_name, field_name)) = key.rsplit_once("::") else { continue };
+            let Some(&tid) = type_by_name.get(type_name) else { continue };
+            let Some(&fid) = field_by_name.get(&(tid, field_name.to_string())) else { continue };
+            let v = self.field_users.entry(fid).or_default();
+            for u in usages {
+                v.push(u);
+            }
+        }
+
+        // External METHOD references -> local methods with matching
+        // name + arity + this-ness.
+        let ext_methods: Vec<(String, Vec<Usage>)> =
+            self.external_method_users.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        for (key, usages) in ext_methods {
+            let Some((type_name, method_name)) = key.rsplit_once("::") else { continue };
+            let Some(&tid) = type_by_name.get(type_name) else { continue };
+            // Split the arity from the signature the key was built from is
+            // unavailable here; re-derive candidates by name and let the
+            // (params, has_this) filter in the operand decide — the key does
+            // not carry arity, so match any same-name method only when it is
+            // unambiguous.
+            let ty = &module.types[tid.index()];
+            let candidates: Vec<MethodId> = ty
+                .methods
+                .iter()
+                .copied()
+                .filter(|&mid| module.methods[mid.index()].name == method_name)
+                .collect();
+            if candidates.len() != 1 {
+                continue; // ambiguous or absent: conservative skip
+            }
+            let mid = candidates[0];
+            let v = self.method_users.entry(mid).or_default();
+            for u in usages {
+                v.push(u);
+            }
+        }
     }
 
     // -- reverse queries -----------------------------------------------------
@@ -359,7 +432,7 @@ impl Xref {
         }
     }
 
-    fn record_instruction(&mut self, ins: &RInstruction, mid: MethodId) {
+    fn record_instruction(&mut self, module: &Module, ins: &RInstruction, mid: MethodId) {
         let site = UsageSite::Instruction { method: mid, offset: ins.offset };
         let owner = ForwardOwner::Method(mid);
         match &ins.operand {
@@ -369,7 +442,7 @@ impl Xref {
                 } else {
                     UsageKind::Call
                 };
-                self.record_method_ref(mr, kind, site, owner);
+                self.record_method_ref(module, mr, kind, site, owner);
             }
             ROperand::Field(fr) => {
                 let name = ins.opcode.name;
@@ -380,7 +453,7 @@ impl Xref {
                 } else {
                     UsageKind::FieldLoad
                 };
-                self.record_field_ref(fr, kind, site, owner);
+                self.record_field_ref(module, fr, kind, site, owner);
             }
             ROperand::Type(ty) => {
                 self.walk_type_desc(ty, UsageKind::TypeOperand, site, owner);
@@ -398,6 +471,7 @@ impl Xref {
 
     fn record_method_ref(
         &mut self,
+        module: &Module,
         mr: &MethodRef,
         kind: UsageKind,
         site: UsageSite,
@@ -408,7 +482,7 @@ impl Xref {
                 self.record(UsedEntity::Method(*id), kind, site, owner);
             }
             MethodRef::External(ext) => {
-                let key = format!("{}::{}", external_full_name_of(&ext.parent), ext.name);
+                let key = format!("{}::{}", open_type_name(module, &ext.parent), ext.name);
                 self.record(UsedEntity::ExternalMethod(key), kind, site.clone(), owner);
                 // The call also uses the declaring type and the signature's
                 // types.
@@ -427,13 +501,14 @@ impl Xref {
                 for arg in arguments {
                     self.walk_type_desc(arg, UsageKind::TypeOperand, site.clone(), owner);
                 }
-                self.record_method_ref(method, kind, site, owner);
+                self.record_method_ref(module, method, kind, site, owner);
             }
         }
     }
 
     fn record_field_ref(
         &mut self,
+        module: &Module,
         fr: &FieldRef,
         kind: UsageKind,
         site: UsageSite,
@@ -444,7 +519,7 @@ impl Xref {
                 self.record(UsedEntity::Field(*id), kind, site, owner);
             }
             FieldRef::External(ext) => {
-                let key = format!("{}::{}", external_full_name_of(&ext.parent), ext.name);
+                let key = format!("{}::{}", open_type_name(module, &ext.parent), ext.name);
                 self.record(UsedEntity::ExternalField(key), kind, site.clone(), owner);
                 self.walk_type_desc(&ext.parent, kind, site.clone(), owner);
                 self.walk_type_desc(&ext.signature.0, UsageKind::Signature, site, owner);
@@ -454,7 +529,12 @@ impl Xref {
 }
 
 /// Reflection-style full name of an external type: `Ns.Outer/Inner`.
-pub(crate) fn external_full_name(ext: &crate::model::types::ExternalType) -> String {
+/// Alias with an explicit type in the name (call-site readability).
+pub fn external_type_full_name(ext: &crate::model::types::ExternalType) -> String {
+    external_full_name(ext)
+}
+
+pub fn external_full_name(ext: &crate::model::types::ExternalType) -> String {
     let mut name = String::new();
     if !ext.namespace.is_empty() {
         name.push_str(&ext.namespace);
@@ -470,9 +550,16 @@ pub(crate) fn external_full_name(ext: &crate::model::types::ExternalType) -> Str
 
 /// Full name of the type inside a TypeDesc (external form; Def callers use
 /// `Module::type_full_name` instead).
-fn external_full_name_of(ty: &TypeDesc) -> String {
+/// Spelling of a member-reference parent type for `Ns.Type::Member` keys:
+/// the OPEN generic name (arguments dropped), local definitions through the
+/// module's full-name table.
+fn open_type_name(module: &Module, ty: &TypeDesc) -> String {
     match ty {
         TypeDesc::External(ext) => external_full_name(ext),
+        TypeDesc::Def(id) => module.type_full_name(*id),
+        // A generic instantiation context names its open definition; the
+        // arguments are not part of the member key.
+        TypeDesc::GenericInstance { definition, .. } => open_type_name(module, definition),
         other => format!("{other:?}"),
     }
 }

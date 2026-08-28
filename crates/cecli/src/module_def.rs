@@ -465,17 +465,23 @@ impl Module {
     }
 
     /// Full name of a type: `Namespace.Name` with nesting levels separated
-    /// by `/` (Mono.Cecil's `FullName` spelling).
+    /// by `/` (Mono.Cecil's `FullName` spelling). The namespace comes from
+    /// the OUTERMOST declaring type — nested types carry no namespace of
+    /// their own.
     pub fn type_full_name(&self, id: TypeId) -> String {
         let mut chain = Vec::new();
         let mut cur = Some(id);
+        let mut root_ns = String::new();
         while let Some(cid) = cur {
             let t = self.type_def(cid);
             chain.push(t.name.as_str());
             cur = t.declaring_type;
+            if cur.is_none() {
+                // Outermost type: only it carries the namespace.
+                root_ns = t.namespace.clone();
+            }
         }
         chain.reverse();
-        let root_ns = self.type_def(id).namespace.clone();
         let mut s = String::new();
         if !root_ns.is_empty() {
             s.push_str(&root_ns);

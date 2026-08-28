@@ -190,6 +190,7 @@
 //! `cecli-rocks` (reflection extension traits).
 
 pub mod assembly;
+pub mod callgraph;
 pub mod diff;
 pub mod edit;
 pub mod flow;
