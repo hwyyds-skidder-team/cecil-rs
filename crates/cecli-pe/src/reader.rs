@@ -277,7 +277,12 @@ fn read_debug_header(
 
     r.seek(resolve_rva_offset(directory.virtual_address as u64, sections)?)?;
 
+    // The directory size is hostile: clamp the entry count both by the
+    // directory's own arithmetic and by the bytes actually left in the file
+    // (28 bytes per entry), so the capacity reservation cannot balloon.
     let count = (directory.size as usize) / ImageDebugDirectory::SIZE;
+    let remaining = r.bytes().len().saturating_sub(r.position());
+    let count = count.min(remaining / ImageDebugDirectory::SIZE + 1);
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         let d = ImageDebugDirectory {
@@ -292,13 +297,15 @@ fn read_debug_header(
         };
 
         // Entries without a backing payload keep empty data (Cecil behaves
-        // the same way).
+        // the same way). The payload extent is computed in u64 and range-
+        // checked so a hostile size/pointer pair can neither overflow the
+        // addition nor allocate past the file.
         let mut data = Vec::new();
         if d.pointer_to_raw_data > 0 && d.size_of_data > 0 {
             let start = d.pointer_to_raw_data as usize;
-            let end = start + d.size_of_data as usize;
-            if end <= file_len {
-                data = raw_slice(r, start, end).to_vec();
+            let end = start as u64 + d.size_of_data as u64;
+            if end <= file_len as u64 {
+                data = raw_slice(r, start, end as usize).to_vec();
             }
         }
         entries.push(ImageDebugEntry { directory: d, data });

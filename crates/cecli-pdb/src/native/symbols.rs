@@ -240,7 +240,10 @@ impl<'a> BitReader<'a> {
     }
 
     fn align(&mut self, boundary: usize) {
-        self.pos = self.pos.div_ceil(boundary) * boundary;
+        // Saturate at the end of the buffer: aligning past the last record
+        // of a region must leave the reader empty, not past-the-end (a
+        // later remaining() would underflow and panic).
+        self.pos = (self.pos.div_ceil(boundary) * boundary).min(self.data.len());
     }
 
     /// Advance past a NUL-terminated UTF-8 string, returning it decoded.

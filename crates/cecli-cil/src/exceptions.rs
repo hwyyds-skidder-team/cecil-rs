@@ -180,12 +180,19 @@ pub fn requires_fat_section(handlers: &[ExceptionHandler], force_fat: bool) -> b
     if force_fat || handlers.len() >= 0x15 {
         return true;
     }
+    // Negative offsets/lengths fail the small-clause range check below but
+    // are NOT "> MAX"; the fat form writes them as raw i32 so the model
+    // stays encodable (and round-trips byte-exactly).
     handlers.iter().any(|h| {
-        h.try_start > u16::MAX as i32
+        h.try_start < 0
+            || h.try_start > u16::MAX as i32
+            || h.try_length < 0
             || h.try_length > u8::MAX as i32
+            || h.handler_start < 0
             || h.handler_start > u16::MAX as i32
+            || h.handler_length < 0
             || h.handler_length > u8::MAX as i32
-            || h.filter_start.is_some_and(|f| f > u16::MAX as i32)
+            || h.filter_start.is_some_and(|f| f < 0 || f > u16::MAX as i32)
     })
 }
 

@@ -722,10 +722,12 @@ impl TokenMap<'_> {
         match ty {
             TypeDesc::Def(id) => Ok(Self::rid_of(&self.state.borrow().type_rows, id.0) << shift),
             TypeDesc::External(_) => Ok((self.intern_external(ty, m)? << shift) | 1),
-            TypeDesc::GenericInstance { .. } => {
-                Ok((self.intern_type_spec(ty, m)? << shift) | 4) // TypeSpec tag
-            }
-            _ => Err(Error::argument(format!("unsupported MemberRefParent shape {ty:?}"))),
+            // Any other shape (generic instances, arrays/pointers, or
+            // primitive INTERNAL forms a hostile TypeSpec blob decoded to)
+            // is interned as a TypeSpec row — MemberRefParent's tag 4 slot
+            // accepts exactly that, and write_type_element can encode every
+            // TypeDesc shape.
+            _ => Ok((self.intern_type_spec(ty, m)? << shift) | 4),
         }
     }
 }

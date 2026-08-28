@@ -11,3 +11,4 @@ fuzz/Cargo.lock
 
 # criterion benchmark reports
 target/criterion
+tmp/

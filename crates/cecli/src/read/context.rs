@@ -367,7 +367,10 @@ impl ReadContext {
         }
         let arity = r.compressed_u32()?;
         let sctx = CtxSigContext { ctx: self, md };
-        let mut arguments = Vec::with_capacity(arity as usize);
+        // Every argument costs at least one blob byte, so the remaining
+        // length bounds a sane allocation; a hostile arity would otherwise
+        // pre-allocate gigabytes before the first truncated read fails.
+        let mut arguments = Vec::with_capacity((arity as usize).min(r.remaining() + 1));
         for _ in 0..arity {
             let (ty, consumed) = parse_type_element(blob, r.position(), &sctx, 0, false)?;
             r.seek(r.position() + consumed)?;
