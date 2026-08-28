@@ -91,6 +91,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cecli-cli"
+version = "0.1.0"
+dependencies = [
+ "cecli",
+ "cecli-cil",
+ "cecli-core",
+]
+
+[[package]]
 name = "cecli-core"
 version = "0.1.0"
 dependencies = [

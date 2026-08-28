@@ -1,0 +1,15 @@
+[package]
+name = "cecli-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cecli"
+path = "src/main.rs"
+
+[dependencies]
+cecli.workspace = true
+cecli-core.workspace = true
+cecli-cil.workspace = true

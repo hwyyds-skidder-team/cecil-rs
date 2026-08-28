@@ -32,6 +32,7 @@ asm.write_file("patched.dll")?;
 | `cecli-pdb` | Portable PDB(文档/序列点/作用域)+ 原生 PDB(MSF 容器 + CodeView 符号/行号,只读) |
 | `cecli-mdb` | Mono MDB 符号格式读写 |
 | `cecli-rocks` | 原 Mono.Cecil.Rocks 全部扩展的 trait 形式(GetAllTypes、GetEnumUnderlyingType、IL 校验、DocCommentId 等) |
+| `cecli-cli` | `cecli` 命令行工具(inspect / dump / verify / roundtrip / diff) |
 
 ## 能力概览
 
@@ -65,6 +66,20 @@ asm.write_file("patched.dll")?;
   直接在 `write` 流程内完成签名目录预留 + 公钥替换 + 签名(启用
   `strongname` feature)
 
+### 超越 Cecil 的能力(上游没有)
+
+- **反向引用索引**(`index::ReferenceIndex`):一次构建,常数时间回答
+  "谁引用了这个类型/方法/字段"(指令操作数、成员签名、类型头全覆盖)
+- **控制流图**(`flow::Cfg`):基本块、支配树、自然循环检测——Cecil.FX
+  的 FlowAnalysis 2009 年弃坑,混淆器/反编译器至今各自手搓
+- **求值栈模拟**(`flow::recompute_max_stack`):ECMA III.1.7.5 精确
+  max_stack 重算(兼做方法体校验器),经全部 86 个夹具、3715 个方法体
+  与镜像存储值逐一比对验证
+- **语义 diff**(`diff::diff`):类型/成员/IL 三层对齐的差异报告,布局
+  变化(堆顺序、时间戳)不产生噪音
+- **CLI 工具**(`cargo run -p cecli-cli`):`inspect` / `dump --il` /
+  `verify` / `roundtrip` / `diff` 五个子命令
+
 ## 与 Mono.Cecil 的 API 差异
 
 能力面对齐(经逐文件审计核对),使用模型重新设计为 Rust 惯用风格:
@@ -80,7 +95,7 @@ asm.write_file("patched.dll")?;
 ## 测试
 
 ```sh
-cargo test --workspace          # 385 个测试,含真实程序集夹具的读→写→重读等价套件
+cargo test --workspace          # 405 个测试,含真实程序集夹具的读→写→重读等价套件
 cargo test -p cecli --features strongname   # 强名签名套件(含 write 集成签名)
 ```
 

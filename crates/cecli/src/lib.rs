@@ -170,6 +170,9 @@
 //! | Module | Role |
 //! |---|---|
 //! | [`model`] | Frozen data model: types, signatures, attributes, marshal specs |
+//! | [`index`] | Reverse reference index ("who uses this type/method/field?") |
+//! | [`flow`] | CFG (blocks/dominators/loops) + max-stack recomputation |
+//! | [`diff`] | Semantic assembly diff |
 //! | [`module_def`] | [`Module`] arenas, debug info, resources |
 //! | [`assembly`] | The [`AssemblyDefinition`] facade: read/write entry points |
 //! | [`read`] / [`write` module][crate::write] | PE + metadata conversion layers |
@@ -186,6 +189,7 @@
 //! `cecli-rocks` (reflection extension traits).
 
 pub mod assembly;
+pub mod diff;
 pub mod edit;
 pub mod flow;
 pub mod importer;
