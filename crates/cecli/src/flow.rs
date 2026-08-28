@@ -29,6 +29,14 @@ pub struct BasicBlock {
 }
 
 /// Control-flow graph of one method body.
+///
+/// The graph models NORMAL control flow only: branch/switch/fall-through
+/// edges. Exception dispatch (try region -> handler) is deliberately NOT an
+/// edge — the CLR clears the evaluation stack before entering a handler, so
+/// a throwing instruction's normal-flow depth must not propagate into the
+/// handler ([`Cfg::build`] explains the max-stack consequence). Handler
+/// reachability is carried by [`Self::handler_entries`] instead, which the
+/// stack simulation seeds independently.
 #[derive(Debug, Clone)]
 pub struct Cfg {
     /// Blocks in ascending offset order; block 0 is the entry block.
@@ -37,8 +45,11 @@ pub struct Cfg {
     pub succs: Vec<Vec<usize>>,
     /// Predecessor block indices per block (sorted, deduplicated).
     pub preds: Vec<Vec<usize>>,
-    /// Exception-handler entry blocks (catch/filter/finally/fault) with
-    /// their entry stack depth (1 for catch/filter, 0 for finally/fault).
+    /// Exception-handler entry blocks with their entry stack depth:
+    /// catch and filter handlers enter with the exception object on the
+    /// stack (depth 1), finally/fault handlers enter empty (depth 0). A
+    /// filter has TWO runtime entries — FilterStart and HandlerStart — both
+    /// at depth 1, so it can appear twice.
     pub handler_entries: Vec<(usize, u16)>,
 }
 
@@ -243,11 +254,18 @@ impl Cfg {
         Ok(Cfg { blocks, succs, preds, handler_entries })
     }
 
-    /// Immediate dominator per block (block 0 dominates everything; the
-    /// entry's own idom is `None` via `usize::MAX`). Cooper-Harvey-Kennedy
-    /// iterative algorithm over reverse postorder; exception edges are
-    /// included, so handler blocks are dominated only by the entry —
-    /// conservative and correct for dominance queries.
+    /// Immediate dominator per block over the NORMAL-FLOW graph, computed
+    /// with the Cooper-Harvey-Kennedy iterative algorithm over reverse
+    /// postorder. Block 0 dominates everything; the entry's own idom is
+    /// the `usize::MAX` sentinel.
+    ///
+    /// Because exception edges are deliberately absent (see [`Cfg::build`]),
+    /// blocks reachable only through exception dispatch — handler entries
+    /// and their bodies, unless some ordinary branch also targets them —
+    /// have no immediate dominator (`usize::MAX`): they are unreachable in
+    /// normal flow. This is the intended model for dominance/loop queries;
+    /// stack simulation handles handlers through
+    /// [`handler_entries`](Cfg::handler_entries) seeds instead.
     pub fn immediate_dominators(&self) -> Vec<usize> {
         let n = self.blocks.len();
         let mut idom = vec![usize::MAX; n];
@@ -337,7 +355,15 @@ impl Cfg {
         loops
     }
 
-    /// Reverse postorder of reachable blocks from the entry block (block 0).
+    /// Reverse postorder of the blocks REACHABLE FROM THE ENTRY (block 0)
+    /// over normal-flow edges. Exception-only blocks (handler entries and
+    /// their bodies, unless some ordinary branch also targets them) are
+    /// absent — with them, a multi-seed walk put an exception-only block
+    /// at the front of the "reverse postorder", breaking the entry
+    /// assumption of [`Self::immediate_dominators`].
+    ///
+    /// Callers that need to visit every block regardless of reachability
+    /// should iterate `self.blocks` directly.
     pub fn reverse_postorder(&self) -> Vec<usize> {
         let mut visited = vec![false; self.blocks.len()];
         let mut post = Vec::new();
@@ -345,24 +371,19 @@ impl Cfg {
             return post;
         }
         // Iterative DFS to avoid deep recursion on huge bodies.
-        for seed in 0..self.blocks.len() {
-            if visited[seed] {
-                continue;
-            }
-            visited[seed] = true;
-            let mut stack = vec![(seed, 0usize)];
-            while let Some(&mut (b, ref mut next)) = stack.last_mut() {
-                if *next < self.succs[b].len() {
-                    let s = self.succs[b][*next];
-                    *next += 1;
-                    if !visited[s] {
-                        visited[s] = true;
-                        stack.push((s, 0));
-                    }
-                } else {
-                    post.push(b);
-                    stack.pop();
+        visited[0] = true;
+        let mut stack = vec![(0usize, 0usize)];
+        while let Some(&mut (b, ref mut next)) = stack.last_mut() {
+            if *next < self.succs[b].len() {
+                let s = self.succs[b][*next];
+                *next += 1;
+                if !visited[s] {
+                    visited[s] = true;
+                    stack.push((s, 0));
                 }
+            } else {
+                post.push(b);
+                stack.pop();
             }
         }
         post.reverse();
@@ -894,5 +915,92 @@ mod fixture_tests {
             mismatches.len(),
             mismatches.join("\n")
         );
+    }
+}
+
+#[cfg(test)]
+mod dominance_tests {
+    use super::*;
+    use crate::model::types::{ExceptionHandlerIL, ExceptionKind, RInstruction, ROperand};
+    use cecli_cil::opcodes;
+
+    fn ins(offset: i32, opcode: cecli_cil::OpCode, operand: ROperand) -> RInstruction {
+        RInstruction { offset, opcode, operand }
+    }
+
+    /// A try/catch whose handler is reachable ONLY through exception
+    /// dispatch: with exception edges deliberately absent, the handler
+    /// block has no immediate dominator (normal-flow unreachable), while
+    /// still appearing in the reverse postorder and in handler_entries.
+    #[test]
+    fn exception_only_handler_is_not_dominated() {
+        let body = ResolvedBody {
+            max_stack: 1,
+            instructions: vec![
+                ins(0, opcodes::NOP, ROperand::None),
+                ins(1, opcodes::LDC_I4_1, ROperand::None),
+                ins(2, opcodes::POP, ROperand::None),
+                ins(3, opcodes::NOP, ROperand::None),
+                ins(4, opcodes::LEAVE_S, ROperand::Branch(8)), // try end
+                ins(6, opcodes::LEAVE_S, ROperand::Branch(8)), // handler
+                ins(8, opcodes::RET, ROperand::None),
+            ],
+            exception_handlers: vec![ExceptionHandlerIL {
+                kind: ExceptionKind::Catch,
+                try_offset: 0,
+                try_length: 6,
+                filter_offset: 0,
+                handler_offset: 6,
+                handler_length: 2,
+                catch_type: Some(crate::model::types::TypeDesc::Internal("object".into())),
+            }],
+            ..Default::default()
+        };
+
+        let cfg = Cfg::build(&body).unwrap();
+        // Blocks: [0..4], [6], [8]. Handler block index = 1.
+        let handler = 1usize;
+        // The handler is seeded with catch depth 1.
+        assert!(
+            cfg.handler_entries.iter().any(|&(b, d)| b == handler && d == 1),
+            "catch entry seeded at depth 1: {:?}",
+            cfg.handler_entries
+        );
+        // No normal-flow predecessors.
+        assert!(cfg.preds[handler].is_empty(), "no exception edges in preds");
+
+        let idom = cfg.immediate_dominators();
+        assert_eq!(idom[handler], usize::MAX, "exception-only block is not dominated");
+        // The join block after both leaves IS dominated by the entry block.
+        assert_eq!(idom[0], 0, "entry dominates itself");
+        assert_eq!(idom[2], 0, "join block dominated by the entry");
+        // Entry-only RPO does NOT contain the exception-only handler block
+        // (it is reachable solely through exception dispatch).
+        assert!(!cfg.reverse_postorder().contains(&handler));
+    }
+
+    /// Diamond: both arms are dominated by the entry; the join is dominated
+    /// by the entry too (either arm can reach it), not by an arm.
+    #[test]
+    fn dominators_of_a_diamond() {
+        let body = ResolvedBody {
+            max_stack: 1,
+            instructions: vec![
+                ins(0, opcodes::LDC_I4_0, ROperand::None),
+                ins(1, opcodes::BRTRUE_S, ROperand::Branch(5)),
+                ins(3, opcodes::NOP, ROperand::None),
+                ins(4, opcodes::BR_S, ROperand::Branch(6)),
+                ins(5, opcodes::NOP, ROperand::None),
+                ins(6, opcodes::RET, ROperand::None),
+            ],
+            ..Default::default()
+        };
+        let cfg = Cfg::build(&body).unwrap();
+        // Blocks by start offset: 0, 3, 5, 6 -> indices 0,1,2,3.
+        let idom = cfg.immediate_dominators();
+        assert_eq!(idom[0], 0);
+        assert_eq!(idom[1], 0, "arm A dominated by entry");
+        assert_eq!(idom[2], 0, "arm B dominated by entry");
+        assert_eq!(idom[3], 0, "join dominated by entry");
     }
 }
