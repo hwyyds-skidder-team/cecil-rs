@@ -70,8 +70,9 @@ fn operand_matches(opcode: OpCode, operand: &ROperand) -> bool {
                 ShortInlineVar | InlineVar | ShortInlineArg | InlineArg,
                 ROperand::Var(_)
             )
-            // calli: StandAloneSig token (GetCallSite in C#).
-            | (InlineSig, ROperand::Token(_))
+            // calli: typed CallSite signature, or the raw StandAloneSig token
+            // fallback (GetCallSite in C#).
+            | (InlineSig, ROperand::CallSite(_) | ROperand::Token(_))
             | (InlineType, ROperand::Type(_) | ROperand::Token(_))
             | (InlineMethod, ROperand::Method(_) | ROperand::Token(_))
             // `ldsflda`/field RVA forms may keep the raw address.

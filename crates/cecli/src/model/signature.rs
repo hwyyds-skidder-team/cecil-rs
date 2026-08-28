@@ -111,8 +111,9 @@ const ET_ARRAY: u8 = ElementType::Array as u8;
 const ET_TYPED_BYREF: u8 = ElementType::TypedByRef as u8;
 
 /// Canonical ILAsm-style names used for [`TypeDesc::Internal`] encodings of
-/// element-type primitives.
-fn primitive_code(name: &str) -> Option<u8> {
+/// element-type primitives. Shared with [`crate::type_system`] so the core
+/// type helpers stay in sync with the encoder's element table.
+pub(crate) fn primitive_code(name: &str) -> Option<u8> {
     Some(match name {
         "void" => ET_VOID,
         "bool" => 0x02,

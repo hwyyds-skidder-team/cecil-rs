@@ -195,9 +195,10 @@ pub mod resolution;
 pub mod resolver;
 pub mod strongname;
 pub mod type_parser;
+pub mod type_system;
 pub mod winrt;
 pub mod write;
 
-pub use assembly::AssemblyDefinition;
+pub use assembly::{write_module, write_module_with, AssemblyDefinition};
 pub use model::types::{EventId, FieldId, GenericParamId, MethodId, PropertyId, TypeId};
 pub use module_def::{ExportedImpl, ExportedTypeRow, FileRow, Module, Resource};

@@ -209,6 +209,11 @@ pub fn emit_metadata_with(
     let name_idx = tmap.builder().insert_string(&m.name);
     let mvid_idx = tmap.builder().insert_guid(&m.guid);
     tmap.builder().add_row(TableIndex::Module, &[0, name_idx as u64, mvid_idx as u64, 0, 0])?;
+    // Module-parented custom attributes (`HasCustomAttribute` tag 0x00);
+    // Cecil emits these in `BuildModule` right after the Module row.
+    for ca in &m.custom_attributes {
+        add_custom_attribute(&mut tmap, m, TableIndex::Module, 1, ca, &mut sorted)?;
+    }
 
     // -- Assembly row (§22.5): skipped for netmodules even when a name is
     // supplied, matching `MetadataBuilder.BuildModule` in Mono.Cecil.
@@ -388,10 +393,22 @@ pub fn emit_metadata_with(
             next_method_rid = next_method_rid.max(last.0 + 2);
         }
 
-        // InterfaceImpl rows (§22.20).
+        // InterfaceImpl rows (§22.20) with their parented custom attributes.
         for iface in &td.interfaces {
-            let cell = tmap.tdor_cell(iface, m)?;
-            tmap.builder().add_row(TableIndex::InterfaceImpl, &[type_rid as u64, cell as u64])?;
+            let cell = tmap.tdor_cell(&iface.interface, m)?;
+            let irid = tmap
+                .builder()
+                .add_row(TableIndex::InterfaceImpl, &[type_rid as u64, cell as u64])?;
+            for ca in &iface.custom_attributes {
+                add_custom_attribute(
+                    &mut tmap,
+                    m,
+                    TableIndex::InterfaceImpl,
+                    irid,
+                    ca,
+                    &mut sorted,
+                )?;
+            }
         }
 
         // ClassLayout row (§22.9).
@@ -744,9 +761,20 @@ pub fn emit_metadata_with(
             &[gp.position as u64, gp.attributes.bits() as u64, owner_cell, gname as u64],
         )?;
         for c in &gp.constraints {
-            let cell = tmap.tdor_cell(c, m)?;
-            tmap.builder()
+            let cell = tmap.tdor_cell(&c.constraint, m)?;
+            let crid = tmap
+                .builder()
                 .add_row(TableIndex::GenericParamConstraint, &[grid as u64, cell as u64])?;
+            for ca in &c.custom_attributes {
+                add_custom_attribute(
+                    &mut tmap,
+                    m,
+                    TableIndex::GenericParamConstraint,
+                    crid,
+                    ca,
+                    &mut sorted,
+                )?;
+            }
         }
         for ca in &gp.custom_attributes {
             add_custom_attribute(&mut tmap, m, TableIndex::GenericParam, grid, ca, &mut sorted)?;

@@ -94,6 +94,65 @@ impl<'a> ResolutionEngine<'a> {
         }
     }
 
+    /// Creates an engine over `primary` that also reads referenced
+    /// assemblies on demand through `loader` (the facade's
+    /// [`crate::assembly::AssemblyDefinition::resolve_type_with`] entry
+    /// point).
+    pub fn with_primary_and_loader(
+        primary: &'a Module,
+        loader: Box<dyn AssemblyBytesLoader + 'a>,
+    ) -> Self {
+        ResolutionEngine {
+            primary,
+            cache: Vec::new(),
+            cache_refs: Vec::new(),
+            loader: Some(loader),
+        }
+    }
+
+    /// Caches an already-parsed module under `name` (used to match
+    /// `OtherModule` scopes of the primary assembly's satellite netmodules;
+    /// Cecil looks them up in `AssemblyDefinition.Modules`).
+    pub fn push_cached_module(&mut self, name: String, module: Module) {
+        self.cache_refs.push(crate::model::types::AssemblyNameReference::new(&name));
+        self.cache.push(module);
+    }
+
+    /// Creates an engine over `primary` whose referenced assemblies are the
+    /// given raw images, pre-parsed and cached up front (no loader; scopes
+    /// that match none of them stay unresolved).
+    ///
+    /// This is the write-side classification entry point: the facade hands
+    /// [`crate::assembly::WriteParameters::reference_images`] through here so
+    /// external types get Cecil-accurate `CLASS`/`VALUETYPE` markers instead
+    /// of the token-map heuristic.
+    pub fn with_reference_images(primary: &'a Module, images: &[Vec<u8>]) -> Result<Self> {
+        let mut engine = ResolutionEngine::new(primary);
+        for image in images {
+            engine.preload_image(image)?;
+        }
+        Ok(engine)
+    }
+
+    /// Parses one dependency image and caches its main module, keyed by the
+    /// assembly name the image declares (used for later scope matching).
+    pub fn preload_image(&mut self, image: &[u8]) -> Result<()> {
+        let assembly = crate::assembly::AssemblyDefinition::read(image)?;
+        let n = &assembly.name;
+        self.cache_refs.push(crate::model::types::AssemblyNameReference {
+            name: n.name.clone(),
+            version: n.version,
+            culture: n.culture.clone(),
+            public_key_or_token: n.public_key.clone(),
+            hash: n.hash.clone(),
+            hash_algorithm: n.hash_algorithm,
+            attributes: n.attributes,
+            custom_attributes: Vec::new(),
+        });
+        self.cache.push(assembly.main);
+        Ok(())
+    }
+
     /// Every module loaded through the loader so far, in load order.
     ///
     /// Module-space index of `loaded_modules()[i]` is `i + 1`.
@@ -482,6 +541,56 @@ static DEAD_PRIMARY: std::sync::LazyLock<Module> = std::sync::LazyLock::new(Modu
 
 fn dead_primary() -> &'static Module {
     &DEAD_PRIMARY
+}
+
+/// [`AssemblyBytesLoader`] backed by a [`crate::resolver::DefaultAssemblyResolver`]:
+/// a reference's image is located on disk (search directories + extensions,
+/// version-aware) and read. This is the adapter that turns the disk resolver
+/// into the engine's on-demand loader.
+pub struct DirectoryLoader {
+    resolver: crate::resolver::DefaultAssemblyResolver,
+}
+
+impl DirectoryLoader {
+    /// Searches the resolver's default directories plus `CECLI_PATH`-style
+    /// environment paths (see [`crate::resolver::DefaultAssemblyResolver::new`]).
+    pub fn new() -> Self {
+        DirectoryLoader { resolver: crate::resolver::DefaultAssemblyResolver::new() }
+    }
+
+    /// Searches only the given directories, in order.
+    pub fn with_directories<P: AsRef<std::path::Path>>(dirs: &[P]) -> Self {
+        let mut resolver = crate::resolver::DefaultAssemblyResolver::new();
+        for d in dirs {
+            resolver.add_search_directory(d);
+        }
+        DirectoryLoader { resolver }
+    }
+}
+
+impl Default for DirectoryLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+use crate::resolver::AssemblyResolver;
+
+impl AssemblyBytesLoader for DirectoryLoader {
+    fn load(
+        &mut self,
+        reference: &crate::model::types::AssemblyNameReference,
+    ) -> Result<Option<Cow<'_, [u8]>>> {
+        match self.resolver.resolve(reference) {
+            Ok(path) => match std::fs::read(&path) {
+                Ok(bytes) => Ok(Some(Cow::Owned(bytes))),
+                Err(e) => Err(Error::Io(e)),
+            },
+            // Not found on disk: unavailable, not an error (the engine then
+            // reports the scope as unresolved).
+            Err(_) => Ok(None),
+        }
+    }
 }
 
 /// Full name of a base-type reference when it is spelled externally

@@ -5,6 +5,7 @@
 
 pub mod custom_attribute;
 pub mod marshal;
+pub mod removal;
 pub mod security;
 pub mod signature;
 pub mod types;

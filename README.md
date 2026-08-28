@@ -37,6 +37,17 @@ asm.write_file("patched.dll")?;
 
 - 读 → 检查 → 改 → 写完整闭环;未触碰的镜像可字节级直通;Win32 资源与 PE
   debug 目录在读时保留、写时原样重发(RVA 重定位)
+- 运行时增删:`add_type/add_method/...` 与 `remove_type/remove_method/...`
+  (eager compaction,全模型句柄重映射)
+- 引用解析:`AssemblyDefinition::resolve_type_with`(Cecil
+  `TypeReference.Resolve` 对应物,经 `AssemblyBytesLoader` 按需加载依赖,
+  `DirectoryLoader` 为磁盘实现);`WriteParameters::reference_images` 驱动
+  写侧外部值类型的精确 CLASS/VALUETYPE 分类
+- `calli` 的 CallSite 类型化签名(`ROperand::CallSite`,Cecil `CallSite`
+  对应物);独立 netmodule 写出(`write_module`);核心类型辅助
+  (`type_system` 模块,Cecil `TypeSystem` 对应物);Module/InterfaceImpl/
+  GenericParamConstraint 三处 custom attribute 读写;写侧 PE 时间戳与
+  确定性 MVID
 - 泛型实例 / vararg / 函数指针 / 自定义修饰符等全部签名字形
 - 自定义特性:构造函数签名驱动的真实镜像解码 + 类型化参数视图
 - 方法体编辑:`BodyEditor`(插入/替换/删除/发射辅助)、`simplify_macros` / `optimize_macros` / `renumber`
@@ -63,7 +74,7 @@ asm.write_file("patched.dll")?;
 ## 测试
 
 ```sh
-cargo test --workspace          # 364 个测试,含真实程序集夹具的读→写→重读等价套件
+cargo test --workspace          # 385 个测试,含真实程序集夹具的读→写→重读等价套件
 cargo test -p cecli --features strongname   # 强名签名套件(含 write 集成签名)
 ```
 

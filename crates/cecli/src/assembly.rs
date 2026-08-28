@@ -212,6 +212,67 @@ impl AssemblyDefinition {
         Ok(AssemblyDefinition { name, main: module, modules, entry_point })
     }
 
+    /// Resolves a type reference against this assembly and its dependencies
+    /// (Cecil `TypeReference.Resolve`). Dependencies are located through
+    /// `loader` — see [`crate::resolution::DirectoryLoader`] for the
+    /// disk-backed default — and cached per call.
+    ///
+    /// Returns `Ok(None)` when the reference names nothing reachable.
+    pub fn resolve_type_with<'a>(
+        &'a self,
+        loader: Box<dyn crate::resolution::AssemblyBytesLoader + 'a>,
+        ty: &TypeDesc,
+    ) -> Result<Option<crate::resolution::ResolvedType>> {
+        let mut engine = self.resolution_engine(loader);
+        engine.resolve_type(ty)
+    }
+
+    /// Resolves a method reference (Cecil `MethodReference.Resolve`); see
+    /// [`Self::resolve_type_with`].
+    pub fn resolve_method_with<'a>(
+        &'a self,
+        loader: Box<dyn crate::resolution::AssemblyBytesLoader + 'a>,
+        r: &MethodRef,
+    ) -> Result<Option<(usize, MethodId)>> {
+        let mut engine = self.resolution_engine(loader);
+        engine.resolve_method(r)
+    }
+
+    /// Resolves a field reference (Cecil `FieldReference.Resolve`); see
+    /// [`Self::resolve_type_with`].
+    pub fn resolve_field_with<'a>(
+        &'a self,
+        loader: Box<dyn crate::resolution::AssemblyBytesLoader + 'a>,
+        r: &FieldRef,
+    ) -> Result<Option<(usize, FieldId)>> {
+        let mut engine = self.resolution_engine(loader);
+        engine.resolve_field(r)
+    }
+
+    /// Disk-backed convenience for [`Self::resolve_type_with`]: dependencies
+    /// are searched through the default resolver paths.
+    pub fn resolve_type_on_disk(
+        &self,
+        ty: &TypeDesc,
+    ) -> Result<Option<crate::resolution::ResolvedType>> {
+        self.resolve_type_with(Box::new(crate::resolution::DirectoryLoader::new()), ty)
+    }
+
+    /// Builds a resolution engine over the manifest module with the
+    /// satellite netmodules (already read into [`Self::modules`]) preloaded,
+    /// so `OtherModule` scopes resolve without disk access.
+    fn resolution_engine<'a>(
+        &'a self,
+        loader: Box<dyn crate::resolution::AssemblyBytesLoader + 'a>,
+    ) -> crate::resolution::ResolutionEngine<'a> {
+        let mut engine =
+            crate::resolution::ResolutionEngine::with_primary_and_loader(&self.main, loader);
+        for m in &self.modules {
+            engine.push_cached_module(m.name.clone(), m.clone());
+        }
+        engine
+    }
+
     /// The manifest module.
     pub fn main_module(&self) -> &Module {
         &self.main
@@ -253,6 +314,60 @@ impl AssemblyDefinition {
             }
         }
         s
+    }
+
+    /// Removes a type (with its nested subtree and members) from the main
+    /// module. See [`Module::remove_type`] for the handle-invalidation and
+    /// dangling-reference policies; the assembly entry point and
+    /// assembly-level custom attributes are fixed up along the way.
+    pub fn remove_type(&mut self, id: TypeId) {
+        let maps = self.main.remove_type_mapped(id);
+        self.fixup_after_removal(&maps);
+    }
+
+    /// Removes a method from the main module; see [`Self::remove_type`].
+    pub fn remove_method(&mut self, id: MethodId) {
+        let maps = self.main.remove_method_mapped(id);
+        self.fixup_after_removal(&maps);
+    }
+
+    /// Removes a field from the main module; see [`Self::remove_type`].
+    pub fn remove_field(&mut self, id: FieldId) {
+        let maps = self.main.remove_field_mapped(id);
+        self.fixup_after_removal(&maps);
+    }
+
+    /// Removes a property from the main module; see [`Self::remove_type`].
+    pub fn remove_property(&mut self, id: PropertyId) {
+        let maps = self.main.remove_property_mapped(id);
+        self.fixup_after_removal(&maps);
+    }
+
+    /// Removes an event from the main module; see [`Self::remove_type`].
+    pub fn remove_event(&mut self, id: EventId) {
+        let maps = self.main.remove_event_mapped(id);
+        self.fixup_after_removal(&maps);
+    }
+
+    /// Applies post-compaction fixups to assembly-level state that lives
+    /// outside the module: the entry-point handle and the assembly name's
+    /// custom attributes.
+    fn fixup_after_removal(&mut self, maps: &crate::model::removal::ArenaMaps) {
+        if let Some(ep) = self.entry_point {
+            self.entry_point = maps.methods.get(ep.0).map(MethodId);
+        }
+        for ca in self.name.custom_attributes.iter_mut() {
+            if let MethodRef::Def(id) = &mut ca.constructor {
+                if let Some(n) = maps.methods.get(id.0) {
+                    id.0 = n;
+                }
+                // Dangling ctor: drop the attribute below.
+            }
+        }
+        self.name.custom_attributes.retain(|ca| match &ca.constructor {
+            MethodRef::Def(id) => (id.0 as usize) < self.main.methods.len(),
+            _ => true,
+        });
     }
 }
 
@@ -601,6 +716,26 @@ pub struct WriteParameters {
     /// public key, and — with the `strongname` feature enabled — the
     /// finished image is signed. Without the feature a key is rejected.
     pub strong_name_key: Option<Vec<u8>>,
+    /// Raw PE/CLI images of referenced assemblies (Cecil resolves these
+    /// through the module's `MetadataResolver` at write time). They drive
+    /// `CLASS`/`VALUETYPE` classification of external types during signature
+    /// encoding, replacing the token map's well-known-`System` heuristic:
+    /// user-defined external structs/enums get the correct marker instead of
+    /// being misclassified as classes. Classification falls back to the
+    /// heuristic for scopes not covered by any supplied image.
+    pub reference_images: Vec<Vec<u8>>,
+    /// PE file-header `TimeDateStamp` override (Cecil
+    /// `WriterParameters.Timestamp`). `None` keeps whatever the canonical
+    /// rebuild preserves from the carrier image.
+    pub timestamp: Option<u32>,
+    /// Derive the Module row's MVID from the emitted content instead of the
+    /// model's `Module::guid` (Cecil `WriterParameters.DeterministicMvid`),
+    /// so identical content writes byte-identical images even when the
+    /// source models carried different MVIDs: the metadata root is hashed
+    /// (dual-seed 64-bit FNV-1a, vs Cecil's SHA-1 over the image) with the
+    /// MVID slot zeroed, and the hash becomes the new RFC 4122 version-4
+    /// GUID.
+    pub deterministic_mvid: bool,
 }
 
 impl WriteParameters {
@@ -630,6 +765,14 @@ impl AssemblyDefinition {
     /// With [`WriteParameters::strong_name_key`] set, the assembly's public
     /// key is taken from the key, a signature slot is reserved, and (with
     /// the `strongname` feature) the emitted image is signed in place.
+    ///
+    /// With [`WriteParameters::timestamp`] set, the value lands in the PE
+    /// file header's `TimeDateStamp`. With
+    /// [`WriteParameters::deterministic_mvid`] set, the Module row's MVID is
+    /// replaced by a GUID derived from the emitted metadata (see
+    /// `make_mvid_deterministic` for the algorithm) before the image is
+    /// assembled; the PDB sidecar from [`Self::write_file_with`] keeps the
+    /// model's original MVID.
     pub fn write_with(&self, opts: &WriteParameters) -> Result<Vec<u8>> {
         let module = &self.main;
 
@@ -665,100 +808,17 @@ impl AssemblyDefinition {
         };
         let strongname_size = strong_name_signature_size(&effective_name, module);
 
-        // 1. Managed resources blob. Offsets become ManifestResource.Offset
-        //    columns; bytes fill the CLI-header Resources directory.
-        let resources = crate::write::resources::build_resources_blob(&module.resources)?;
-
-        // 2. Text-layout prefix, mirroring ImageWriter::emit_rebuild (same
-        //    segment order, same alignments). The Code segment base is fixed
-        //    by the two segments before it, so bodies get their final RVAs
-        //    before any metadata exists; the Data segment base additionally
-        //    depends on the real code + resources lengths and is therefore
-        //    computed below, once both blobs are complete.
-        let pe64 = arch_is_pe64(module.architecture);
-        let has_reloc = module.architecture == cecli_core::flags::TargetArchitecture::I386;
-        let mut map = cecli_pe::TextMap::default();
-        map.add(cecli_pe::TextSegment::ImportAddressTable, if has_reloc { 8 } else { 0 });
-        map.add(cecli_pe::TextSegment::CliHeader, CLI_HEADER_CB);
-        map.add_aligned(
-            cecli_pe::TextSegment::Code,
-            0, // length unknown yet; only the aligned start matters here
-            if pe64 { 16 } else { 4 },
-        );
-        let code_segment_rva = u64::from(map.get_rva(cecli_pe::TextSegment::Code));
-
-        // 3. Encode IL bodies through a shared TokenMap so user strings,
-        //    locals signatures, and member refs land in the heaps before the
-        //    table rows serialize. Fat bodies are 4-aligned like Cecil's
-        //    CodeWriter; tiny bodies are padded too (documented deviation:
-        //    harmless zero padding instead of replicating the tiny/fat size
-        //    heuristic outside encode_body).
-        let mut builder = cecli_metadata::MetadataBuilder::new(&module.runtime_version);
-        let mut code = cecli_core::io::ByteWriter::new();
-        let mut method_rvas: Vec<(crate::model::types::MethodId, u64)> = Vec::new();
-        let emitted = {
-            let mut tmap = crate::write::token_map::TokenMap::new(&mut builder);
-            for (id, m) in module.iter_methods() {
-                let Some(body) = m.body.as_ref() else {
-                    continue;
-                };
-                code.align(4);
-                let start = code.position();
-                crate::write::emit_il::encode_body(
-                    body,
-                    &mut tmap,
-                    module,
-                    &mut code,
-                    &module.sas_blobs,
-                )?;
-                method_rvas.push((id, code_segment_rva + start as u64));
-            }
-
-            // Data segment base: everything before it now has real lengths.
-            map.add_aligned(cecli_pe::TextSegment::Code, code.len(), if pe64 { 16 } else { 4 });
-            map.add_aligned(cecli_pe::TextSegment::Resources, resources.bytes.len(), 8);
-            map.add_aligned(cecli_pe::TextSegment::Data, 0, 8);
-
-            // 4. Serialize metadata with real RVAs / resource offsets. The
-            //    token map's pending rows share one rid space with the tables
-            //    emitted here; the version string comes from the module.
-            let layout = crate::write::emit_metadata::EmitLayout {
-                method_rvas,
-                resource_offsets: resources.offsets.iter().map(|&o| o as u32).collect(),
-                data_segment_rva: u64::from(map.get_rva(cecli_pe::TextSegment::Data)),
-            };
-            crate::write::emit_metadata::emit_metadata_with(
-                module,
-                Some(&effective_name),
-                self.entry_point,
-                &layout,
-                tmap,
-            )?
-        };
-
-        // 5. Rebuild the PE image. Identity fields travel through a minimal
-        //    carrier image; the Win32 resources and debug directory captured
-        //    at read time ride along in the parts (their RVAs/addresses are
-        //    recomputed by the PE writer).
-        let parts = cecli_pe::EmitParts {
-            code: code.into_vec(),
-            resources: resources.bytes,
-            data: emitted.data,
-            data_alignment: None,
-            metadata: emitted.root,
-            strongname_size,
-            win32_resources: module.win32_resources.as_ref().map(|r| r.bytes.clone()),
-            debug_entries: module.debug_entries.clone(),
-            // A7-F2: take the token from the metadata emission (resolved via
-            // `entry`), not the stale read-time `module.entry_point_token`.
-            entry_point_token: emitted.entry_point_token,
-        };
-        let carrier = carrier_image(module)?;
         #[allow(unused_mut)] // signed in place under the strongname feature
-        let mut image = cecli_pe::ImageWriter::rebuild(&carrier, parts).emit()?;
+        let mut image = write_module_image(
+            module,
+            Some(&effective_name),
+            self.entry_point,
+            opts,
+            strongname_size,
+        )?;
 
-        // 6. Strong-name sign the finished image in place (Cecil calls
-        //    CryptoService.StrongName right after ImageWriter.WriteImage).
+        // Strong-name sign the finished image in place (Cecil calls
+        // CryptoService.StrongName right after ImageWriter.WriteImage).
         #[cfg(feature = "strongname")]
         if let Some(kp) = &key_pair {
             kp.sign_image(&mut image)
@@ -797,6 +857,191 @@ impl AssemblyDefinition {
     pub fn write_file<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
         self.write_file_with(path, &WriteParameters::default())
     }
+}
+
+/// Shared module serialization pipeline behind
+/// [`AssemblyDefinition::write_with`] and [`write_module_with`].
+///
+/// `asm_name` follows Cecil `ModuleWriter.Write`'s rule (`AssemblyWriter.cs`:
+/// `module.assembly != null && module.kind != ModuleKind.NetModule ? … :
+/// null`): `None` — or a [`ModuleKind::NetModule`] target — suppresses the
+/// `Assembly` row and every assembly-parented table, producing a standalone
+/// netmodule image. `strongname_size` reserves the signature slot (0 for
+/// netmodules); signing itself is the caller's job.
+fn write_module_image(
+    module: &Module,
+    asm_name: Option<&AssemblyNameDefinition>,
+    entry_point: Option<MethodId>,
+    opts: &WriteParameters,
+    strongname_size: u32,
+) -> Result<Vec<u8>> {
+    // 1. Managed resources blob. Offsets become ManifestResource.Offset
+    //    columns; bytes fill the CLI-header Resources directory.
+    let resources = crate::write::resources::build_resources_blob(&module.resources)?;
+
+    // 2. Text-layout prefix, mirroring ImageWriter::emit_rebuild (same
+    //    segment order, same alignments). The Code segment base is fixed
+    //    by the two segments before it, so bodies get their final RVAs
+    //    before any metadata exists; the Data segment base additionally
+    //    depends on the real code + resources lengths and is therefore
+    //    computed below, once both blobs are complete.
+    let pe64 = arch_is_pe64(module.architecture);
+    let has_reloc = module.architecture == cecli_core::flags::TargetArchitecture::I386;
+    let mut map = cecli_pe::TextMap::default();
+    map.add(cecli_pe::TextSegment::ImportAddressTable, if has_reloc { 8 } else { 0 });
+    map.add(cecli_pe::TextSegment::CliHeader, CLI_HEADER_CB);
+    map.add_aligned(
+        cecli_pe::TextSegment::Code,
+        0, // length unknown yet; only the aligned start matters here
+        if pe64 { 16 } else { 4 },
+    );
+    let code_segment_rva = u64::from(map.get_rva(cecli_pe::TextSegment::Code));
+
+    // 3. Encode IL bodies through a shared TokenMap so user strings,
+    //    locals signatures, and member refs land in the heaps before the
+    //    table rows serialize. Fat bodies are 4-aligned like Cecil's
+    //    CodeWriter; tiny bodies are padded too (documented deviation:
+    //    harmless zero padding instead of replicating the tiny/fat size
+    //    heuristic outside encode_body).
+    let mut builder = cecli_metadata::MetadataBuilder::new(&module.runtime_version);
+    let mut code = cecli_core::io::ByteWriter::new();
+    let mut method_rvas: Vec<(crate::model::types::MethodId, u64)> = Vec::new();
+    let mut emitted = {
+        let mut tmap = crate::write::token_map::TokenMap::new(&mut builder);
+
+        // Value-type classification of external types: with reference
+        // images, classify by resolving each external type in them
+        // (Cecil semantics, via the read-side MetadataResolver port);
+        // results are memoized per external shape. Without images (or
+        // for scopes they do not cover) the token map's documented
+        // heuristic applies.
+        if !opts.reference_images.is_empty() {
+            let engine = std::cell::RefCell::new(
+                crate::resolution::ResolutionEngine::with_reference_images(
+                    module,
+                    &opts.reference_images,
+                )?,
+            );
+            let mut cache = std::collections::HashMap::<String, bool>::new();
+            tmap.set_external_classifier(Box::new(move |ext| {
+                let key = external_cache_key(ext);
+                if let Some(&known) = cache.get(&key) {
+                    return Ok(Some(known));
+                }
+                let ty = TypeDesc::External(Box::new(ext.clone()));
+                let classified = match engine.borrow_mut().is_value_type(&ty) {
+                    Ok(v) => v,
+                    Err(_) => return Ok(None), // unresolved scope: heuristic
+                };
+                cache.insert(key, classified);
+                Ok(Some(classified))
+            }));
+        }
+
+        for (id, m) in module.iter_methods() {
+            let Some(body) = m.body.as_ref() else {
+                continue;
+            };
+            code.align(4);
+            let start = code.position();
+            crate::write::emit_il::encode_body(
+                body,
+                &mut tmap,
+                module,
+                &mut code,
+                &module.sas_blobs,
+            )?;
+            method_rvas.push((id, code_segment_rva + start as u64));
+        }
+
+        // Data segment base: everything before it now has real lengths.
+        map.add_aligned(cecli_pe::TextSegment::Code, code.len(), if pe64 { 16 } else { 4 });
+        map.add_aligned(cecli_pe::TextSegment::Resources, resources.bytes.len(), 8);
+        map.add_aligned(cecli_pe::TextSegment::Data, 0, 8);
+
+        // 4. Serialize metadata with real RVAs / resource offsets. The
+        //    token map's pending rows share one rid space with the tables
+        //    emitted here; the version string comes from the module.
+        let layout = crate::write::emit_metadata::EmitLayout {
+            method_rvas,
+            resource_offsets: resources.offsets.iter().map(|&o| o as u32).collect(),
+            data_segment_rva: u64::from(map.get_rva(cecli_pe::TextSegment::Data)),
+        };
+        crate::write::emit_metadata::emit_metadata_with(
+            module,
+            asm_name,
+            entry_point,
+            &layout,
+            tmap,
+        )?
+    };
+
+    // Deterministic MVID (Cecil `WriterParameters.DeterministicMvid` /
+    // `AssemblyWriter.ComputeDeterministicMvid`): replace the Module row's
+    // MVID — inherited from whatever the source model carried — with a GUID
+    // derived from the emitted metadata itself, so identical content yields
+    // identical output regardless of input MVIDs. Must run before the root
+    // is embedded in the PE image.
+    if opts.deterministic_mvid {
+        make_mvid_deterministic(&mut emitted.root, &module.guid);
+    }
+
+    // 5. Rebuild the PE image. Identity fields travel through a minimal
+    //    carrier image; the Win32 resources and debug directory captured
+    //    at read time ride along in the parts (their RVAs/addresses are
+    //    recomputed by the PE writer).
+    let parts = cecli_pe::EmitParts {
+        code: code.into_vec(),
+        resources: resources.bytes,
+        data: emitted.data,
+        data_alignment: None,
+        metadata: emitted.root,
+        strongname_size,
+        win32_resources: module.win32_resources.as_ref().map(|r| r.bytes.clone()),
+        debug_entries: module.debug_entries.clone(),
+        // A7-F2: take the token from the metadata emission (resolved via
+        // `entry`), not the stale read-time `module.entry_point_token`.
+        entry_point_token: emitted.entry_point_token,
+    };
+    let carrier = carrier_image(module)?;
+    let mut writer = cecli_pe::ImageWriter::rebuild(&carrier, parts);
+    // PE file-header TimeDateStamp override (Cecil `WriterParameters.Timestamp`).
+    if let Some(timestamp) = opts.timestamp {
+        writer.set_timestamp(timestamp);
+    }
+    writer.emit()
+}
+
+/// Serializes a standalone module (netmodule) into a complete PE32/PE32+
+/// image, honoring write parameters.
+///
+/// Port of `ModuleDefinition.Write(WriterParameters)` (Cecil routes it
+/// through `ModuleWriter.Write`, the same pipeline the assembly writer uses).
+/// Passing no assembly name suppresses the `Assembly` row and all
+/// assembly-parented tables, and no entry-point token is emitted, so the
+/// output is a netmodule even when `module.kind` is not
+/// [`cecli_core::flags::ModuleKind::NetModule`]. Win32 resources and the PE
+/// debug directory captured at read time follow the module.
+///
+/// Strong-name signing is assembly-level (Cecil's `ModuleWriter` only applies
+/// `WriterParameters.StrongNameKeyPair` when writing with an assembly name),
+/// so [`WriteParameters::strong_name_key`] is rejected here.
+pub fn write_module_with(module: &Module, opts: &WriteParameters) -> Result<Vec<u8>> {
+    if opts.strong_name_key.is_some() {
+        return Err(Error::Unsupported(
+            "strong-name signing applies to assemblies, not standalone modules".to_string(),
+        ));
+    }
+    write_module_image(module, None, None, opts, 0)
+}
+
+/// Serializes a standalone module (netmodule) with default write parameters.
+///
+/// Ergonomic alias for [`write_module_with`] with
+/// [`WriteParameters::default()`] (Cecil's parameterless
+/// `ModuleDefinition.Write()`).
+pub fn write_module(module: &Module) -> Result<Vec<u8>> {
+    write_module_with(module, &WriteParameters::default())
 }
 
 /// Serializes a module's debug information into standalone portable PDB bytes.
@@ -864,18 +1109,99 @@ fn arch_is_pe64(arch: cecli_core::flags::TargetArchitecture) -> bool {
     matches!(arch, A::AMD64 | A::IA64 | A::ARM64)
 }
 
+/// Identity key for memoizing value-type classification of one external
+/// type: scope identity plus the full (nested) name.
+fn external_cache_key(ext: &ExternalType) -> String {
+    let scope = match &ext.scope {
+        ScopeRef::Assembly(anr) => format!("asm:{}", anr.name),
+        ScopeRef::OtherModule(name) => format!("mod:{name}"),
+        ScopeRef::ThisModule => "this".to_string(),
+        ScopeRef::Moduleless => "none".to_string(),
+    };
+    let mut key = format!("{scope}:{}/{}", ext.namespace, ext.name);
+    for n in &ext.nesting {
+        key.push('/');
+        key.push_str(&n.name);
+    }
+    key
+}
+
 /// Signature-slot size for the emitted image (Cecil `ImageWriter`'s
-/// strong-name length rule): the RSA modulus size implied by the ECMA
-/// public key (`len - 32` of header), 128 for ECMA-key (flagged but
-/// keyless) assemblies, 0 when unsigned.
+/// `GetStrongNameLength`): the RSA modulus size implied by the ECMA public
+/// key (`len - 32` of header), 128 for short keys — including the 16-byte
+/// ECMA "key", which the runtime replaces with a 1024-bit key — and for
+/// flagged-but-keyless assemblies, 0 when unsigned.
 fn strong_name_signature_size(name: &AssemblyNameDefinition, module: &Module) -> u32 {
-    if !name.public_key.is_empty() {
-        (name.public_key.len().saturating_sub(32)) as u32
-    } else if module.attributes.contains(cecli_core::flags::ModuleAttributes::STRONG_NAME_SIGNED) {
+    if name.public_key.len() > 32 {
+        (name.public_key.len() - 32) as u32
+    } else if !name.public_key.is_empty()
+        || module.attributes.contains(cecli_core::flags::ModuleAttributes::STRONG_NAME_SIGNED)
+    {
         128
     } else {
         0
     }
+}
+
+/// Replaces the Module MVID inside a serialized metadata root with a GUID
+/// derived from the root's own content.
+///
+/// Port of `AssemblyWriter.ComputeDeterministicMvid` (Mono.Cecil): the MVID
+/// GUID is the first entry in the `#GUID` heap, so it can be located and
+/// rewritten in place without disturbing any row or offset. Cecil hashes the
+/// finished image — whose MVID and strong-name signature are zero at that
+/// point — with SHA-1 and shapes the leading hash bytes into an RFC 4122
+/// "random" GUID (`CryptoService.ComputeGuid`). Deviation: cecli hashes the
+/// serialized metadata root with the MVID's heap slot treated as zero, using
+/// a dual-seed 64-bit FNV-1a for 128 hash bits — `sha2` is only an optional
+/// dependency here, and the metadata root alone already pins every content
+/// byte the MVID can observe. The RFC 4122 shaping matches Cecil.
+///
+/// Silently leaves the root untouched when the `#GUID` heap or the MVID
+/// entry cannot be found (impossible for roots built by
+/// [`crate::write::emit_metadata`], which always inserts the module's guid
+/// first).
+fn make_mvid_deterministic(root: &mut [u8], original: &[u8; 16]) {
+    let Ok(header) = cecli_metadata::parse_root(root) else {
+        return;
+    };
+    let Some(guid_stream) = header.stream("#GUID") else {
+        return;
+    };
+    let Ok(heap) = cecli_metadata::stream_slice(root, guid_stream) else {
+        return;
+    };
+    // The MVID is the first guid inserted, so the first matching entry is
+    // its slot.
+    let (chunks, _) = heap.as_chunks::<16>();
+    let Some(slot) = chunks.iter().position(|entry| entry == original) else {
+        return;
+    };
+    let at = guid_stream.offset as usize + slot * 16;
+    if at + 16 > root.len() {
+        return;
+    }
+
+    // Hash the root as if the MVID slot were all zeroes; two independent
+    // FNV-1a seeds supply 128 bits.
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    fn fnv1a(bytes: &[u8], seed: u64) -> u64 {
+        let mut h = seed;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(FNV_PRIME);
+        }
+        h
+    }
+    let h1 = fnv1a(&root[at + 16..], fnv1a(&[0u8; 16], fnv1a(&root[..at], 0xcbf2_9ce4_8422_2325)));
+    let h2 = fnv1a(&root[at + 16..], fnv1a(&[0u8; 16], fnv1a(&root[..at], 0x9e37_79b9_7f4a_7c15)));
+
+    let mut guid = [0u8; 16];
+    guid[..8].copy_from_slice(&h1.to_le_bytes());
+    guid[8..].copy_from_slice(&h2.to_le_bytes());
+    guid[7] = (guid[7] & 0x0f) | 0x40; // RFC 4122 version 4 ("random")
+    guid[8] = (guid[8] & 0x3f) | 0x80; // RFC 4122 variant
+    root[at..at + 16].copy_from_slice(&guid);
 }
 
 /// Builds a minimal parseable PE/CLI image whose identity fields match
@@ -1212,6 +1538,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out_dir);
     }
 
+    /// Standalone module write (Cecil `ModuleDefinition.Write`): reading
+    /// moda.netmodule, serializing it through [`write_module`] and re-reading
+    /// preserves the module's shape, and the emitted metadata carries no
+    /// `Assembly` row.
+    #[test]
+    fn netmodule_write_module_roundtrip() {
+        let path = cecli_core::fixtures_dir().join("moda.netmodule");
+        if !path.exists() {
+            return; // fixture not provisioned on this checkout
+        }
+        let bytes = std::fs::read(&path).expect("netmodule readable");
+        let module = read_standalone_module(&bytes).expect("netmodule parses");
+        assert!(!module.types.is_empty(), "fixture carries types");
+        let type_count = module.types.len();
+        let method_count = module.methods.len();
+
+        let out = write_module(&module).expect("standalone module write");
+        let reread = read_standalone_module(&out).expect("rewritten netmodule parses");
+        assert_eq!(reread.types.len(), type_count, "type count preserved");
+        assert_eq!(reread.methods.len(), method_count, "method count preserved");
+
+        // No Assembly row in the emitted metadata (netmodule semantics).
+        let image = cecli_pe::Image::parse(&out).expect("emitted image parses");
+        let (md_rva, _) = image.metadata_rva().expect("metadata directory");
+        let md_slice = image.rva(md_rva).expect("metadata slice");
+        let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref()).expect("metadata parses");
+        assert_eq!(md.row_count(cecli_core::TableIndex::Assembly), 0, "no Assembly row");
+
+        // A strong-name key is rejected for standalone modules.
+        let err = write_module_with(
+            &module,
+            &WriteParameters { strong_name_key: Some(vec![1, 2, 3]), ..Default::default() },
+        );
+        assert!(err.is_err(), "strong-name key rejected for netmodule");
+    }
+
     /// Fresh modules default to Cecil's ImageWriter DLL characteristics.
     #[test]
     fn fresh_module_default_characteristics() {
@@ -1374,5 +1736,264 @@ mod tests {
         let opts = WriteParameters { strong_name_key: Some(vec![1u8; 16]), ..Default::default() };
         let err = ad.write_with(&opts).expect_err("key without feature must fail");
         assert!(err.to_string().contains("strongname"), "error names the feature: {err}");
+    }
+
+    /// Cecil `ImageWriter.GetStrongNameLength` boundaries: keys longer than
+    /// 32 bytes reserve `len - 32`, any shorter key (including the 16-byte
+    /// ECMA "key") reserves the 128-byte default, and keyless unflagged
+    /// assemblies reserve nothing.
+    #[test]
+    fn strong_name_signature_size_matches_cecil_boundaries() {
+        let ad = sample_assembly();
+        let module = &ad.main;
+
+        let mut with_key = ad.name.clone();
+        with_key.public_key = vec![0u8; 94]; // 1024-bit key + 32-byte header
+        assert_eq!(strong_name_signature_size(&with_key, module), 62);
+
+        let mut ecma = ad.name.clone();
+        ecma.public_key = vec![0u8; 16]; // ECMA test "key"
+        assert_eq!(strong_name_signature_size(&ecma, module), 128);
+
+        let mut short = ad.name.clone();
+        short.public_key = vec![0u8; 32];
+        assert_eq!(
+            strong_name_signature_size(&short, module),
+            128,
+            "len == 32 is not a key with header"
+        );
+
+        let mut empty = ad.name.clone();
+        empty.public_key.clear();
+        assert_eq!(strong_name_signature_size(&empty, module), 0);
+    }
+
+    /// A short (ECMA-style) public key reserves the 128-byte default slot in
+    /// the emitted image, not a zero-length one.
+    #[test]
+    fn short_public_key_reserves_default_signature_slot() {
+        let mut ad = sample_assembly();
+        ad.name.public_key = vec![0xA5u8; 16]; // ECMA test key shape
+        let out = ad.write().expect("write succeeds");
+        let image = cecli_pe::Image::parse(&out).expect("output parses");
+        let header = image.cli_header();
+        assert_eq!(header.strong_name_size, 128, "default slot reserved");
+        assert_ne!(header.strong_name_rva, 0, "slot is placed in .text");
+    }
+
+    /// Cecil `WriterParameters.Timestamp` lands in the PE file header.
+    #[test]
+    fn write_parameters_timestamp_reaches_pe_header() {
+        let ad = sample_assembly();
+        let out = ad
+            .write_with(&WriteParameters { timestamp: Some(0x5E12_3456), ..Default::default() })
+            .expect("write succeeds");
+        let image = cecli_pe::Image::parse(&out).expect("output parses");
+        assert_eq!(image.timestamp, 0x5E12_3456, "TimeDateStamp override applied");
+    }
+
+    /// Cecil `WriterParameters.DeterministicMvid`: identical content written
+    /// from models carrying different MVIDs produces byte-identical images,
+    /// with an MVID derived from neither input; without the flag the input
+    /// GUIDs survive.
+    #[test]
+    fn deterministic_mvid_erases_input_guid_differences() {
+        let mut a = sample_assembly();
+        let mut b = sample_assembly();
+        a.main.guid = [0x11u8; 16];
+        b.main.guid = [0x22u8; 16];
+
+        let opts = WriteParameters { deterministic_mvid: true, ..Default::default() };
+        let out_a = a.write_with(&opts).expect("write a");
+        let out_b = b.write_with(&opts).expect("write b");
+        assert_eq!(out_a, out_b, "content-derived MVID erases input GUID differences");
+
+        // Without the flag the differing GUIDs survive into the output.
+        assert_ne!(a.write().expect("plain a"), b.write().expect("plain b"));
+
+        // The derived MVID is neither input value and the image re-parses.
+        let re = AssemblyDefinition::read(&out_a).expect("deterministic output re-parses");
+        assert_ne!(re.main.guid, [0x11u8; 16]);
+        assert_ne!(re.main.guid, [0x22u8; 16]);
+    }
+
+    /// External value-type classification: `WriteParameters::reference_images`
+    /// replaces the well-known-`System` heuristic, so user-defined external
+    /// structs get the correct `VALUETYPE` marker instead of `CLASS`.
+    #[test]
+    fn reference_images_drive_value_type_classification() {
+        use crate::model::types::{FieldDefinition, FieldSignature, ScopeRef, TypeDefinition};
+
+        let external = |ns: &str, name: &str, asm: &str| {
+            TypeDesc::External(Box::new(ExternalType {
+                namespace: ns.into(),
+                name: name.into(),
+                nesting: Vec::new(),
+                scope: if asm.is_empty() {
+                    ScopeRef::ThisModule
+                } else {
+                    ScopeRef::Assembly(crate::model::types::AssemblyNameReference::new(asm))
+                },
+            }))
+        };
+
+        // Dependency image: assembly "dep" defining Ns.MyStruct : System.ValueType.
+        let mut dep = Module {
+            name: "dep".into(),
+            runtime_version: "v4.0.30319".into(),
+            ..Default::default()
+        };
+        dep.assembly_refs.push(crate::model::types::AssemblyNameReference::new("mscorlib"));
+        dep.add_type(TypeDefinition {
+            namespace: "Ns".into(),
+            name: "MyStruct".into(),
+            base_type: Some(external("System", "ValueType", "mscorlib")),
+            ..Default::default()
+        });
+        let dep_asm = AssemblyDefinition {
+            name: AssemblyNameDefinition { name: "dep".into(), ..Default::default() },
+            main: dep,
+            ..Default::default()
+        };
+        let dep_bytes = dep_asm.write().expect("dependency writes");
+
+        // Main image: one field of type external Ns.MyStruct scoped to dep.
+        let mut main = Module {
+            name: "main".into(),
+            runtime_version: "v4.0.30319".into(),
+            ..Default::default()
+        };
+        main.assembly_refs.push(crate::model::types::AssemblyNameReference::new("dep"));
+        let holder = main.add_type(TypeDefinition {
+            namespace: "M".into(),
+            name: "Holder".into(),
+            ..Default::default()
+        });
+        main.add_field(
+            holder,
+            FieldDefinition {
+                name: "f".into(),
+                signature: FieldSignature(external("Ns", "MyStruct", "dep")),
+                ..Default::default()
+            },
+        );
+        let main_asm = AssemblyDefinition {
+            name: AssemblyNameDefinition { name: "main".into(), ..Default::default() },
+            main,
+            ..Default::default()
+        };
+
+        // Heuristic path: Ns.MyStruct is not a well-known System type, so it
+        // is misclassified as a class (the documented deviation).
+        let heuristic = main_asm.write().expect("heuristic write");
+        assert_eq!(field_sig_marker(&heuristic), Some(0x12), "heuristic writes CLASS");
+
+        // Reference-image path: resolved in dep -> VALUETYPE.
+        let classified = main_asm
+            .write_with(&WriteParameters {
+                reference_images: vec![dep_bytes],
+                ..Default::default()
+            })
+            .expect("classified write");
+        assert_eq!(field_sig_marker(&classified), Some(0x11), "resolution writes VALUETYPE");
+    }
+
+    /// Facade resolution (`resolve_type_with`, the Cecil
+    /// `TypeReference.Resolve` analog): an external type scoped to a
+    /// referenced assembly resolves into the dependency's module space.
+    #[test]
+    fn resolve_type_with_loads_dependency_through_loader() {
+        use crate::model::types::{ScopeRef, TypeDefinition};
+        use crate::resolution::AssemblyBytesLoader;
+
+        // Dependency: assembly "dep" defining Ns.MyStruct : System.ValueType.
+        let mut dep = Module {
+            name: "dep".into(),
+            runtime_version: "v4.0.30319".into(),
+            ..Default::default()
+        };
+        dep.assembly_refs.push(crate::model::types::AssemblyNameReference::new("mscorlib"));
+        dep.add_type(TypeDefinition {
+            namespace: "Ns".into(),
+            name: "MyStruct".into(),
+            base_type: Some(TypeDesc::External(Box::new(ExternalType {
+                namespace: "System".into(),
+                name: "ValueType".into(),
+                nesting: Vec::new(),
+                scope: ScopeRef::Assembly(crate::model::types::AssemblyNameReference::new(
+                    "mscorlib",
+                )),
+            }))),
+            ..Default::default()
+        });
+        let dep_asm = AssemblyDefinition {
+            name: AssemblyNameDefinition { name: "dep".into(), ..Default::default() },
+            main: dep,
+            ..Default::default()
+        };
+        let dep_bytes = std::rc::Rc::new(dep_asm.write().expect("dependency writes"));
+
+        // Main: empty module whose only content is the reference to resolve.
+        let mut main = Module {
+            name: "main".into(),
+            runtime_version: "v4.0.30319".into(),
+            ..Default::default()
+        };
+        main.assembly_refs.push(crate::model::types::AssemblyNameReference::new("dep"));
+        let main_asm = AssemblyDefinition {
+            name: AssemblyNameDefinition { name: "main".into(), ..Default::default() },
+            main,
+            ..Default::default()
+        };
+
+        // Loader hands dep's image for any "dep" reference.
+        struct DepLoader(std::rc::Rc<Vec<u8>>);
+        impl AssemblyBytesLoader for DepLoader {
+            fn load(
+                &mut self,
+                reference: &crate::model::types::AssemblyNameReference,
+            ) -> Result<Option<std::borrow::Cow<'_, [u8]>>> {
+                if reference.name == "dep" {
+                    Ok(Some(std::borrow::Cow::Owned(self.0.as_ref().clone())))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+
+        let target = TypeDesc::External(Box::new(ExternalType {
+            namespace: "Ns".into(),
+            name: "MyStruct".into(),
+            nesting: Vec::new(),
+            scope: ScopeRef::Assembly(crate::model::types::AssemblyNameReference::new("dep")),
+        }));
+        let resolved = main_asm
+            .resolve_type_with(Box::new(DepLoader(dep_bytes.clone())), &target)
+            .expect("resolve");
+        let rt = resolved.expect("MyStruct resolves");
+        assert_eq!(rt.module_index, 1, "found in the loaded dependency");
+
+        // Verify the resolved handle through an engine kept alive: the
+        // dependency's arena at that handle is Ns.MyStruct.
+        let mut engine = crate::resolution::ResolutionEngine::with_primary_and_loader(
+            &main_asm.main,
+            Box::new(DepLoader(dep_bytes)),
+        );
+        let rt = engine.resolve_type(&target).expect("resolve").expect("resolves");
+        let dep_module = &engine.loaded_modules()[rt.module_index - 1];
+        assert_eq!(dep_module.type_def(rt.id).namespace, "Ns");
+        assert_eq!(dep_module.type_def(rt.id).name, "MyStruct");
+    }
+
+    /// First element-type marker byte of Field row 1's signature blob in a
+    /// written image (`0x11` = VALUETYPE, `0x12` = CLASS).
+    fn field_sig_marker(image: &[u8]) -> Option<u8> {
+        let img = cecli_pe::Image::parse(image).ok()?;
+        let (rva, size) = img.metadata_rva().ok()?;
+        let root = img.rva(rva).ok()?;
+        let md = cecli_metadata::MetadataReader::parse(&root[..size.min(root.len())]).ok()?;
+        let blob_idx = md.column(cecli_core::TableIndex::Field, 1, 2).ok()? as u32;
+        let blob = md.heaps().blob.get(blob_idx).ok()?;
+        blob.get(1).copied()
     }
 }

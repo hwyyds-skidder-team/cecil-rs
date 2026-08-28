@@ -242,6 +242,15 @@ fn write_operand(
         (ROperand::Field(field), OperandType::InlineField | OperandType::InlineTok) => {
             out.u32(tmap.field_ref(field, m)?.0);
         }
+        // Typed call-site signature: encode through the token map's SigContext
+        // and dedupe into a StandAloneSig row of this module.
+        (ROperand::CallSite(sig), OperandType::InlineSig) => {
+            let blob = {
+                let ctx = tmap.encoder(m);
+                crate::model::signature::write_method_signature(sig, &ctx)?
+            };
+            out.u32(tmap.stand_alone_sig_blob(&blob).0);
+        }
         // `calli`: remap the read-time StandAloneSig rid through its captured
         // blob so the emitted token points at this module's deduped row;
         // unknown rids pass through unchanged (deferred-resolution policy).
@@ -729,6 +738,68 @@ mod tests {
         encode_body(&stale, &mut tmap, &m, &mut out2, &sas_blobs).expect("encode");
         let bytes2 = out2.into_vec();
         assert_eq!(&bytes2[2..6], &Token::new(TableIndex::StandAloneSig, 9).0.to_le_bytes());
+    }
+
+    /// Typed CallSite operand: the encoded token points at a deduplicated
+    /// StandAloneSig row whose blob decodes back to the same signature, and
+    /// the same row serves both a CallSite operand and the equivalent raw
+    /// blob (byte-identical dedup).
+    #[test]
+    fn calli_typed_callsite_encodes_deduped_row() {
+        let sig = MethodSignature {
+            has_this: false,
+            explicit_this: false,
+            convention: cecli_core::flags::SignatureCallingConvention::Default,
+            generic_count: 0,
+            parameters: vec![TypeDesc::Internal("int32".into())],
+            return_type: TypeDesc::Internal("void".into()),
+            vararg_start: 1,
+        };
+        let body = ResolvedBody {
+            instructions: vec![
+                instr(0, CALLI, ROperand::CallSite(Box::new(sig.clone()))),
+                instr(5, RET, ROperand::None),
+            ],
+            ..Default::default()
+        };
+
+        let mut builder = MetadataBuilder::new("v4.0.30319");
+        let mut tmap = TokenMap::new(&mut builder);
+        let m = Module::default();
+
+        let mut out = ByteWriter::new();
+        encode_body(&body, &mut tmap, &m, &mut out, &BTreeMap::new()).expect("encode");
+        let bytes = out.into_vec();
+        let token = Token(u32::from_le_bytes(bytes[2..6].try_into().unwrap()));
+        assert_eq!(token.table(), TableIndex::StandAloneSig);
+        assert_eq!(token.rid(), 1, "first SAS row");
+
+        // The typed encoding is byte-identical to the raw-blob path: a
+        // captured-blob calli carrying the same signature wire bytes dedups
+        // to the very same row.
+        let wire = [0x00u8, 0x01, 0x01, 0x08]; // DEFAULT, 1 param, ret void (ret precedes params)
+        let mut sas_blobs = BTreeMap::new();
+        sas_blobs.insert(7u32, wire.to_vec());
+        let raw_body = ResolvedBody {
+            instructions: vec![
+                instr(0, CALLI, ROperand::Token(Token::new(TableIndex::StandAloneSig, 7))),
+                instr(5, RET, ROperand::None),
+            ],
+            ..Default::default()
+        };
+        let mut out2 = ByteWriter::new();
+        encode_body(&raw_body, &mut tmap, &m, &mut out2, &sas_blobs).expect("raw encode");
+        let bytes2 = out2.into_vec();
+        let token2 = Token(u32::from_le_bytes(bytes2[2..6].try_into().unwrap()));
+        assert_eq!(token, token2, "typed and raw-blob encodings fold to one row");
+
+        // Encoding the same typed signature again dedupes too.
+        let mut out3 = ByteWriter::new();
+        encode_body(&body, &mut tmap, &m, &mut out3, &BTreeMap::new()).expect("re-encode");
+        let bytes3 = out3.into_vec();
+        let token3 = Token(u32::from_le_bytes(bytes3[2..6].try_into().unwrap()));
+        assert_eq!(token, token3, "identical signature dedupes");
+        let _ = sig;
     }
 
     /// Maps a resolved operand onto its decoded `cecli-cil` counterpart for

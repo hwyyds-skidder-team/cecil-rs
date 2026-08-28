@@ -47,8 +47,8 @@ use cecli_core::{Error, Result};
 use crate::model::substitution::substitute_signature;
 use crate::model::types::{
     AssemblyNameReference, CustomAttribute, ExternalMethod, ExternalType, FieldId, FieldRef,
-    MarshalInfo, MethodDefinition, MethodId, MethodOverride, MethodRef, MethodSignature,
-    NativeTypeSpec, ROperand, ScopeRef, TypeDesc, TypeId, Version,
+    InterfaceImpl, MarshalInfo, MethodDefinition, MethodId, MethodOverride, MethodRef,
+    MethodSignature, NativeTypeSpec, ROperand, ScopeRef, TypeDesc, TypeId, Version,
 };
 use crate::module_def::Module;
 
@@ -945,7 +945,10 @@ fn for_each_external(
                 walk_type_desc(b, f)?;
             }
             for it in &mut t.interfaces {
-                walk_type_desc(it, f)?;
+                walk_type_desc(&mut it.interface, f)?;
+                for a in &mut it.custom_attributes {
+                    walk_method_ref(&mut a.constructor, f)?;
+                }
             }
             for a in &mut t.custom_attributes {
                 walk_method_ref(&mut a.constructor, f)?;
@@ -1013,7 +1016,10 @@ fn for_each_external(
     }
     for g in &mut m.generic_parameters {
         for c in &mut g.constraints {
-            walk_type_desc(c, f)?;
+            walk_type_desc(&mut c.constraint, f)?;
+            for a in &mut c.custom_attributes {
+                walk_method_ref(&mut a.constructor, f)?;
+            }
         }
         for a in &mut g.custom_attributes {
             walk_method_ref(&mut a.constructor, f)?;
@@ -1245,14 +1251,15 @@ fn generate_redirection_information(
     refs: &HashMap<(String, String), TypeReferenceProjection>,
 ) -> Result<(TypeDefinitionTreatment, RedirectionPlan)> {
     let t = m.type_def(id);
-    let implements_projected = t.interfaces.iter().any(|it| is_redirected_type(it, refs));
+    let implements_projected =
+        t.interfaces.iter().any(|it| is_redirected_type(&it.interface, refs));
     if !implements_projected {
         return Ok((TypeDefinitionTreatment::NORMAL_TYPE, RedirectionPlan::none()));
     }
 
     // Transitive closure of the implemented redirected interfaces.
     let mut all_implemented: Vec<TypeDesc> = Vec::new();
-    for it in &t.interfaces {
+    for it in t.interfaces.iter().map(|i| &i.interface) {
         if is_redirected_type(it, refs) && !all_implemented.contains(it) {
             // The root itself belongs to the closure, like Cecil's
             // `allImplementedInterfaces.Add(interfaceType)`.
@@ -1263,7 +1270,7 @@ fn generate_redirection_information(
 
     // Build (projected, unprojected) interface pairs.
     let mut pairs = Vec::new();
-    for it in &t.interfaces {
+    for it in t.interfaces.iter().map(|i| &i.interface) {
         if is_redirected_type(it, refs) {
             let unprojected = unproject_type(it, refs).ok_or_else(|| {
                 Error::invalid_op("redirected interface lost its projection record")
@@ -1293,7 +1300,8 @@ fn collect_implemented_interfaces(
     results: &mut Vec<TypeDesc>,
 ) {
     let Some(id) = resolve_local_maybe_projected(m, td, refs) else { return };
-    let interfaces = m.type_def(id).interfaces.clone();
+    let interfaces: Vec<TypeDesc> =
+        m.type_def(id).interfaces.iter().map(|i| i.interface.clone()).collect();
     for it in &interfaces {
         // Resolve the interface reference against the declaring generic
         // context (`TypeResolver.Resolve`).
@@ -1483,7 +1491,7 @@ fn project_type_definition(m: &mut Module, id: TypeId, st: &mut ModuleProjection
                 t.attributes.insert(TypeAttributes::WINDOWS_RUNTIME | TypeAttributes::IMPORT);
                 for (_projected, unprojected) in &redirection.pairs {
                     // Add the unprojected interface duplicate.
-                    t.interfaces.push(unprojected.clone());
+                    t.interfaces.push(InterfaceImpl::from(unprojected.clone()));
                 }
             }
             // Rewire overrides pointing at the projected interface to the
@@ -1562,7 +1570,7 @@ fn remove_type_projection(m: &mut Module, id: TypeId, rec: &TypeDefinitionProjec
         }
         // Remove the unprojected interface entry (first structural match).
         let t = m.type_mut(id).unwrap();
-        if let Some(pos) = t.interfaces.iter().position(|i| i == unprojected) {
+        if let Some(pos) = t.interfaces.iter().position(|i| &i.interface == unprojected) {
             t.interfaces.remove(pos);
         }
     }
@@ -2044,7 +2052,7 @@ mod tests {
                 t.interfaces.len()
             ));
             for i in &t.interfaces {
-                out.push(format!("I {i:?}"));
+                out.push(format!("I {:?}", i.interface));
             }
             for mid in &t.methods {
                 let meth = m.method_def(*mid);
@@ -2457,7 +2465,7 @@ mod tests {
             ext("Windows.Foundation.Collections", "IIterable`1"),
             vec![ext("Fabrikam", "Thing")],
         );
-        cls.interfaces.push(iface_ref.clone());
+        cls.interfaces.push(InterfaceImpl::from(iface_ref.clone()));
         let wid = m.add_type(cls);
         let impl_id = add_method(
             &mut m,
@@ -2490,11 +2498,13 @@ mod tests {
         // Reference renamed everywhere; second entry is the fresh duplicate.
         let t = m.type_def(wid);
         assert_eq!(t.interfaces.len(), 2);
-        let TypeDesc::GenericInstance { definition, .. } = &t.interfaces[0] else { panic!() };
+        let TypeDesc::GenericInstance { definition, .. } = &t.interfaces[0].interface else {
+            panic!()
+        };
         let TypeDesc::External(e) = &**definition else { panic!() };
         assert_eq!(e.namespace, "System.Collections.Generic");
         assert_eq!(e.name, "IEnumerable`1");
-        assert_eq!(t.interfaces[1], iface_ref);
+        assert_eq!(t.interfaces[1].interface, iface_ref);
 
         // Existing implementation became private runtime icall.
         let impl_meth = m.method_def(impl_id);
@@ -2527,7 +2537,7 @@ mod tests {
         let MethodRef::External(decl) = &redirected.overrides[0].declaration else { panic!() };
         // Cecil resolves the overridden method against the *projected*
         // interface reference collected from type.Interfaces.
-        let projected_iface = m.type_def(wid).interfaces[0].clone();
+        let projected_iface = m.type_def(wid).interfaces[0].interface.clone();
         assert_eq!(decl.parent, projected_iface);
         // Substituted signature on the declaration too.
         assert_eq!(decl.signature.return_type, ext("Fabrikam", "Thing"));
@@ -2535,7 +2545,8 @@ mod tests {
         remove_projections(&mut m).unwrap();
 
         let t = m.type_def(wid);
-        assert_eq!(t.interfaces, vec![iface_ref.clone()]);
+        let iface_list: Vec<TypeDesc> = t.interfaces.iter().map(|i| i.interface.clone()).collect();
+        assert_eq!(iface_list, vec![iface_ref.clone()]);
         assert_eq!(t.methods, vec![impl_id]);
         let impl_meth = m.method_def(impl_id);
         assert!(!impl_meth.attributes.contains(MethodAttributes::PRIVATE));

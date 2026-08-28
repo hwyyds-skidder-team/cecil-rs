@@ -148,7 +148,7 @@ pub fn read_module(image: &cecli_pe::Image, opts: &ReadOptions) -> Result<(Modul
     attach_member_ranges(&mut module, &typedef_rows, &md);
     let param_owners = read_params(&mut module, &md)?;
     read_properties_events_semantics(&mut module, &ctx, &md)?;
-    read_generic_params(&mut module, &mut ctx, &md)?;
+    let constraint_owners = read_generic_params(&mut module, &mut ctx, &md)?;
 
     // TypeSpec / MemberRef rows eagerly decoded into the context in
     // deterministic table order so every cross-reference below resolves
@@ -156,7 +156,7 @@ pub fn read_module(image: &cecli_pe::Image, opts: &ReadOptions) -> Result<(Modul
     ctx.resolve_lazy_tables(&md)?;
 
     // ---- Cross-table attachments ---------------------------------------
-    read_base_types_and_interfaces(&mut module, &ctx, &md)?;
+    let interface_impl_owners = read_base_types_and_interfaces(&mut module, &ctx, &md)?;
     read_class_layouts(&mut module, &md)?;
     read_field_layouts(&mut module, &md)?;
     read_field_rvas(&mut module, image, &md)?;
@@ -175,7 +175,14 @@ pub fn read_module(image: &cecli_pe::Image, opts: &ReadOptions) -> Result<(Modul
         module.kind = ModuleKind::NetModule;
     }
     read_decl_security(&mut module, &mut ctx, &md)?;
-    read_custom_attributes(&mut module, &mut ctx, &md, &param_owners)?;
+    read_custom_attributes(
+        &mut module,
+        &mut ctx,
+        &md,
+        &param_owners,
+        &interface_impl_owners,
+        &constraint_owners,
+    )?;
     module.assembly_refs = ctx.asm_refs.clone();
     module.module_refs = ctx.mod_refs.clone();
     read_files_exported_types_resources(&mut module, &ctx, image, &md)?;
@@ -582,7 +589,7 @@ fn read_generic_params(
     module: &mut Module,
     ctx: &mut ReadContext,
     md: &MetadataReader,
-) -> Result<()> {
+) -> Result<Vec<Option<(usize, usize)>>> {
     let count = md.row_count(T::GenericParam);
     for rid in 1..=count {
         let number = cell_u16(md, T::GenericParam, rid, 0)?;
@@ -624,21 +631,26 @@ fn read_generic_params(
         ctx.gen_params.push(GenericParamId(rid - 1));
     }
 
-    // Constraints grouped by owner parameter.
+    // Constraints grouped by owner parameter. The row -> (generic parameter,
+    // constraint slot) map feeds the CustomAttribute pass, whose
+    // GenericParamConstraint-parented rows target the constraint row itself.
     let mut constraints: Vec<Vec<u32>> = vec![Vec::new(); count as usize];
+    let mut constraint_owners: Vec<Option<(usize, usize)>> =
+        vec![None; md.row_count(T::GenericParamConstraint) as usize];
     for rid in 1..=md.row_count(T::GenericParamConstraint) {
         let owner = cell_u32(md, T::GenericParamConstraint, rid, 0)? as usize;
         let constraint_cell = md.column(T::GenericParamConstraint, rid, 1)?;
         let slot = checked_slot(owner, constraints.len(), "GenericParamConstraint owner")?;
+        constraint_owners[rid as usize - 1] = Some((slot, constraints[slot].len()));
         constraints[slot].push(constraint_cell as u32);
     }
     for (i, cells) in constraints.iter().enumerate() {
         for cell_value in cells {
             let desc = ctx.tdor_to_typedesc(md, *cell_value)?;
-            module.generic_parameters[i].constraints.push(desc);
+            module.generic_parameters[i].constraints.push(GenericParamConstraint::from(desc));
         }
     }
-    Ok(())
+    Ok(constraint_owners)
 }
 
 // ---------------------------------------------------------------------------
@@ -649,7 +661,7 @@ fn read_base_types_and_interfaces(
     module: &mut Module,
     ctx: &ReadContext,
     md: &MetadataReader,
-) -> Result<()> {
+) -> Result<Vec<Option<(usize, usize)>>> {
     let count = md.row_count(T::TypeDef);
     for rid in 1..=count {
         let extends = md.column(T::TypeDef, rid, 3)?;
@@ -659,15 +671,20 @@ fn read_base_types_and_interfaces(
         }
     }
 
-    // InterfaceImpl rows are sorted by Class; group them in row order.
+    // InterfaceImpl rows are sorted by Class; group them in row order. The
+    // row -> (type, interface slot) map feeds the CustomAttribute pass, whose
+    // InterfaceImpl-parented rows target the implementation row itself.
+    let mut interface_owners: Vec<Option<(usize, usize)>> =
+        vec![None; md.row_count(T::InterfaceImpl) as usize];
     for rid in 1..=md.row_count(T::InterfaceImpl) {
         let class = cell_u32(md, T::InterfaceImpl, rid, 0)? as usize;
         let iface_cell = cell_u32(md, T::InterfaceImpl, rid, 1)?;
         let iface = ctx.tdor_to_typedesc(md, iface_cell)?;
         let slot = checked_slot(class, module.types.len(), "InterfaceImpl class")?;
-        module.types[slot].interfaces.push(iface);
+        interface_owners[rid as usize - 1] = Some((slot, module.types[slot].interfaces.len()));
+        module.types[slot].interfaces.push(InterfaceImpl::from(iface));
     }
-    Ok(())
+    Ok(interface_owners)
 }
 
 fn read_class_layouts(module: &mut Module, md: &MetadataReader) -> Result<()> {
@@ -969,15 +986,17 @@ fn attribute_ctor(ctx: &ReadContext, _md: &MetadataReader, ctor_cell: u64) -> Re
 
 /// Groups `CustomAttribute` rows by their `HasCustomAttribute` parent and
 /// pushes each instance into the owning entity. Assembly-parented rows are
-/// collected on [`AssemblyRowData::custom_attributes`]. Parents without a
-/// slot in the frozen model (TypeRef, InterfaceImpl, MemberRef, Module,
-/// DeclSecurity, StandAloneSig, ModuleRef, TypeSpec, File, ExportedType,
-/// ManifestResource, GenericParamConstraint, MethodSpec) are skipped.
+/// collected on [`AssemblyRowData::custom_attributes`], module-parented rows
+/// on [`Module::custom_attributes`]. Parents without a slot in the frozen
+/// model (TypeRef, MemberRef, DeclSecurity, StandAloneSig, ModuleRef,
+/// TypeSpec, File, ExportedType, ManifestResource, MethodSpec) are skipped.
 fn read_custom_attributes(
     module: &mut Module,
     ctx: &mut ReadContext,
     md: &MetadataReader,
     param_owners: &[Option<(MethodId, u16)>],
+    interface_impl_owners: &[Option<(usize, usize)>],
+    constraint_owners: &[Option<(usize, usize)>],
 ) -> Result<()> {
     for rid in 1..=md.row_count(T::CustomAttribute) {
         let parent_cell = md.column(T::CustomAttribute, rid, 0)?;
@@ -1032,6 +1051,48 @@ fn read_custom_attributes(
             T::GenericParam => {
                 let i = idx(module.generic_parameters.len())?;
                 module.generic_parameters[i].custom_attributes.push(attribute);
+            }
+            T::Module => {
+                // The Module table holds exactly one row; anything else is a
+                // malformed parent cell.
+                if target != 1 {
+                    return Err(bad(format!("CustomAttribute row {rid}: invalid Module parent")));
+                }
+                module.custom_attributes.push(attribute);
+            }
+            T::InterfaceImpl => {
+                let slot = checked_slot(
+                    target as usize,
+                    interface_impl_owners.len(),
+                    "CustomAttribute interface impl",
+                )?;
+                let Some((type_slot, iface_index)) = interface_impl_owners[slot] else {
+                    continue;
+                };
+                let Some(type_def) = module.types.get_mut(type_slot) else {
+                    continue;
+                };
+                match type_def.interfaces.get_mut(iface_index) {
+                    Some(implementation) => implementation.custom_attributes.push(attribute),
+                    None => continue,
+                }
+            }
+            T::GenericParamConstraint => {
+                let slot = checked_slot(
+                    target as usize,
+                    constraint_owners.len(),
+                    "CustomAttribute generic param constraint",
+                )?;
+                let Some((gp_slot, constraint_index)) = constraint_owners[slot] else {
+                    continue;
+                };
+                let Some(gp) = module.generic_parameters.get_mut(gp_slot) else {
+                    continue;
+                };
+                match gp.constraints.get_mut(constraint_index) {
+                    Some(constraint) => constraint.custom_attributes.push(attribute),
+                    None => continue,
+                }
             }
             T::AssemblyRef => {
                 let i = idx(ctx.asm_refs.len())?;
@@ -1452,5 +1513,146 @@ mod tests {
 
         let err = read_constants(&mut module, &md, &[]).expect_err("rid-0 parent must be rejected");
         assert!(err.to_string().contains("out of range"), "unexpected error: {err}");
+    }
+
+    /// Regression: the three formerly-unmodeled `HasCustomAttribute` parents
+    /// (Module tag 0x00, InterfaceImpl tag 0x05, GenericParamConstraint tag
+    /// 0x0d) must survive a full write -> read cycle. The synthetic module
+    /// carries one module-parented attribute, two attributes on an interface
+    /// implementation and one on a generic parameter constraint; the counts
+    /// must be identical after every re-read.
+    #[test]
+    fn unmodeled_ca_parents_survive_write_read_cycle() {
+        use crate::assembly::{AssemblyDefinition, AssemblyNameDefinition};
+
+        fn ext(ns: &str, name: &str) -> TypeDesc {
+            TypeDesc::External(Box::new(ExternalType {
+                namespace: ns.to_owned(),
+                name: name.to_owned(),
+                nesting: Vec::new(),
+                scope: ScopeRef::Moduleless,
+            }))
+        }
+
+        fn ctor_attr(ns: &str, name: &str) -> CustomAttribute {
+            CustomAttribute {
+                constructor: MethodRef::External(ExternalMethod {
+                    parent: ext(ns, name),
+                    name: ".ctor".to_owned(),
+                    signature: MethodSignature::default(),
+                }),
+                blob: vec![0x01, 0x00],
+            }
+        }
+
+        let mut m = Module {
+            name: "caparents".to_owned(),
+            custom_attributes: vec![ctor_attr(
+                "System.Runtime.CompilerServices",
+                "ReferenceAssemblyAttribute",
+            )],
+            ..Default::default()
+        };
+
+        let mut widget = TypeDefinition { name: "Widget".to_owned(), ..Default::default() };
+        widget.interfaces.push(InterfaceImpl {
+            interface: ext("System", "IDisposable"),
+            custom_attributes: vec![
+                ctor_attr("System.Runtime.InteropServices", "TypeIdentifierAttribute"),
+                ctor_attr("System", "ComVisibleAttribute"),
+            ],
+        });
+        let wid = m.add_type(widget);
+
+        m.add_generic_parameter(GenericParameter {
+            name: "T".to_owned(),
+            owner: GenericOwner::Type(wid),
+            constraints: vec![GenericParamConstraint {
+                constraint: ext("System", "ValueType"),
+                custom_attributes: vec![ctor_attr("System", "ObsoleteAttribute")],
+            }],
+            ..Default::default()
+        });
+
+        let mut ad = AssemblyDefinition {
+            name: AssemblyNameDefinition { name: "caparents".to_owned(), ..Default::default() },
+            main: m,
+            ..AssemblyDefinition::default()
+        };
+
+        // Two write -> read rounds: the first exercises the writer arms plus
+        // the reader arms against freshly emitted rows, the second proves the
+        // reparsed model re-emits byte-equivalent structures.
+        for round in 0..2 {
+            let written = ad.write().unwrap_or_else(|e| panic!("round {round}: write: {e:?}"));
+            let re = AssemblyDefinition::read(&written)
+                .unwrap_or_else(|e| panic!("round {round}: re-read: {e:?}"));
+
+            assert_eq!(re.main.custom_attributes.len(), 1, "round {round}: module CA count");
+            let ty = re.main.get_type("", "Widget").expect("round {round}: Widget survives");
+            assert_eq!(ty.interfaces.len(), 1, "round {round}: interface count");
+            assert_eq!(
+                ty.interfaces[0].custom_attributes.len(),
+                2,
+                "round {round}: interface impl CA count"
+            );
+            assert_eq!(re.main.generic_parameters.len(), 1, "round {round}: generic param count");
+            assert_eq!(
+                re.main.generic_parameters[0].constraints.len(),
+                1,
+                "round {round}: constraint count"
+            );
+            assert_eq!(
+                re.main.generic_parameters[0].constraints[0].custom_attributes.len(),
+                1,
+                "round {round}: constraint CA count"
+            );
+
+            ad = re;
+        }
+    }
+
+    /// Real-fixture ground truth for the three formerly-unmodeled CA parents:
+    /// `TypeDefinitionDebugInformation.dll` carries one Module-parented
+    /// attribute, `GenericParameterConstraintAttributes.dll` one attribute on
+    /// an interface implementation and one on a generic parameter constraint,
+    /// and the winmd fixtures carry several interface-implementation
+    /// attributes. Raw-table ground truth gathered with a scanner over the
+    /// fixture corpus; the sweep test proves they survive write -> re-parse.
+    #[test]
+    fn fixture_unmodeled_ca_parent_counts() {
+        let cases: [(&str, usize, usize, usize); 4] = [
+            // (file, module CAs, interface-impl CAs, constraint CAs)
+            ("TypeDefinitionDebugInformation.dll", 1, 0, 0),
+            ("GenericParameterConstraintAttributes.dll", 0, 1, 1),
+            ("ManagedWinmd.winmd", 0, 8, 0),
+            ("winrtcomp.winmd", 0, 2, 0),
+        ];
+        for (file, module_cas, iface_cas, constraint_cas) in cases {
+            let path = cecli_core::fixtures_dir().join(file);
+            if !path.exists() {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("reading fixture");
+            let image = cecli_pe::Image::parse(&bytes).expect("parsing PE image");
+            let opts = ReadOptions { load_bodies: false };
+            let (module, _ctx) = read_module(&image, &opts).expect("read_module");
+
+            assert_eq!(module.custom_attributes.len(), module_cas, "{file}: module CAs");
+            let interfaces: usize = module
+                .types
+                .iter()
+                .flat_map(|t| t.interfaces.iter())
+                .map(|i| i.custom_attributes.len())
+                .sum();
+            assert_eq!(interfaces, iface_cas, "{file}: interface-impl CAs");
+            let constraints: usize = module
+                .generic_parameters
+                .iter()
+                .flat_map(|g| g.constraints.iter())
+                .map(|c| c.custom_attributes.len())
+                .sum();
+            assert_eq!(constraints, constraint_cas, "{file}: constraint CAs");
+        }
     }
 }

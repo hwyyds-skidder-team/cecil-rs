@@ -51,6 +51,10 @@ use cecli_core::token::coded;
 use cecli_core::{ElementType, Error, Result, TableIndex, Token};
 
 use crate::model::signature::{write_method_signature, write_type_element, SigContext};
+
+/// Resolution-backed classifier hook: decides the `CLASS`/`VALUETYPE` marker
+/// of one external type; `Ok(None)` defers to the built-in heuristic.
+pub type ExternalClassifier<'b> = Box<dyn FnMut(&ExternalType) -> Result<Option<bool>> + 'b>;
 use crate::model::types::{
     ExternalType, FieldRef, LocalVariable, MethodRef, ScopeRef, TypeDesc, TypeId,
 };
@@ -218,13 +222,32 @@ fn is_hoistable(e: &TypeDesc) -> bool {
 pub struct TokenMap<'b> {
     builder: &'b mut MetadataBuilder,
     state: std::cell::RefCell<State>,
+    /// Optional resolution-based classifier for EXTERNAL types (see
+    /// [`TokenMap::set_external_classifier`]). `None` keeps the documented
+    /// well-known-System heuristic.
+    external_classifier: std::cell::RefCell<Option<ExternalClassifier<'b>>>,
 }
 
 impl<'b> TokenMap<'b> {
     /// Wraps `builder`; buffered rows drain back through
     /// [`TokenMap::into_parts`].
     pub fn new(builder: &'b mut MetadataBuilder) -> Self {
-        TokenMap { builder, state: std::cell::RefCell::new(State::default()) }
+        TokenMap {
+            builder,
+            state: std::cell::RefCell::new(State::default()),
+            external_classifier: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// Installs a classifier consulted before the built-in heuristic when an
+    /// EXTERNAL type needs a `CLASS`/`VALUETYPE` marker. Returning
+    /// `Ok(Some(bool))` decides the marker; `Ok(None)` or an error falls
+    /// back to the heuristic. This is the write-side hook for
+    /// [`crate::resolution::ResolutionEngine`]-backed classification
+    /// (Cecil resolves external value types through the module's
+    /// `MetadataResolver` while writing).
+    pub fn set_external_classifier(&self, classifier: ExternalClassifier<'b>) {
+        *self.external_classifier.borrow_mut() = Some(classifier);
     }
 
     /// Direct access for the metadata emitter to add its own rows
@@ -558,11 +581,20 @@ impl<'b> TokenMap<'b> {
     // -- classification ------------------------------------------------------
 
     /// Returns whether `ty` must be written with the `VALUETYPE` marker.
-    /// See the module-level deviation notes for the heuristic used.
+    /// External types consult the installed classifier first (see
+    /// [`TokenMap::set_external_classifier`]); without one the documented
+    /// heuristic applies.
     pub fn is_value_type(&self, ty: &TypeDesc, m: &Module) -> Result<bool> {
         match ty {
             TypeDesc::Def(id) => Ok(def_is_value_type(m, *id)),
-            TypeDesc::External(e) => Ok(external_is_value_type(e)),
+            TypeDesc::External(e) => {
+                if let Some(classifier) = self.external_classifier.borrow_mut().as_mut() {
+                    if let Some(classified) = classifier(e)? {
+                        return Ok(classified);
+                    }
+                }
+                Ok(external_is_value_type(e))
+            }
             TypeDesc::GenericInstance { definition, .. } => self.is_value_type(definition, m),
             _ => {
                 Err(Error::argument(format!("type shape {ty:?} carries no CLASS/VALUETYPE marker")))

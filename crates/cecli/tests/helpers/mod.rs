@@ -62,9 +62,10 @@ pub fn temp_output_dir(tag: &str) -> PathBuf {
 ///
 /// Scope note: custom attributes counted over every slot the frozen model
 /// keeps them on (types, methods incl. parameter slots, fields, properties,
-/// events, generic parameters, assembly references). Assembly- and
-/// module-level attribute rows have no home in the frozen model and are not
-/// counted.
+/// events, generic parameters, interface implementations, generic parameter
+/// constraints, module row, assembly references). Assembly-level attribute
+/// rows live on `AssemblyNameDefinition`, outside the module, and are not
+/// counted here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Counts {
     pub types: usize,
@@ -81,6 +82,9 @@ impl Counts {
         let mut custom_attributes = 0usize;
         for ty in &module.types {
             custom_attributes += ty.custom_attributes.len();
+            for iface in &ty.interfaces {
+                custom_attributes += iface.custom_attributes.len();
+            }
         }
         for m in &module.methods {
             custom_attributes += m.custom_attributes.len();
@@ -100,7 +104,11 @@ impl Counts {
         }
         for g in &module.generic_parameters {
             custom_attributes += g.custom_attributes.len();
+            for c in &g.constraints {
+                custom_attributes += c.custom_attributes.len();
+            }
         }
+        custom_attributes += module.custom_attributes.len();
         for r in &module.assembly_refs {
             custom_attributes += r.custom_attributes.len();
         }
@@ -164,6 +172,9 @@ pub fn collect_attribute_type_names(module: &Module) -> BTreeSet<String> {
     };
     for ty in &module.types {
         ty.custom_attributes.iter().for_each(&mut push);
+        for iface in &ty.interfaces {
+            iface.custom_attributes.iter().for_each(&mut push);
+        }
     }
     for m in &module.methods {
         m.custom_attributes.iter().for_each(&mut push);
@@ -183,7 +194,11 @@ pub fn collect_attribute_type_names(module: &Module) -> BTreeSet<String> {
     }
     for g in &module.generic_parameters {
         g.custom_attributes.iter().for_each(&mut push);
+        for c in &g.constraints {
+            c.custom_attributes.iter().for_each(&mut push);
+        }
     }
+    module.custom_attributes.iter().for_each(&mut push);
     for r in &module.assembly_refs {
         r.custom_attributes.iter().for_each(&mut push);
     }

@@ -22,6 +22,10 @@ pub struct Module {
     pub metadata_kind: cecli_core::flags::MetadataKind,
     /// Runtime version string as found in metadata (`v4.0.30319`).
     pub runtime_version: String,
+    /// Custom attributes parented to the `Module` row itself
+    /// (`HasCustomAttribute` tag 0x00), mirroring
+    /// `ModuleDefinition.CustomAttributes` in Mono.Cecil.
+    pub custom_attributes: Vec<CustomAttribute>,
 
     // Arenas. Indices are the handle values.
     pub types: Vec<TypeDefinition>,
@@ -88,6 +92,7 @@ impl Default for Module {
                 | cecli_core::flags::ModuleCharacteristics::HIGH_ENTROPY_VA,
             metadata_kind: cecli_core::flags::MetadataKind::Ecma335,
             runtime_version: String::new(),
+            custom_attributes: Vec::new(),
             types: Vec::new(),
             methods: Vec::new(),
             fields: Vec::new(),

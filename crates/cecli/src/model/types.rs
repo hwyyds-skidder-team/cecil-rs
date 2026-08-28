@@ -333,6 +333,41 @@ pub struct CustomAttribute {
     pub blob: Vec<u8>,
 }
 
+/// One `InterfaceImpl` row: the implemented interface plus the custom
+/// attributes parented to that row (`HasCustomAttribute` tag 0x05).
+/// Mono.Cecil models this as the standalone `InterfaceImplementation` object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InterfaceImpl {
+    /// Implemented interface (`TypeOrImplDef` cell of the row).
+    pub interface: TypeDesc,
+    /// Custom attributes attached to this specific implementation.
+    pub custom_attributes: Vec<CustomAttribute>,
+}
+
+impl From<TypeDesc> for InterfaceImpl {
+    fn from(interface: TypeDesc) -> Self {
+        InterfaceImpl { interface, custom_attributes: Vec::new() }
+    }
+}
+
+/// One `GenericParamConstraint` row: the constraint type plus the custom
+/// attributes parented to that row (`HasCustomAttribute` tag 0x0d).
+/// Mono.Cecil models this as the standalone `GenericParameterConstraint`
+/// object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericParamConstraint {
+    /// Constraint type (`TypeOrImplDef` cell of the row).
+    pub constraint: TypeDesc,
+    /// Custom attributes attached to this specific constraint.
+    pub custom_attributes: Vec<CustomAttribute>,
+}
+
+impl From<TypeDesc> for GenericParamConstraint {
+    fn from(constraint: TypeDesc) -> Self {
+        GenericParamConstraint { constraint, custom_attributes: Vec::new() }
+    }
+}
+
 /// Security declaration (`DeclSecurity` row).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SecurityDeclaration {
@@ -372,7 +407,7 @@ pub struct TypeDefinition {
     pub name: String,
     pub attributes: TypeAttributes,
     pub base_type: Option<TypeDesc>,
-    pub interfaces: Vec<TypeDesc>,
+    pub interfaces: Vec<InterfaceImpl>,
     pub declaring_type: Option<TypeId>,
     pub nested_types: Vec<TypeId>,
     pub fields: Vec<FieldId>,
@@ -568,7 +603,7 @@ pub struct GenericParameter {
     pub attributes: GenericParameterAttributes,
     pub position: u16,
     pub owner: GenericOwner,
-    pub constraints: Vec<TypeDesc>,
+    pub constraints: Vec<GenericParamConstraint>,
     pub custom_attributes: Vec<CustomAttribute>,
 }
 
@@ -631,6 +666,11 @@ pub enum ROperand {
     UserString(u32),
     /// Raw metadata token (kept when resolution is impossible).
     Token(Token),
+    /// Typed `calli` call-site signature (Cecil `CallSite`), parsed from the
+    /// instruction's `StandAloneSig` row at read time. Encoded back into a
+    /// deduplicated `StandAloneSig` row on write; unparseable signatures
+    /// keep the raw [`ROperand::Token`] fallback.
+    CallSite(Box<MethodSignature>),
     /// RVA-targeted load (`ldind`-style raw pointer operand).
     Rva(u64),
     /// Local variable index.

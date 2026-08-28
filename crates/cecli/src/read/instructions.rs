@@ -40,10 +40,10 @@ use cecli_core::{Error, Result, TableIndex, Token};
 use cecli_metadata::MetadataReader;
 use cecli_pe::Image;
 
-use crate::model::signature::parse_local_var_sig;
+use crate::model::signature::{parse_local_var_sig, parse_method_signature};
 use crate::model::types::{
     ExceptionHandlerIL, ExceptionKind, FieldRef, LocalVariable, MethodDefinition, MethodRef,
-    RInstruction, ROperand, ResolvedBody,
+    MethodSignature, RInstruction, ROperand, ResolvedBody,
 };
 use crate::read::context::{MemberRefRow, ReadContext};
 use crate::Module;
@@ -140,9 +140,16 @@ fn decode_resolved_body(
             | cecli_cil::OperandType::InlineField => {
                 resolve_token(ctx, md, token_of(&ins.operand), ins.opcode.operand_type)
             }
-            // `calli`: the StandAloneSig token stays raw; its blob bytes are
-            // captured by [`capture_sas_blobs`] for write-side remapping.
-            cecli_cil::OperandType::InlineSig => ROperand::Token(token_of(&ins.operand)),
+            // `calli`: the StandAloneSig row's blob is parsed into a typed
+            // CallSite signature (Cecil `CodeReader.GetCallSite`); rows that
+            // fail to parse keep the raw token (deferred-resolution policy).
+            cecli_cil::OperandType::InlineSig => {
+                let token = token_of(&ins.operand);
+                match call_site(ctx, md, token) {
+                    Ok(sig) => ROperand::CallSite(Box::new(sig)),
+                    Err(_) => ROperand::Token(token),
+                }
+            }
             cecli_cil::OperandType::InlineString => resolve_user_string(ctx, md, &ins.operand),
             _ => plain_operand(ins.operand),
         };
@@ -388,6 +395,23 @@ fn align4(value: usize) -> usize {
 /// re-emits these through its own deduplicated `StandAloneSig` rows; rids
 /// missing from [`ReadContext::stand_alone_sigs`] are skipped per the
 /// module-level deferred-resolution policy.
+/// Parses a `calli` instruction's StandAloneSig row into a typed method
+/// signature (the port of `CodeReader.GetCallSite`). Any failure — non-SAS
+/// table, out-of-range rid, unparseable blob — surfaces as `Err` and the
+/// caller keeps the raw token.
+fn call_site(ctx: &ReadContext, md: &MetadataReader<'_>, token: Token) -> Result<MethodSignature> {
+    if token.table_byte() != TableIndex::StandAloneSig as u8 || token.rid() == 0 {
+        return Err(Error::bad_image("calli token is not a StandAloneSig row"));
+    }
+    let rid = token.rid() as usize;
+    let blob = ctx
+        .stand_alone_sigs
+        .get(rid - 1)
+        .ok_or_else(|| Error::bad_image("calli StandAloneSig rid out of range"))?;
+    let sig_ctx = ctx.sig_context(md);
+    parse_method_signature(blob, &sig_ctx)
+}
+
 fn capture_sas_blobs(body: &ResolvedBody, ctx: &mut ReadContext) {
     for ins in &body.instructions {
         if ins.opcode.operand_type != cecli_cil::OperandType::InlineSig {
