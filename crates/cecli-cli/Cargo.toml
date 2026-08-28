@@ -8,6 +8,7 @@ license.workspace = true
 [[bin]]
 name = "cecli"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 cecli.workspace = true

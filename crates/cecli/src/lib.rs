@@ -170,7 +170,8 @@
 //! | Module | Role |
 //! |---|---|
 //! | [`model`] | Frozen data model: types, signatures, attributes, marshal specs |
-//! | [`index`] | Reverse reference index ("who uses this type/method/field?") |
+//! | [`index`] | Reverse reference index (kind-less projection over [`xref`]) |
+//! | [`xref`] | Bidirectional cross-references with usage kinds |
 //! | [`flow`] | CFG (blocks/dominators/loops) + max-stack recomputation |
 //! | [`diff`] | Semantic assembly diff |
 //! | [`module_def`] | [`Module`] arenas, debug info, resources |
@@ -204,6 +205,7 @@ pub mod type_parser;
 pub mod type_system;
 pub mod winrt;
 pub mod write;
+pub mod xref;
 
 pub use assembly::{write_module, write_module_with, AssemblyDefinition};
 pub use model::types::{EventId, FieldId, GenericParamId, MethodId, PropertyId, TypeId};

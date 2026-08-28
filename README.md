@@ -68,8 +68,10 @@ asm.write_file("patched.dll")?;
 
 ### 超越 Cecil 的能力(上游没有)
 
-- **反向引用索引**(`index::ReferenceIndex`):一次构建,常数时间回答
-  "谁引用了这个类型/方法/字段"(指令操作数、成员签名、类型头全覆盖)
+- **双向交叉引用**(`xref::Xref`):一次构建,常数时间回答"谁用它"与
+  "它用什么"两个方向,每处使用带类别(call/newobj、字段读/写/取地址、
+  类型操作数、基类/接口/约束/签名),外部方法/字段也可按
+  `Ns.Type::Member` 键查询;`index::ReferenceIndex` 为其无类别投影
 - **控制流图**(`flow::Cfg`):基本块、支配树、自然循环检测——Cecil.FX
   的 FlowAnalysis 2009 年弃坑,混淆器/反编译器至今各自手搓
 - **求值栈模拟**(`flow::recompute_max_stack`):ECMA III.1.7.5 精确
@@ -78,7 +80,7 @@ asm.write_file("patched.dll")?;
 - **语义 diff**(`diff::diff`):类型/成员/IL 三层对齐的差异报告,布局
   变化(堆顺序、时间戳)不产生噪音
 - **CLI 工具**(`cargo run -p cecli-cli`):`inspect` / `dump --il` /
-  `verify` / `roundtrip` / `diff` 五个子命令
+  `verify` / `roundtrip` / `diff` / `xref` 六个子命令
 
 ## 与 Mono.Cecil 的 API 差异
 

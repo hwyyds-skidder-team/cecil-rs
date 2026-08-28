@@ -7,6 +7,8 @@
 //! * `verify <file>`    — parse, CFG + max-stack-check every body, roundtrip
 //! * `roundtrip <file>` — read → write → re-read with count comparison
 //! * `diff <a> <b>`     — semantic difference report
+//! * `xref <file> <n>`  — bidirectional cross-references (callers/callees,
+//!   readers/writers, dependencies)
 
 use std::process::ExitCode;
 
@@ -20,6 +22,7 @@ fn main() -> ExitCode {
         Some("verify") => cmd_verify(&args[2..]),
         Some("roundtrip") => cmd_roundtrip(&args[2..]),
         Some("diff") => cmd_diff(&args[2..]),
+        Some("xref") => cmd_xref(&args[2..]),
         None | Some("--help" | "-h") => {
             print_help();
             ExitCode::SUCCESS
@@ -41,7 +44,8 @@ USAGE:
     cecli dump      <file> [--il]    type/member roster (optionally with IL)
     cecli verify    <file>           CFG + max-stack validation of every body
     cecli roundtrip <file> [-o out]  read -> write -> re-read, count checks
-    cecli diff      <a> <b>          semantic difference report"
+    cecli diff      <a> <b>          semantic difference report
+    cecli xref      <file> <name>    cross-references of a type/method/field"
     );
 }
 
@@ -242,4 +246,210 @@ fn cmd_diff(args: &[String]) -> ExitCode {
     println!("{report}");
     // Differences are information, not tool failure: exit 0 either way.
     ExitCode::SUCCESS
+}
+
+// -- xref ------------------------------------------------------------------
+
+fn cmd_xref(args: &[String]) -> ExitCode {
+    if args.len() < 2 {
+        eprintln!("usage: cecli xref <file> <type-or-member>");
+        return ExitCode::from(2);
+    }
+    match xref(&args[0], &args[1]) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn method_display(m: &cecli::Module, mid: cecli::model::types::MethodId) -> String {
+    let md = &m.methods[mid.index()];
+    format!("{}::{}", m.type_full_name(md.declaring_type), md.name)
+}
+
+fn site_display(m: &cecli::Module, site: &cecli::xref::UsageSite) -> String {
+    use cecli::xref::UsageSite;
+    match site {
+        UsageSite::Instruction { method, offset } => {
+            format!("{} @ IL_{:04X}", method_display(m, *method), offset)
+        }
+        UsageSite::TypeHead { ty } => format!("{} (head)", m.type_full_name(*ty)),
+        UsageSite::Signature { method: Some(mid), .. } => {
+            format!("{} (signature)", method_display(m, *mid))
+        }
+        UsageSite::Signature { field: Some(fid), .. } => {
+            format!("{} (field type)", m.fields[fid.index()].name)
+        }
+        UsageSite::Signature { .. } => "signature".to_string(),
+    }
+}
+
+fn entity_display(m: &cecli::Module, entity: &cecli::xref::UsedEntity) -> String {
+    use cecli::xref::UsedEntity;
+    match entity {
+        UsedEntity::Type(id) => m.type_full_name(*id),
+        UsedEntity::ExternalType(name) => name.clone(),
+        UsedEntity::Method(id) => method_display(m, *id),
+        UsedEntity::ExternalMethod(key) => key.clone(),
+        UsedEntity::Field(id) => m.fields[id.index()].name.clone(),
+        UsedEntity::ExternalField(key) => key.clone(),
+    }
+}
+
+fn kind_name(kind: cecli::xref::UsageKind) -> &'static str {
+    use cecli::xref::UsageKind as K;
+    match kind {
+        K::Call => "call",
+        K::NewObject => "newobj",
+        K::FieldLoad => "read",
+        K::FieldStore => "write",
+        K::FieldAddress => "address",
+        K::TypeOperand => "type",
+        K::BaseType => "base",
+        K::Interface => "interface",
+        K::Constraint => "constraint",
+        K::Signature => "signature",
+    }
+}
+
+fn xref(path: &str, query: &str) -> Result<(), String> {
+    use cecli::xref::UsedEntity;
+
+    let asm = read(path)?;
+    let m = asm.main_module();
+    let x = cecli::xref::Xref::build(m);
+
+    // 1. A local type by full name.
+    if let Some(tid) = m.find_type_full(query) {
+        println!("type {}", m.type_full_name(tid));
+        let deps = x.dependencies_of_type(tid);
+        if !deps.is_empty() {
+            println!("  depends on:");
+            for u in deps {
+                println!("    {:10} {}", kind_name(u.kind), entity_display(m, &u.entity));
+            }
+        }
+        let users = x.users_of_type(tid);
+        println!("  used by ({}):", users.len());
+        for u in users {
+            println!("    {:10} {}", kind_name(u.kind), site_display(m, &u.site));
+        }
+        return Ok(());
+    }
+
+    // 2. Type::Member for local members.
+    if let Some((type_part, member_part)) = query.split_once("::") {
+        if let Some(tid) = m.find_type_full(type_part) {
+            let ty = m.type_def(tid).clone();
+            let mut found = false;
+            for &mid in &ty.methods {
+                if m.methods[mid.index()].name != member_part {
+                    continue;
+                }
+                found = true;
+                println!(
+                    "method {} ({} params)",
+                    method_display(m, mid),
+                    m.methods[mid.index()].signature.parameters.len()
+                );
+                let callers = x.callers_of(mid);
+                println!("  callers ({}):", callers.len());
+                for u in callers {
+                    println!("    {:10} {}", kind_name(u.kind), site_display(m, &u.site));
+                }
+                let callees = x.callees_of(mid);
+                if !callees.is_empty() {
+                    println!("  calls:");
+                    for u in callees {
+                        println!("    {:10} {}", kind_name(u.kind), entity_display(m, &u.entity));
+                    }
+                }
+                let uses = x.uses_of_method(mid);
+                let other: Vec<_> = uses
+                    .iter()
+                    .filter(|u| {
+                        !matches!(u.entity, UsedEntity::Method(_) | UsedEntity::ExternalMethod(_))
+                    })
+                    .collect();
+                if !other.is_empty() {
+                    println!("  uses:");
+                    for u in other {
+                        println!("    {:10} {}", kind_name(u.kind), entity_display(m, &u.entity));
+                    }
+                }
+            }
+            for &fid in &ty.fields {
+                if m.fields[fid.index()].name != member_part {
+                    continue;
+                }
+                found = true;
+                println!("field {}::{}", m.type_full_name(tid), member_part);
+                let accesses = x.field_accesses(fid);
+                println!("  accesses ({}):", accesses.len());
+                for u in accesses {
+                    println!("    {:10} {}", kind_name(u.kind), site_display(m, &u.site));
+                }
+            }
+            if found {
+                return Ok(());
+            }
+            return Err(format!("{query}: no such member in type {type_part}"));
+        }
+
+        // 3. External member by exact key.
+        let method_users = x.users_of_external_method(query);
+        if !method_users.is_empty() {
+            println!("external method {query}");
+            println!("  callers ({}):", method_users.len());
+            for u in method_users {
+                println!("    {:10} {}", kind_name(u.kind), site_display(m, &u.site));
+            }
+            return Ok(());
+        }
+        let field_users = x.users_of_external_field(query);
+        if !field_users.is_empty() {
+            println!("external field {query}");
+            println!("  accesses ({}):", field_users.len());
+            for u in field_users {
+                println!("    {:10} {}", kind_name(u.kind), site_display(m, &u.site));
+            }
+            return Ok(());
+        }
+    }
+
+    // 4. Bare member name across all types.
+    let matches: Vec<cecli::model::types::MethodId> =
+        m.iter_methods().filter(|(_, md)| md.name == query).map(|(mid, _)| mid).collect();
+    if matches.len() == 1 {
+        let mid = matches[0];
+        println!("method {}", method_display(m, mid));
+        let callers = x.callers_of(mid);
+        println!("  callers ({}):", callers.len());
+        for u in callers {
+            println!("    {:10} {}", kind_name(u.kind), site_display(m, &u.site));
+        }
+        return Ok(());
+    }
+    if matches.len() > 1 {
+        println!("{} overloads:", matches.len());
+        for mid in matches {
+            println!("  {}", method_display(m, mid));
+        }
+        return Ok(());
+    }
+
+    // 5. External type by name.
+    let users = x.users_of_external_type(query);
+    if !users.is_empty() {
+        println!("external type {query}");
+        println!("  used by ({}):", users.len());
+        for u in users {
+            println!("    {:10} {}", kind_name(u.kind), site_display(m, &u.site));
+        }
+        return Ok(());
+    }
+
+    Err(format!("{query}: not found (type, Type::Member, member name, or external Ns.T::M)"))
 }

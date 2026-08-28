@@ -13,12 +13,16 @@
 //!
 //! External references are keyed by reflection-style full name
 //! (`Ns.Outer/Inner`), the same spelling [`Module::type_full_name`] uses.
+//!
+//! This type is a kind-less projection over [`crate::xref::Xref`], the
+//! canonical walker; for usage kinds (call vs. construct, field read vs.
+//! write) and the forward direction ("what does this use?"), use
+//! [`crate::xref::Xref`] directly.
 
 use std::collections::BTreeMap;
 
-use crate::model::types::{
-    ExternalType, FieldId, FieldRef, MethodId, MethodRef, ROperand, TypeDesc, TypeId,
-};
+use crate::model::types::{FieldId, MethodId, TypeId};
+use crate::xref::Xref;
 use crate::Module;
 
 /// One recorded use of an entity.
@@ -32,6 +36,20 @@ pub enum ReferenceSite {
     Signature { method: Option<MethodId>, field: Option<FieldId> },
 }
 
+impl From<crate::xref::UsageSite> for ReferenceSite {
+    fn from(site: crate::xref::UsageSite) -> Self {
+        match site {
+            crate::xref::UsageSite::Instruction { method, offset } => {
+                ReferenceSite::Instruction { method, offset }
+            }
+            crate::xref::UsageSite::TypeHead { ty } => ReferenceSite::TypeHead { ty },
+            crate::xref::UsageSite::Signature { method, field } => {
+                ReferenceSite::Signature { method, field }
+            }
+        }
+    }
+}
+
 /// Inverted index from definitions and external names to their use sites.
 #[derive(Debug, Default, Clone)]
 pub struct ReferenceIndex {
@@ -42,67 +60,30 @@ pub struct ReferenceIndex {
 }
 
 impl ReferenceIndex {
-    /// Walks every body, signature and type head of `module`, recording use
-    /// sites. O(module size); build once, query many times.
+    /// Builds the index over every body, signature and type head of
+    /// `module`. O(module size); build once, query many times.
+    ///
+    /// Delegates to [`crate::xref::Xref`] (the canonical walker) and
+    /// projects the kind-less surface this type documents.
     pub fn build(module: &Module) -> ReferenceIndex {
+        let xref = Xref::build(module);
         let mut index = ReferenceIndex::default();
-
-        for (tid, ty) in module.types.iter().enumerate() {
-            let tid = TypeId(tid as u32);
-            if let Some(base) = &ty.base_type {
-                index.record_type_desc(base, ReferenceSite::TypeHead { ty: tid });
-            }
-            for iface in &ty.interfaces {
-                index.record_type_desc(&iface.interface, ReferenceSite::TypeHead { ty: tid });
-            }
-            for &gp in &ty.generic_parameters {
-                let Some(gp) = module.generic_parameters.get(gp.index()) else { continue };
-                for constraint in &gp.constraints {
-                    index.record_type_desc(
-                        &constraint.constraint,
-                        ReferenceSite::TypeHead { ty: tid },
-                    );
-                }
-            }
+        for (id, usages) in xref.type_users_iter() {
+            let v = index.type_users.entry(id).or_default();
+            v.extend(usages.iter().map(|u| u.site.clone().into()));
         }
-
-        for (fid, field) in module.fields.iter().enumerate() {
-            let fid = FieldId(fid as u32);
-            index.record_type_desc(
-                &field.signature.0,
-                ReferenceSite::Signature { method: None, field: Some(fid) },
-            );
+        for (id, usages) in xref.method_users_iter() {
+            let v = index.method_users.entry(id).or_default();
+            v.extend(usages.iter().map(|u| u.site.clone().into()));
         }
-
-        for (mid, method) in module.methods.iter().enumerate() {
-            let mid = MethodId(mid as u32);
-            let sig_site = ReferenceSite::Signature { method: Some(mid), field: None };
-            index.record_type_desc(&method.signature.return_type, sig_site.clone());
-            for p in &method.signature.parameters {
-                index.record_type_desc(p, sig_site.clone());
-            }
-            for &gp in &method.generic_parameters {
-                let Some(gp) = module.generic_parameters.get(gp.index()) else { continue };
-                for constraint in &gp.constraints {
-                    index.record_type_desc(&constraint.constraint, sig_site.clone());
-                }
-            }
-
-            let Some(body) = &method.body else { continue };
-            for local in &body.locals {
-                index.record_type_desc(&local.ty, sig_site.clone());
-            }
-            for ins in &body.instructions {
-                let site = ReferenceSite::Instruction { method: mid, offset: ins.offset };
-                match &ins.operand {
-                    ROperand::Type(ty) => index.record_type_desc(ty, site),
-                    ROperand::Method(mr) => index.record_method_ref(mr, site),
-                    ROperand::Field(fr) => index.record_field_ref(fr, site),
-                    _ => {}
-                }
-            }
+        for (id, usages) in xref.field_users_iter() {
+            let v = index.field_users.entry(id).or_default();
+            v.extend(usages.iter().map(|u| u.site.clone().into()));
         }
-
+        for (name, usages) in xref.external_type_users_iter() {
+            let v = index.external_users.entry(name.to_string()).or_default();
+            v.extend(usages.iter().map(|u| u.site.clone().into()));
+        }
         index
     }
 
@@ -125,110 +106,15 @@ impl ReferenceIndex {
     pub fn external_users(&self, full_name: &str) -> &[ReferenceSite] {
         self.external_users.get(full_name).map(Vec::as_slice).unwrap_or(&[])
     }
-
-    // -- recording -----------------------------------------------------------
-
-    fn push_type(&mut self, id: TypeId, site: ReferenceSite) {
-        self.type_users.entry(id).or_default().push(site);
-    }
-
-    fn push_method(&mut self, id: MethodId, site: ReferenceSite) {
-        self.method_users.entry(id).or_default().push(site);
-    }
-
-    fn push_field(&mut self, id: FieldId, site: ReferenceSite) {
-        self.field_users.entry(id).or_default().push(site);
-    }
-
-    fn push_external(&mut self, name: String, site: ReferenceSite) {
-        self.external_users.entry(name).or_default().push(site);
-    }
-
-    fn record_type_desc(&mut self, ty: &TypeDesc, site: ReferenceSite) {
-        match ty {
-            TypeDesc::Def(id) => self.push_type(*id, site),
-            TypeDesc::External(ext) => {
-                for nested in &ext.nesting {
-                    // The enclosing chain is referenced too (a nested-type
-                    // spelling names every ancestor).
-                    self.push_external(external_full_name(nested), site.clone());
-                }
-                self.push_external(external_full_name(ext), site);
-            }
-            TypeDesc::GenericInstance { definition, arguments } => {
-                self.record_type_desc(definition, site.clone());
-                for arg in arguments {
-                    self.record_type_desc(arg, site.clone());
-                }
-            }
-            TypeDesc::SzArray(e) | TypeDesc::Ptr(e) | TypeDesc::ByRef(e) | TypeDesc::Pinned(e) => {
-                self.record_type_desc(e, site)
-            }
-            TypeDesc::Array { element, .. } => self.record_type_desc(element, site),
-            TypeDesc::CMod { modifier, unmodified, .. } => {
-                self.record_type_desc(modifier, site.clone());
-                self.record_type_desc(unmodified, site);
-            }
-            TypeDesc::FnPtr(sig) => {
-                self.record_type_desc(&sig.return_type, site.clone());
-                for p in &sig.parameters {
-                    self.record_type_desc(p, site.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn record_method_ref(&mut self, r: &MethodRef, site: ReferenceSite) {
-        match r {
-            MethodRef::Def(id) => self.push_method(*id, site),
-            MethodRef::External(ext) => {
-                // Method use implies the declaring type is used as well.
-                self.record_type_desc(&ext.parent, site.clone());
-                for p in &ext.signature.parameters {
-                    self.record_type_desc(p, site.clone());
-                }
-                self.record_type_desc(&ext.signature.return_type, site);
-            }
-            MethodRef::Spec { method, arguments } => {
-                self.record_method_ref(method, site.clone());
-                for arg in arguments {
-                    self.record_type_desc(arg, site.clone());
-                }
-            }
-        }
-    }
-
-    fn record_field_ref(&mut self, r: &FieldRef, site: ReferenceSite) {
-        match r {
-            FieldRef::Def(id) => self.push_field(*id, site),
-            FieldRef::External(ext) => {
-                self.record_type_desc(&ext.parent, site.clone());
-                self.record_type_desc(&ext.signature.0, site);
-            }
-        }
-    }
-}
-
-/// Reflection-style full name of an external type: `Ns.Outer/Inner`.
-fn external_full_name(ext: &ExternalType) -> String {
-    let mut name = String::new();
-    if !ext.namespace.is_empty() {
-        name.push_str(&ext.namespace);
-        name.push('.');
-    }
-    for nested in &ext.nesting {
-        name.push_str(&nested.name);
-        name.push('/');
-    }
-    name.push_str(&ext.name);
-    name
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::types::{AssemblyNameReference, MethodDefinition, ScopeRef, TypeDefinition};
+    use crate::model::types::{
+        AssemblyNameReference, ExternalType, FieldRef, MethodDefinition, MethodRef, ROperand,
+        ScopeRef, TypeDefinition, TypeDesc,
+    };
 
     fn ext(ns: &str, name: &str) -> TypeDesc {
         TypeDesc::External(Box::new(ExternalType {
