@@ -69,12 +69,13 @@ asm.write_file("patched.dll")?;
 
 能力面对齐(经逐文件审计核对),使用模型重新设计为 Rust 惯用风格:
 
-- **值语义 arena 模型**:成员以 `TypeId`/`MethodId` 等 Copy 句柄交叉引用,无惰性图与内部可变性;
+- **值语义 arena 模型**:成员以 `TypeId`/`MethodId` 等 Copy 句柄交叉引用;
   引用与定义由 `TypeDesc::Def | External(...)` 枚举表达
 - **`Result` 替代异常**:所有格式错误返回 `cecli_core::Error`,不 panic
 - **扩展方法 → trait**:`ModuleDefinitionRocks` 等显式引入
-- 有意偏离(BCL 强依赖项)记录于各模块文档:ReadingMode 惰性加载(eager 设计取舍)、
-  GAC 自动探测(改为显式搜索目录 + 版本比较选择)、CSP 具名密钥容器(仅支持 .snk 文件)
+- `ReadingMode::Lazy` 延迟方法体解码(`load_bodies()` 按需恢复);偏离点:体作为整体
+  延迟而非逐成员代理。其余有意偏离(BCL 强依赖项)记录于各模块文档:GAC 自动探测
+  (改为显式搜索目录 + 版本比较选择)、CSP 具名密钥容器(仅支持 .snk 文件)
 
 ## 测试
 

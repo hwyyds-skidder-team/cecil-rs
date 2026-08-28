@@ -294,17 +294,24 @@ fn probe_directory(dir: &Path, stem: &str) -> Option<PathBuf> {
 /// Port of Mono.Cecil `ReadingMode`.
 ///
 /// Carried for API parity with Cecil's `ReaderParameters.ReadingMode`.
-/// This port always materializes the module eagerly, so [`ReadingMode::Lazy`]
-/// and [`ReadingMode::Deferred`] behave exactly like [`ReadingMode::Immediate`];
-/// the value is documented as advisory-only until lazy reading lands.
+///
+/// `Immediate` (the default) decodes everything up front. `Lazy` and
+/// `Deferred` skip method-body decoding at read time and stash the raw
+/// image plus read context on the assembly; call
+/// [`crate::assembly::AssemblyDefinition::load_bodies`] to decode the
+/// bodies later. Documented divergence: bodies defer as one unit (the
+/// value model has no per-member proxies); satellite netmodules always
+/// load eagerly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReadingMode {
-    /// Parse everything up front (the only behavior this port implements).
+    /// Parse everything up front.
     #[default]
     Immediate,
-    /// Advisory: defer member bodies. Currently treated as [`ReadingMode::Immediate`].
+    /// Defer method bodies until
+    /// [`load_bodies`](crate::assembly::AssemblyDefinition::load_bodies).
     Lazy,
-    /// Advisory: defer whole-module parsing. Currently treated as [`ReadingMode::Immediate`].
+    /// Same as [`ReadingMode::Lazy`]: whole-module deferral collapses to
+    /// body deferral in the value model.
     Deferred,
 }
 
@@ -333,8 +340,10 @@ pub struct ReaderParameters {
     /// Whether to load debug symbols alongside the assembly
     /// (Cecil `ReaderParameters.ReadSymbols`).
     pub read_symbols: bool,
-    /// Cecil `ReaderParameters.ReadingMode`. Advisory only: this port reads
-    /// eagerly regardless of the value (see [`ReadingMode`]).
+    /// Cecil `ReaderParameters.ReadingMode`. `Immediate` loads everything;
+    /// `Lazy`/`Deferred` skip method bodies until
+    /// [`AssemblyDefinition::load_bodies`](crate::assembly::AssemblyDefinition::load_bodies)
+    /// (see [`ReadingMode`]).
     pub reading_mode: ReadingMode,
     /// Symbol-store source used when [`Self::read_symbols`] is set
     /// (Cecil `ReaderParameters.SymbolReaderProvider`). When `None`, the

@@ -1075,6 +1075,7 @@ mod tests {
             main: m,
             modules: Vec::new(),
             entry_point: None,
+            lazy: None,
         };
         assembly.write().expect("corlib image builds")
     }

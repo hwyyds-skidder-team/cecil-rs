@@ -71,7 +71,7 @@ pub enum MemberRefRow {
 }
 
 /// Read-side token resolution state for one module.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ReadContext {
     /// `TypeDef` rid → arena handle (rid-1 indexed).
     pub type_defs: Vec<TypeId>,

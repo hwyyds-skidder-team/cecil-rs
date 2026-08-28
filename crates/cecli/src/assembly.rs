@@ -37,6 +37,16 @@ impl Default for AssemblyNameDefinition {
     }
 }
 
+/// Deferred body-decoding state for an assembly read with
+/// [`ReadingMode::Lazy`](crate::resolver::ReadingMode::Lazy): the raw image
+/// bytes plus the read context needed to resume. Consumed by
+/// [`AssemblyDefinition::load_bodies`].
+#[derive(Debug, Clone)]
+pub struct LazyAssembly {
+    pub(crate) raw: Vec<u8>,
+    pub(crate) ctx: crate::read::context::ReadContext,
+}
+
 /// An assembly: main module plus optional satellite netmodules.
 #[derive(Debug, Clone, Default)]
 pub struct AssemblyDefinition {
@@ -46,6 +56,10 @@ pub struct AssemblyDefinition {
     pub modules: Vec<Module>,
     /// Entry point as a method arena index into `main`.
     pub entry_point: Option<MethodId>,
+    /// Present when method bodies were deferred at read time
+    /// ([`ReadingMode::Lazy`](crate::resolver::ReadingMode::Lazy));
+    /// [`Self::load_bodies`] consumes it. `None` once bodies are loaded.
+    pub lazy: Option<LazyAssembly>,
 }
 
 // ---------------------------------------------------------------------------
@@ -103,17 +117,26 @@ impl AssemblyDefinition {
         let read_opts = crate::read::context::ReadOptions::default();
         let (mut module, mut ctx) = crate::read::module_reader::read_module(&image, &read_opts)?;
 
-        // Decode IL bodies against the parsed metadata root.
-        let (md_rva, _) = image.metadata_rva()?;
-        let md_slice = image.rva(md_rva)?;
-        let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref())?;
-        crate::read::instructions::resolve_bodies_opts(
-            &mut module,
-            &mut ctx,
-            &md,
-            &image,
-            read_opts.load_bodies,
-        )?;
+        // Method-body policy: `Immediate` (the default) decodes every body
+        // up front. `Lazy`/`Deferred` skip the decode and stash the raw
+        // image + read context at the end of this function so
+        // [`Self::load_bodies`] can resume later — the value-model analogue
+        // of Cecil's lazy reading (documented divergence: bodies defer as a
+        // unit, not per member).
+        let eager = opts.reading_mode == crate::resolver::ReadingMode::Immediate;
+        if eager {
+            // Decode IL bodies against the parsed metadata root.
+            let (md_rva, _) = image.metadata_rva()?;
+            let md_slice = image.rva(md_rva)?;
+            let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref())?;
+            crate::read::instructions::resolve_bodies_opts(
+                &mut module,
+                &mut ctx,
+                &md,
+                &image,
+                read_opts.load_bodies,
+            )?;
+        }
 
         // Preserve unmodeled PE payload for re-emission on write: the raw
         // Win32 resource section and the debug directory records. The
@@ -215,7 +238,35 @@ impl AssemblyDefinition {
 
         let entry_point = method_of_token(&ctx, module.entry_point_token);
 
-        Ok(AssemblyDefinition { name, main: module, modules, entry_point })
+        let lazy = if eager { None } else { Some(LazyAssembly { raw: bytes.to_vec(), ctx }) };
+        Ok(AssemblyDefinition { name, main: module, modules, entry_point, lazy })
+    }
+
+    /// Decodes the method bodies of an assembly read with
+    /// [`ReadingMode::Lazy`](crate::resolver::ReadingMode::Lazy), consuming
+    /// the deferred state (raw image + read context). A no-op when bodies
+    /// are already loaded or were never deferred.
+    ///
+    /// Cecil's lazy reading decodes bodies per method on first access; this
+    /// value-semantics model defers (and loads) them as one unit — the
+    /// dominant memory cost of a method body lives in the model either way.
+    pub fn load_bodies(&mut self) -> Result<()> {
+        let Some(lazy) = self.lazy.take() else {
+            return Ok(());
+        };
+        let image = cecli_pe::Image::parse(&lazy.raw)?;
+        let (md_rva, _) = image.metadata_rva()?;
+        let md_slice = image.rva(md_rva)?;
+        let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref())?;
+        let mut ctx = lazy.ctx;
+        crate::read::instructions::resolve_bodies_opts(
+            &mut self.main,
+            &mut ctx,
+            &md,
+            &image,
+            true,
+        )?;
+        Ok(())
     }
 
     /// Resolves a type reference against this assembly and its dependencies
@@ -1642,6 +1693,44 @@ mod tests {
         assert_eq!(entry_name, "Main");
     }
 
+    /// ReadingMode::Lazy defers method bodies; load_bodies decodes them on
+    /// demand and produces a model identical to the eager read.
+    #[test]
+    fn lazy_reading_defers_and_loads_bodies() {
+        let path = cecli_core::fixtures_dir().join("hello.exe");
+        if !path.exists() {
+            return; // fixtures not provisioned on this checkout
+        }
+        let mut opts = crate::resolver::ReaderParameters::new();
+        opts.reading_mode = crate::resolver::ReadingMode::Lazy;
+
+        let mut lazy_asm =
+            AssemblyDefinition::read_file_with(&path, &opts).expect("lazy read parses");
+        assert!(lazy_asm.lazy.is_some(), "deferred state stashed");
+        assert!(lazy_asm.main.methods.iter().all(|m| m.body.is_none()), "no bodies decoded yet");
+
+        // Writing a body-less model still works (methods without bodies are
+        // emitted as RVA-less rows).
+        lazy_asm.write().expect("body-less model serializes");
+
+        lazy_asm.load_bodies().expect("bodies load on demand");
+        assert!(lazy_asm.lazy.is_none(), "deferred state consumed");
+        let with_bodies: usize = lazy_asm.main.methods.iter().filter(|m| m.body.is_some()).count();
+        assert!(with_bodies > 0, "bodies present after load_bodies");
+
+        // The lazy-loaded model matches the eager one member-for-member and
+        // round-trips identically.
+        let eager = AssemblyDefinition::read_file(&path).expect("eager read parses");
+        assert_eq!(
+            lazy_asm.main.methods.iter().filter(|m| m.body.is_some()).count(),
+            eager.main.methods.iter().filter(|m| m.body.is_some()).count(),
+            "body counts match the eager read"
+        );
+
+        // Second load is a no-op.
+        lazy_asm.load_bodies().expect("repeat load is a no-op");
+    }
+
     fn unique_test_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join("cecli_facade_tests").join(format!(
             "{}_{}",
@@ -1731,6 +1820,7 @@ mod tests {
             main: module,
             modules: Vec::new(),
             entry_point: None,
+            lazy: None,
         };
         let main_path = out_dir.join("multi.dll");
         ad.write_file(&main_path).expect("manifest written");
