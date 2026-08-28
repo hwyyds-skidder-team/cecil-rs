@@ -187,7 +187,9 @@
 
 pub mod assembly;
 pub mod edit;
+pub mod flow;
 pub mod importer;
+pub mod index;
 pub mod model;
 pub mod module_def;
 pub mod read;
