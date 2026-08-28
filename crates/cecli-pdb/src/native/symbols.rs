@@ -614,13 +614,22 @@ fn load_name_stream(bits: &mut BitReader<'_>) -> Result<(HashMap<u32, String>, V
     }
     let mut map = HashMap::new();
     let mut ordered = Vec::new();
-    let mut seen_nis = Vec::with_capacity(siz as usize);
+    // Each bucket is 4 bytes in the stream, so the remaining length bounds a
+    // sane allocation; a hostile count would otherwise pre-allocate GBs
+    // before the first read past the end fails.
+    let bucket_cap = (siz as usize).min(bits.remaining() / 4 + 1);
+    let mut seen_nis = Vec::with_capacity(bucket_cap);
     for _ in 0..siz {
         let ni = bits.read_i32()?;
         seen_nis.push(ni);
     }
     for ni in seen_nis {
         if ni != 0 {
+            // Negative name indices are malformed and would overflow the
+            // offset arithmetic below (`i32 as usize` sign-extends).
+            if ni < 0 {
+                return Err(Error::bad_image(format!("native pdb: negative name index {ni}")));
+            }
             let saved = bits.position();
             bits.set_position(beg + ni as usize)?;
             let name = bits.read_cstring()?;
@@ -760,14 +769,21 @@ impl NativePdbReader {
                     }
                 }
                 // FileChecksum subsections live in the same C13 region as the
-                // line programs (ReadSourceFileInfo).
-                let limit = (info.cb_syms + info.cb_old_lines + info.cb_lines) as usize;
-                if limit <= data.len() && info.cb_lines > 0 {
+                // line programs (ReadSourceFileInfo). The three lengths are
+                // hostile i32s: sum them in i64 so neither the addition nor
+                // the usize cast can overflow.
+                let c13_end = info.cb_syms as i64 + info.cb_old_lines as i64 + info.cb_lines as i64;
+                let lines_at = info.cb_syms as i64 + info.cb_old_lines as i64;
+                if c13_end >= 0
+                    && lines_at >= 0
+                    && (c13_end as usize) <= data.len()
+                    && info.cb_lines > 0
+                {
                     let mut bits = BitReader::new(data);
-                    bits.set_position((info.cb_syms + info.cb_old_lines) as usize)?;
+                    bits.set_position(lines_at as usize)?;
                     read_source_file_info(
                         &mut bits,
-                        limit,
+                        c13_end as usize,
                         &names,
                         &mut checks,
                         &mut source_files,

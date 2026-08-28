@@ -311,19 +311,34 @@ fn attach_member_ranges(module: &mut Module, rows: &[TypedefRow], md: &MetadataR
     let field_starts: Vec<u32> = rows.iter().map(|t| t.field_start).collect();
     let method_starts: Vec<u32> = rows.iter().map(|t| t.method_start).collect();
 
+    // ECMA member ranges are implicit runs [start_i, start_{i+1}); hostile
+    // images can declare overlapping or unordered starts, which would attach
+    // one member to several types — and the writer (which walks per-type
+    // member lists) would then emit duplicate rows. Claim each member once,
+    // first type wins.
+    let mut field_taken = vec![false; field_count as usize];
+    let mut method_owner = vec![u32::MAX; method_count as usize];
+
     for i in 0..rows.len() {
         let f_end = list_end(&field_starts, i, field_count);
         let mut f = field_starts[i].max(1);
         while f < f_end && f <= field_count {
-            module.types[i].fields.push(FieldId(f - 1));
+            if !field_taken[f as usize - 1] {
+                field_taken[f as usize - 1] = true;
+                module.types[i].fields.push(FieldId(f - 1));
+            }
             f += 1;
         }
 
         let m_end = list_end(&method_starts, i, method_count);
         let mut m = method_starts[i].max(1);
         while m < m_end && m <= method_count {
-            module.methods[m as usize - 1].declaring_type = TypeId(i as u32);
-            module.types[i].methods.push(MethodId(m - 1));
+            let idx = m as usize - 1;
+            if method_owner[idx] == u32::MAX {
+                method_owner[idx] = i as u32;
+                module.methods[idx].declaring_type = TypeId(i as u32);
+                module.types[i].methods.push(MethodId(m - 1));
+            }
             m += 1;
         }
     }
@@ -390,6 +405,12 @@ fn read_params(module: &mut Module, md: &MetadataReader) -> Result<Vec<Option<(M
     }
     for (i, start) in starts.iter().enumerate() {
         let end = list_end(&starts, i, count);
+        // Size the parameter arena from the signature's declared arity
+        // (itself bounded by the signature blob): a hostile Param row with
+        // sequence up to 65535 would otherwise resize one method's list to
+        // 65K entries, and a few hundred such rows exhaust memory.
+        let arity = module.methods[i].signature.parameters.len();
+        module.methods[i].parameters.resize(arity, Default::default());
         let mut p = (*start).max(1);
         while p < end && p <= count {
             let attributes = ParameterAttributes::from_bits_truncate(cell_u16(md, T::Param, p, 0)?);
@@ -402,10 +423,11 @@ fn read_params(module: &mut Module, md: &MetadataReader) -> Result<Vec<Option<(M
                 method.return_parameter = parameter;
             } else {
                 let slot = (sequence - 1) as usize;
-                if slot >= method.parameters.len() {
-                    method.parameters.resize(slot + 1, Default::default());
+                // Sequence beyond the declared arity is malformed; skip the
+                // row (deferred-resolution policy for unresolvable links).
+                if slot < method.parameters.len() {
+                    method.parameters[slot] = parameter;
                 }
-                method.parameters[slot] = parameter;
             }
             p += 1;
         }

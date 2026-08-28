@@ -160,7 +160,21 @@ fn parse_table_heap(heap: &[u8], pdb: Option<&PdbHeap>) -> Result<TableSet> {
         *count = r.u32()?;
     }
 
-    TableSet::compute_checked(valid, &counts, heap_flags)
+    let set = TableSet::compute_checked(valid, &counts, heap_flags)?;
+
+    // Declared row counts must physically fit in the stream: the total table
+    // extent (header consumed above) may not overrun the heap. Without this
+    // a hostile header can declare millions of phantom rows, which readers
+    // turn into per-row allocations before any column read fails.
+    let data_start = table_stream_data_start(heap)? as u64;
+    let extent = set.tables_extent();
+    if data_start + extent > heap.len() as u64 {
+        return Err(Error::bad_image(format!(
+            "metadata tables ({extent} bytes) overrun the #~ stream ({} bytes of data)",
+            heap.len() as u64 - data_start
+        )));
+    }
+    Ok(set)
 }
 
 /// Size of the `#~` header including the per-table row-count array; the row

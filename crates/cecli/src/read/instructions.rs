@@ -137,7 +137,9 @@ fn decode_resolved_body(
             cecli_cil::OperandType::InlineTok
             | cecli_cil::OperandType::InlineType
             | cecli_cil::OperandType::InlineMethod
-            | cecli_cil::OperandType::InlineField => resolve_token(ctx, md, token_of(&ins.operand)),
+            | cecli_cil::OperandType::InlineField => {
+                resolve_token(ctx, md, token_of(&ins.operand), ins.opcode.operand_type)
+            }
             // `calli`: the StandAloneSig token stays raw; its blob bytes are
             // captured by [`capture_sas_blobs`] for write-side remapping.
             cecli_cil::OperandType::InlineSig => ROperand::Token(token_of(&ins.operand)),
@@ -169,7 +171,23 @@ fn decode_resolved_body(
             let filter_offset = handler.filter_start.unwrap_or(0);
             let catch_type = match kind {
                 ExceptionKind::Catch if handler.catch_type != Token::NIL => {
-                    Some(ctx.tdor_to_typedesc(md, tdor_cell(handler.catch_type))?)
+                    // The catch type is a TypeDefOrRef cell; a hostile token
+                    // with any other table byte is malformed (tdor_cell's
+                    // Token::table would panic on it) — surfaced as the
+                    // documented unresolvable-catch-type error.
+                    match handler.catch_type.table_byte() {
+                        b if b == TableIndex::TypeDef as u8
+                            || b == TableIndex::TypeRef as u8
+                            || b == TableIndex::TypeSpec as u8 =>
+                        {
+                            Some(ctx.tdor_to_typedesc(md, tdor_cell(handler.catch_type))?)
+                        }
+                        other => {
+                            return Err(Error::bad_image(format!(
+                                "catch type token table byte 0x{other:02X} is not TypeDefOrRef"
+                            )))
+                        }
+                    }
                 }
                 _ => None,
             };
@@ -267,25 +285,48 @@ fn tdor_cell(token: Token) -> u32 {
 ///
 /// Per the module-level deferred-resolution policy, tokens that cannot be
 /// resolved come back as [`ROperand::Token`] instead of an error.
-fn resolve_token(ctx: &ReadContext, md: &MetadataReader<'_>, token: Token) -> ROperand {
+///
+/// `expected` is the opcode's operand shape; a resolved row of the WRONG
+/// shape (e.g. a `call` token that names a field MemberRef row — malformed
+/// IL, but a hostile image can carry it) also falls back to the raw token,
+/// so the writer's operand/opcode consistency check can never trip on
+/// reader output.
+fn resolve_token(
+    ctx: &ReadContext,
+    md: &MetadataReader<'_>,
+    token: Token,
+    expected: cecli_cil::OperandType,
+) -> ROperand {
+    // `InlineTok` accepts any shape; the other kinds expect exactly one.
+    let wants = |want: cecli_cil::OperandType| {
+        expected == cecli_cil::OperandType::InlineTok || expected == want
+    };
     if token == Token::NIL {
         return ROperand::Token(token);
     }
-    match token.table() {
-        TableIndex::TypeDef | TableIndex::TypeRef | TableIndex::TypeSpec => {
+    // A hostile body can carry any table byte; unknown tables fall back to
+    // the raw-token operand like every other unresolvable case (Token::table
+    // would panic on them).
+    let Some(table) = TableIndex::from_u8(token.table_byte()) else {
+        return ROperand::Token(token);
+    };
+    match table {
+        TableIndex::TypeDef | TableIndex::TypeRef | TableIndex::TypeSpec
+            if wants(cecli_cil::OperandType::InlineType) =>
+        {
             match ctx.tdor_to_typedesc(md, tdor_cell(token)) {
                 Ok(ty) => ROperand::Type(ty),
                 Err(_) => ROperand::Token(token),
             }
         }
-        TableIndex::MethodDef => {
+        TableIndex::MethodDef if wants(cecli_cil::OperandType::InlineMethod) => {
             let slot = token.rid().checked_sub(1).and_then(|rid| ctx.method_defs.get(rid as usize));
             match slot {
                 Some(id) => ROperand::Method(MethodRef::Def(*id)),
                 None => ROperand::Token(token),
             }
         }
-        TableIndex::Field => {
+        TableIndex::Field if wants(cecli_cil::OperandType::InlineField) => {
             let slot = token.rid().checked_sub(1).and_then(|rid| ctx.field_defs.get(rid as usize));
             match slot {
                 Some(id) => ROperand::Field(FieldRef::Def(*id)),
@@ -293,15 +334,23 @@ fn resolve_token(ctx: &ReadContext, md: &MetadataReader<'_>, token: Token) -> RO
             }
         }
         TableIndex::MemberRef => match ctx.resolve_member_ref(md, token.rid()) {
-            Ok(MemberRefRow::Method(em)) => ROperand::Method(MethodRef::External(em)),
-            Ok(MemberRefRow::Field(ef)) => ROperand::Field(FieldRef::External(ef)),
-            Ok(MemberRefRow::Spec(mr)) => ROperand::Method(mr),
+            Ok(MemberRefRow::Method(em)) if wants(cecli_cil::OperandType::InlineMethod) => {
+                ROperand::Method(MethodRef::External(em))
+            }
+            Ok(MemberRefRow::Field(ef)) if wants(cecli_cil::OperandType::InlineField) => {
+                ROperand::Field(FieldRef::External(ef))
+            }
+            Ok(MemberRefRow::Spec(mr)) if wants(cecli_cil::OperandType::InlineMethod) => {
+                ROperand::Method(mr)
+            }
             _ => ROperand::Token(token),
         },
-        TableIndex::MethodSpec => match ctx.method_spec_ref(md, token.rid()) {
-            Ok(mr) => ROperand::Method(mr),
-            Err(_) => ROperand::Token(token),
-        },
+        TableIndex::MethodSpec if wants(cecli_cil::OperandType::InlineMethod) => {
+            match ctx.method_spec_ref(md, token.rid()) {
+                Ok(mr) => ROperand::Method(mr),
+                Err(_) => ROperand::Token(token),
+            }
+        }
         _ => ROperand::Token(token),
     }
 }
@@ -316,7 +365,7 @@ fn decode_locals(
     if locals_token == Token::NIL {
         return Ok(Vec::new());
     }
-    if locals_token.table() != TableIndex::StandAloneSig {
+    if locals_token.table_byte() != TableIndex::StandAloneSig as u8 {
         return Err(Error::bad_image(format!(
             "local var sig token {locals_token:?} does not reference StandAloneSig"
         )));
@@ -348,7 +397,7 @@ fn capture_sas_blobs(body: &ResolvedBody, ctx: &mut ReadContext) {
             continue;
         };
         let rid = token.rid();
-        if token.table() != TableIndex::StandAloneSig
+        if token.table_byte() != TableIndex::StandAloneSig as u8
             || rid == 0
             || ctx.sas_blobs.contains_key(&rid)
         {

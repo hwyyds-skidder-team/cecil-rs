@@ -259,6 +259,17 @@ fn read_leb128(r: &mut ByteReader) -> Result<i32> {
     }
 }
 
+/// Byte size of a fixed-size-row table (`count * row_size`), rejecting
+/// negative counts and any product that would overflow. Callers compare
+/// this against the table extent's length.
+fn row_count(count: i32, row_size: usize, what: &str) -> Result<usize> {
+    let count = usize::try_from(count)
+        .map_err(|_| Error::bad_image(format!("mdb: negative {what} count {count}")))?;
+    count.checked_mul(row_size).ok_or_else(|| {
+        Error::bad_image(format!("mdb: {what} count {count} overflows the table size"))
+    })
+}
+
 /// Reads a length-prefixed UTF-8 string (`BinaryReader.ReadString`).
 fn read_string<'a>(r: &mut ByteReader<'a>) -> Result<&'a str> {
     let len = read_leb128(r)?;
@@ -344,15 +355,18 @@ impl<'a> MdbReader<'a> {
             data.len(),
             "source table",
         )?;
-        // Each row is exactly two i32s (`SourceFileEntry.Size == 8`).
-        if range.len() != ot.source_count as usize * 8 {
+        // Each row is exactly two i32s (`SourceFileEntry.Size == 8`). Negative
+        // or oversized counts must not reach the arithmetic: `i32 as usize`
+        // sign-extends, and the row-size multiply would overflow.
+        let source_count = row_count(ot.source_count, 8, "source")?;
+        if range.len() != source_count {
             return Err(Error::bad_image(format!(
                 "mdb: source table size {} does not match count {}",
                 range.len(),
                 ot.source_count
             )));
         }
-        let mut sources = Vec::with_capacity(ot.source_count.max(0) as usize);
+        let mut sources = Vec::with_capacity(source_count / 8);
         for row in range.step_by(8) {
             let mut r = ByteReader::at(data, row);
             let id = r.i32()?;
@@ -379,14 +393,15 @@ impl<'a> MdbReader<'a> {
             data.len(),
             "compile-unit table",
         )?;
-        if range.len() != ot.compile_unit_count as usize * 8 {
+        let unit_bytes = row_count(ot.compile_unit_count, 8, "compile-unit")?;
+        if range.len() != unit_bytes {
             return Err(Error::bad_image(format!(
                 "mdb: compile-unit table size {} does not match count {}",
                 range.len(),
                 ot.compile_unit_count
             )));
         }
-        let mut units = Vec::with_capacity(ot.compile_unit_count.max(0) as usize);
+        let mut units = Vec::with_capacity(unit_bytes / 8);
         for row in range.step_by(8) {
             let mut r = ByteReader::at(data, row);
             let _index = r.i32()?;
@@ -403,7 +418,10 @@ impl<'a> MdbReader<'a> {
             if primary < 0 || include_count < 0 {
                 return Err(Error::bad_image("mdb: malformed compile-unit payload"));
             }
-            let mut file_ids = Vec::with_capacity(include_count as usize + 1);
+            // Each include id costs at least one LEB128 byte, so the payload
+            // length bounds a sane allocation.
+            let cap = (include_count as usize).min(pr.remaining());
+            let mut file_ids = Vec::with_capacity(cap + 1);
             file_ids.push(primary as u32);
             for _ in 0..include_count {
                 let inc = read_leb128(&mut pr)?;
@@ -442,14 +460,15 @@ impl<'a> MdbReader<'a> {
             "method table",
         )?;
         // Each row is exactly 12 bytes (`MethodEntry.Size`).
-        if range.len() != ot.method_count as usize * 12 {
+        let method_bytes = row_count(ot.method_count, 12, "method")?;
+        if range.len() != method_bytes {
             return Err(Error::bad_image(format!(
                 "mdb: method table size {} does not match count {}",
                 range.len(),
                 ot.method_count
             )));
         }
-        let mut methods = Vec::with_capacity(ot.method_count.max(0) as usize);
+        let mut methods = Vec::with_capacity(method_bytes / 12);
         for (i, row) in range.step_by(12).enumerate() {
             let mut r = ByteReader::at(data, row);
             let token = r.i32()?;
@@ -571,7 +590,9 @@ impl<'a> MdbReader<'a> {
         if count < 0 {
             return Err(Error::bad_image("mdb: malformed local-variable count"));
         }
-        let mut locals = Vec::with_capacity(count as usize);
+        // Each entry costs at least two LEB128 bytes plus a name; cap the
+        // allocation by the bytes actually remaining.
+        let mut locals = Vec::with_capacity((count as usize).min(r.remaining() / 2));
         for _ in 0..count {
             let index = read_leb128(&mut r)?;
             let name = read_string(&mut r)?.to_owned();

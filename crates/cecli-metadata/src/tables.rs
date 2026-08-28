@@ -284,6 +284,20 @@ impl TableSet {
         Ok(TableSet::compute(valid, row_counts, heap_flags))
     }
 
+    /// Total byte size of all present tables (offset of the end of the last
+    /// one, relative to the start of the table-stream data). Used to check
+    /// that declared row counts physically fit inside the `#~` stream —
+    /// hostile headers otherwise declare millions of phantom rows that
+    /// readers happily allocate per-row state for.
+    pub fn tables_extent(&self) -> u64 {
+        let mut extent = 0u64;
+        for (i, layout) in self.layouts.iter().enumerate() {
+            let Some(layout) = layout else { continue };
+            extent = extent.max(layout.offset + layout.row_size as u64 * self.counts[i] as u64);
+        }
+        extent
+    }
+
     /// The `Valid` bitmask of present tables.
     pub fn valid_mask(&self) -> u64 {
         self.valid

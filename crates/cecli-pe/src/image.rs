@@ -295,7 +295,11 @@ impl Image {
         if off >= mapped_size {
             return Err(Error::bad_image(format!("rva {rva:#x} maps past the end of its section")));
         }
-        let len = (mapped_size - off) as usize;
+        // A hostile section can declare a virtual size far beyond anything
+        // the file could back; the zero-filled tail we synthesize is capped
+        // at the whole-file length (a virtual tail larger than the entire
+        // image is malformed). Callers slice the length they need.
+        let len = (mapped_size - off).min(self.raw.len() as u64) as usize;
         let start = section.pointer_to_raw_data as u64 + off;
         let raw_start = start.min(self.raw.len() as u64) as usize;
         let raw_end =

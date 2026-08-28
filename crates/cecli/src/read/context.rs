@@ -378,7 +378,7 @@ impl ReadContext {
 
     /// Maps a `MethodDef` token to its arena handle.
     pub fn method_of(&self, tok: Token) -> Option<MethodId> {
-        if tok.table() != TableIndex::MethodDef || tok.rid() == 0 {
+        if tok.table_byte() != TableIndex::MethodDef as u8 || tok.rid() == 0 {
             return None;
         }
         self.method_defs.get(tok.rid() as usize - 1).copied()

@@ -116,15 +116,21 @@ impl AssemblyDefinition {
         )?;
 
         // Preserve unmodeled PE payload for re-emission on write: the raw
-        // Win32 resource section and the debug directory records.
+        // Win32 resource section and the debug directory records. The
+        // resource blob is only kept when its directory tree walks cleanly
+        // (bounded offsets, bounded depth) — the writer re-walks the tree to
+        // rebase RVAs, so garbage would otherwise crash (or loop) on write.
         let rsrc_dir = image.data_directories[cecli_pe::DataDirectoryIndex::Resource as usize];
         if !rsrc_dir.is_zero() && rsrc_dir.size > 0 {
             if let Ok(section) = image.rva(rsrc_dir.virtual_address as u64) {
                 let end = (rsrc_dir.size as usize).min(section.len());
-                module.win32_resources = Some(crate::module_def::Win32Resources {
-                    original_rva: rsrc_dir.virtual_address,
-                    bytes: section[..end].to_vec(),
-                });
+                let bytes = &section[..end];
+                if win32_resources_tree_is_sane(bytes) {
+                    module.win32_resources = Some(crate::module_def::Win32Resources {
+                        original_rva: rsrc_dir.virtual_address,
+                        bytes: bytes.to_vec(),
+                    });
+                }
             }
         }
         module.debug_entries = image.debug_entries.clone();
@@ -447,6 +453,48 @@ fn attach_mdb_symbols(module: &mut Module, mdb_bytes: &[u8]) -> Result<()> {
         scopes: std::collections::BTreeMap::new(),
     });
     Ok(())
+}
+
+/// Structural sanity check for a Win32 resource section: the directory tree
+/// (IMAGE_RESOURCE_DIRECTORY + entries) must reference only offsets inside
+/// the blob and nest no deeper than [`WIN32_RESOURCES_MAX_DEPTH`]. The write
+/// path re-walks this tree to rebase RVAs, so an unsound tree is dropped at
+/// capture time instead of crashing the writer.
+const WIN32_RESOURCES_MAX_DEPTH: usize = 32;
+
+fn win32_resources_tree_is_sane(bytes: &[u8]) -> bool {
+    /// One IMAGE_RESOURCE_DIRECTORY at `at`. Layout: 12 header bytes, then
+    /// `NumberOfNamedEntries`/`NumberOfIdEntries` at +12/+14, then
+    /// 8-byte entries from +16 (name/scope id, child offset).
+    fn dir(bytes: &[u8], at: usize, depth: usize) -> bool {
+        if depth > WIN32_RESOURCES_MAX_DEPTH || at + 16 > bytes.len() {
+            return false;
+        }
+        let named = u16::from_le_bytes([bytes[at + 12], bytes[at + 13]]);
+        let ids = u16::from_le_bytes([bytes[at + 14], bytes[at + 15]]);
+        let entries = named as usize + ids as usize;
+        let entries_at = at + 16;
+        if entries_at + entries * 8 > bytes.len() {
+            return false;
+        }
+        for i in 0..entries {
+            let e = entries_at + i * 8;
+            let child =
+                u32::from_le_bytes([bytes[e + 4], bytes[e + 5], bytes[e + 6], bytes[e + 7]]);
+            if child & 0x8000_0000 != 0 {
+                // Subdirectory: recurse at the masked offset.
+                if !dir(bytes, (child & 0x7FFF_FFFF) as usize, depth + 1) {
+                    return false;
+                }
+            } else if (child as usize) + 16 > bytes.len() {
+                return false; // Data entry must fit.
+            }
+        }
+        true
+    }
+    // Layout mirrors patch_win32_resources in cecli-pe: the tree starts at
+    // offset 0 of the captured blob.
+    dir(bytes, 0, 0)
 }
 
 /// Loads a satellite netmodule's image bytes.
