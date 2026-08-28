@@ -253,14 +253,18 @@ fn write_operand(
         }
         // `calli`: remap the read-time StandAloneSig rid through its captured
         // blob so the emitted token points at this module's deduped row;
-        // unknown rids pass through unchanged (deferred-resolution policy).
-        (ROperand::Token(token), OperandType::InlineSig) => match token.table() {
-            TableIndex::StandAloneSig => match sas_blobs.get(&token.rid()) {
-                Some(blob) => out.u32(tmap.stand_alone_sig_blob(blob).0),
-                None => out.u32(token.0),
-            },
-            _ => out.u32(token.0),
-        },
+        // unknown rids (and unknown table bytes — Token::table would panic)
+        // pass through unchanged (deferred-resolution policy).
+        (ROperand::Token(token), OperandType::InlineSig) => {
+            if token.table_byte() == TableIndex::StandAloneSig as u8 {
+                match sas_blobs.get(&token.rid()) {
+                    Some(blob) => out.u32(tmap.stand_alone_sig_blob(blob).0),
+                    None => out.u32(token.0),
+                }
+            } else {
+                out.u32(token.0);
+            }
+        }
         (
             ROperand::Token(token),
             OperandType::InlineTok

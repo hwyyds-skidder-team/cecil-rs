@@ -1156,15 +1156,19 @@ fn assign_lines(
                 info.module_name, info.stream
             ))
         })?;
-        let begin = (info.cb_syms + info.cb_old_lines) as usize;
-        let limit = begin + info.cb_lines as usize;
-        if limit > data.len() {
+        // The three lengths are hostile i32s: negative sums and overflow
+        // must surface as errors, not add-overflow panics. Compute in i64
+        // like the C13-region path does.
+        let begin = info.cb_syms as i64 + info.cb_old_lines as i64;
+        let limit = begin + info.cb_lines as i64;
+        if begin < 0 || limit < 0 || limit > data.len() as i64 {
             return Err(Error::bad_image(format!(
                 "native pdb: module '{}' line region [{begin},{limit}) exceeds stream of {} bytes",
                 info.module_name,
                 data.len()
             )));
         }
+        let (begin, limit) = (begin as usize, limit as usize);
         let mut bits = BitReader::new(data);
         bits.set_position(begin)?;
         let checks = &module_checksums[mi];
