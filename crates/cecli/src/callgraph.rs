@@ -41,13 +41,10 @@ impl CallGraph {
             let mid = MethodId(mid as u32);
             let Some(body) = &method.body else { continue };
             for ins in &body.instructions {
-                match &ins.operand {
-                    ROperand::Method(mr) => g.record(mid, mr),
-                    // `calli` invokes through a function pointer; its
-                    // resolved target, if any, rides in the CallSite
-                    // signature only for indirect signature purposes — no
-                    // Def edge exists.
-                    _ => {}
+                // Only Method operands create Def edges; `calli` targets ride
+                // in their CallSite signature for indirect invocation.
+                if let ROperand::Method(mr) = &ins.operand {
+                    g.record(mid, mr);
                 }
             }
         }
@@ -144,8 +141,8 @@ impl CallGraph {
                 if *cursor < succs.len() {
                     let w = succs[*cursor];
                     *cursor += 1;
-                    if !index_of.contains_key(&w) {
-                        index_of.insert(w, next_index);
+                    if let std::collections::btree_map::Entry::Vacant(e) = index_of.entry(w) {
+                        e.insert(next_index);
                         lowlink.insert(w, next_index);
                         next_index += 1;
                         stack.push(w);
@@ -480,7 +477,7 @@ mod tests {
             lib,
             FieldDefinition {
                 name: "s_unused".into(),
-                signature: FieldSignature(TypeDesc_int()),
+                signature: FieldSignature(int_desc()),
                 ..Default::default()
             },
         );
@@ -509,7 +506,7 @@ mod tests {
         module
     }
 
-    fn TypeDesc_int() -> crate::model::types::TypeDesc {
+    fn int_desc() -> crate::model::types::TypeDesc {
         crate::model::types::TypeDesc::Internal("int32".into())
     }
 

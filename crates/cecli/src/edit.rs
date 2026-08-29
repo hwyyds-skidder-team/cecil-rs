@@ -1108,7 +1108,7 @@ mod redirect_tests {
         FieldDefinition, FieldSignature, MethodDefinition, RInstruction, TypeDefinition,
     };
 
-    fn TypeDesc_int() -> crate::model::types::TypeDesc {
+    fn int_desc() -> crate::model::types::TypeDesc {
         crate::model::types::TypeDesc::Internal("int32".into())
     }
 
@@ -1122,7 +1122,7 @@ mod redirect_tests {
         });
         let orig =
             module.add_method(t, MethodDefinition { name: "Orig".into(), ..Default::default() });
-        let hook =
+        let _hook =
             module.add_method(t, MethodDefinition { name: "Hook".into(), ..Default::default() });
         let caller =
             module.add_method(t, MethodDefinition { name: "Caller".into(), ..Default::default() });
@@ -1130,7 +1130,7 @@ mod redirect_tests {
             t,
             FieldDefinition {
                 name: "a".into(),
-                signature: FieldSignature(TypeDesc_int()),
+                signature: FieldSignature(int_desc()),
                 ..Default::default()
             },
         );
@@ -1178,7 +1178,7 @@ mod redirect_tests {
     fn arity_mismatch_rejected() {
         let mut m = sample();
         // Give Hook an extra parameter.
-        m.methods[1].signature.parameters.push(TypeDesc_int());
+        m.methods[1].signature.parameters.push(int_desc());
         let err = redirect_calls(&mut m, MethodId(0), MethodId(1)).unwrap_err();
         assert!(err.to_string().contains("arity"), "{err}");
     }
