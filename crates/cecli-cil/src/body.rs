@@ -160,6 +160,30 @@ pub fn encode_body_header(
 /// of `data`. Unknown encodings or truncated operands yield errors; no panic
 /// occurs on malformed input.
 pub fn read_code(data: &[u8], code_size: usize) -> Result<Vec<Instruction>> {
+    // Most real-world IL instructions occupy 1-3 bytes. A modest estimate
+    // prevents the repeated growth that otherwise occurs for every method,
+    // without reserving one model element per byte of IL.
+    let mut instructions = Vec::with_capacity(code_size / 2 + 1);
+    read_code_with(data, code_size, |offset, opcode, operand| {
+        instructions.push(Instruction::new(offset, opcode, operand));
+        Ok(())
+    })?;
+    Ok(instructions)
+}
+
+/// Decodes an IL stream one instruction at a time without allocating an
+/// intermediate [`Instruction`] vector.
+///
+/// This is primarily used by the facade reader, whose final instruction
+/// model contains resolved metadata operands. Keeping the callback generic
+/// lets the decoding loop inline into that conversion while `read_code`
+/// continues to provide the existing owned-vector API.
+#[doc(hidden)]
+#[inline]
+pub fn read_code_with<F>(data: &[u8], code_size: usize, mut visit: F) -> Result<usize>
+where
+    F: FnMut(i32, OpCode, Operand) -> Result<()>,
+{
     if code_size > data.len() {
         return Err(Error::bad_image(format!(
             "code size {code_size} exceeds available {} bytes",
@@ -167,7 +191,7 @@ pub fn read_code(data: &[u8], code_size: usize) -> Result<Vec<Instruction>> {
         )));
     }
     let mut reader = ByteReader::new(&data[..code_size]);
-    let mut instructions = Vec::new();
+    let mut count = 0usize;
 
     while !reader.is_empty() {
         let offset = reader.position() as i32;
@@ -178,9 +202,10 @@ pub fn read_code(data: &[u8], code_size: usize) -> Result<Vec<Instruction>> {
         } else {
             read_operand(&mut reader, opcode, offset)?
         };
-        instructions.push(Instruction::new(offset, opcode, operand));
+        visit(offset, opcode, operand)?;
+        count += 1;
     }
-    Ok(instructions)
+    Ok(count)
 }
 
 fn read_opcode(reader: &mut ByteReader<'_>) -> Result<OpCode> {

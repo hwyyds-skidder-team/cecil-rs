@@ -103,6 +103,9 @@ pub struct ReadContext {
     /// so the writer can re-emit the signatures through its own deduplicated
     /// `StandAloneSig` rows instead of passing stale read-side rids through.
     pub sas_blobs: std::collections::BTreeMap<u32, Vec<u8>>,
+    /// Value-type classifications learned while decoding signatures,
+    /// including locals and call sites loaded after the metadata pass.
+    pub(crate) external_value_types: std::cell::RefCell<Vec<ExternalType>>,
     /// Decoded `#US` heap contents in heap order (for `ldstr` operands).
     pub us_strings: Vec<String>,
     /// Entrypoint token from the CLI header (`Token::NIL` until set).
@@ -120,6 +123,12 @@ pub struct ReadContext {
     pub(crate) spec_memo: std::cell::RefCell<Vec<Option<TypeDesc>>>,
     /// TypeSpec rids currently being decoded (cycle detection).
     pub(crate) spec_stack: std::cell::RefCell<Vec<u32>>,
+    /// Resolved TypeRef rows, reused by signatures and MemberRefs that point
+    /// at the same external type.
+    pub(crate) type_ref_memo: std::cell::RefCell<Vec<Option<crate::model::types::ExternalType>>>,
+    /// Resolved MethodSpec rows, which are commonly referenced by several IL
+    /// instructions in compiler-generated bodies.
+    pub(crate) method_spec_memo: std::cell::RefCell<Vec<Option<MethodRef>>>,
 }
 
 impl fmt::Debug for ReadContext {
@@ -353,6 +362,10 @@ impl ReadContext {
         if rid == 0 || rid > md.row_count(TableIndex::MethodSpec) {
             return Err(Error::argument(format!("MethodSpec rid {rid} out of range")));
         }
+        let idx = rid as usize - 1;
+        if let Some(Some(cached)) = self.method_spec_memo.borrow().get(idx) {
+            return Ok(cached.clone());
+        }
         let base_cell = md.column(TableIndex::MethodSpec, rid, 0)? as u32;
         let blob_idx = md.column(TableIndex::MethodSpec, rid, 1)? as u32;
         let blob = md.heaps().blob.get(blob_idx)?;
@@ -376,7 +389,14 @@ impl ReadContext {
             r.seek(r.position() + consumed)?;
             arguments.push(ty);
         }
-        Ok(MethodRef::Spec { method: Box::new(base), arguments })
+        let result = MethodRef::Spec { method: Box::new(base), arguments };
+        let mut memo = self.method_spec_memo.borrow_mut();
+        if memo.len() <= idx {
+            memo.resize(md.row_count(TableIndex::MethodSpec) as usize, None);
+        }
+        memo[idx] = Some(result.clone());
+        drop(memo);
+        Ok(result)
     }
 
     /// Maps a `MethodDef` token to its arena handle.
@@ -435,6 +455,14 @@ impl ReadContext {
         depth: u32,
         visited: &mut std::collections::BTreeSet<u32>,
     ) -> Result<ExternalType> {
+        let memo_idx = rid.checked_sub(1).map(|v| v as usize);
+        if !visited.contains(&rid) {
+            if let Some(idx) = memo_idx {
+                if let Some(Some(cached)) = self.type_ref_memo.borrow().get(idx) {
+                    return Ok(cached.clone());
+                }
+            }
+        }
         let degraded = depth > MAX_TDOR_DEPTH || !visited.insert(rid);
         let scope_cell = md.column(TableIndex::TypeRef, rid, 0)? as u32;
         let name =
@@ -503,7 +531,15 @@ impl ReadContext {
                     nesting: Vec::new(),
                     scope: scope.clone(),
                 }));
-                return Ok(ExternalType { namespace, name, nesting, scope });
+                let result = ExternalType { namespace, name, nesting, scope };
+                if let Some(idx) = memo_idx {
+                    let mut memo = self.type_ref_memo.borrow_mut();
+                    if memo.len() <= idx {
+                        memo.resize(md.row_count(TableIndex::TypeRef) as usize, None);
+                    }
+                    memo[idx] = Some(result.clone());
+                }
+                return Ok(result);
             }
             Some((other, _)) => {
                 return Err(Error::bad_image(format!(
@@ -513,7 +549,17 @@ impl ReadContext {
             }
         };
 
-        Ok(ExternalType { namespace, name, nesting: Vec::new(), scope })
+        let result = ExternalType { namespace, name, nesting: Vec::new(), scope };
+        if !degraded {
+            if let Some(idx) = memo_idx {
+                let mut memo = self.type_ref_memo.borrow_mut();
+                if memo.len() <= idx {
+                    memo.resize(md.row_count(TableIndex::TypeRef) as usize, None);
+                }
+                memo[idx] = Some(result.clone());
+            }
+        }
+        Ok(result)
     }
 
     /// Decodes a TypeSpec row's signature blob on demand, directly from the
@@ -706,12 +752,21 @@ impl<'c, 'd> SigContext for CtxSigContext<'c, 'd> {
         Err(Error::unsupported("read-side SigContext cannot classify value types"))
     }
 
-    fn tdor_type(&self, _value_type: bool, cell: u32, depth: u32) -> Result<TypeDesc> {
-        // The CLASS/VALUETYPE marker is irrelevant here: TypeDesc trees do not
-        // record it, and the blob position already told the codec which branch
-        // to take. The reader's nesting level rides along so TypeSpec hops
-        // share one global depth budget.
-        self.ctx.tdor_to_typedesc_at(self.md, cell, depth)
+    fn tdor_type(&self, value_type: bool, cell: u32, depth: u32) -> Result<TypeDesc> {
+        let ty = self.ctx.tdor_to_typedesc_at(self.md, cell, depth)?;
+        // TypeRef rows have no class/value-type flag. Preserve the evidence
+        // supplied by signatures instead of guessing from System type names
+        // when writing. Modifiers call this with false without a CLASS marker,
+        // so they must not erase a previously observed value-type identity.
+        if value_type {
+            if let TypeDesc::External(external) = &ty {
+                let mut known = self.ctx.external_value_types.borrow_mut();
+                if !known.contains(external.as_ref()) {
+                    known.push(external.as_ref().clone());
+                }
+            }
+        }
+        Ok(ty)
     }
 }
 
@@ -724,6 +779,47 @@ mod tests {
     use super::*;
     use crate::model::signature::parse_local_var_sig;
     use cecli_metadata::{encode_coded, MetadataBuilder};
+
+    #[test]
+    fn external_value_type_markers_survive_signatures_and_modifiers() {
+        use crate::model::signature::write_type_element;
+        use crate::write::token_map::TokenMap;
+
+        let mut builder = MetadataBuilder::new("v4.0.30319");
+        let name = builder.insert_string("CustomStruct`1");
+        let ns = builder.insert_string("Example");
+        builder.add_row(TableIndex::TypeRef, &[0, name as u64, ns as u64]).unwrap();
+        let bytes = builder.finalize();
+        let md = MetadataReader::parse(&bytes).unwrap();
+        let ctx = ReadContext::new(&md);
+        let sctx = CtxSigContext { ctx: &ctx, md: &md };
+        // Generic external value type, array element, then the same type as
+        // an optional modifier (no CLASS/VALUETYPE byte in modifier encoding).
+        let signatures: &[&[u8]] = &[
+            &[0x15, 0x11, 0x05, 0x01, 0x08],
+            &[0x1D, 0x11, 0x05],
+            &[0x20, 0x05, 0x08],
+        ];
+        let types: Vec<_> = signatures.iter()
+            .map(|sig| parse_type_element(sig, 0, &sctx, 0, false).unwrap().0).collect();
+        assert_eq!(ctx.external_value_types.borrow().len(), 1);
+        let module = crate::Module {
+            external_value_types: ctx.external_value_types.borrow().clone(),
+            ..Default::default()
+        };
+        let mut output = MetadataBuilder::new("v4.0.30319");
+        let tm = TokenMap::new(&mut output);
+        for (ty, expected) in types.iter().zip(signatures) {
+            let mut encoded = cecli_core::io::ByteWriter::new();
+            write_type_element(ty, &mut encoded, &tm.encoder(&module)).unwrap();
+            assert_eq!(encoded.into_vec(), *expected);
+        }
+        // Full identity includes scope; a namesake in another assembly is
+        // not classified based on the original type's marker.
+        let mut other = module.external_value_types[0].clone();
+        other.scope = ScopeRef::Assembly(AssemblyNameReference::new("Other"));
+        assert!(!tm.is_value_type(&TypeDesc::External(Box::new(other)), &module).unwrap());
+    }
 
     /// Synthetic root: Module, AssemblyRef(mscorlib), TypeRef(System.Object),
     /// nested TypeRef, TypeDef, MemberRef(object.ToString()),

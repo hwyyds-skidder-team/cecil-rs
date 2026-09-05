@@ -55,6 +55,10 @@ pub struct Module {
     /// keyed by the original table rid; consumed by the IL writer to re-emit
     /// `calli` operands through its own deduplicated signature rows.
     pub sas_blobs: std::collections::BTreeMap<u32, Vec<u8>>,
+    /// External structs/enums observed with a VALUETYPE signature marker.
+    /// Keep their full scope and nesting identity so rewriting does not need
+    /// the referenced assemblies merely to recover this known classification.
+    pub external_value_types: Vec<ExternalType>,
     /// Raw Win32 resource (`.rsrc`) section captured at read time. The v1
     /// model does not interpret Win32 resources; `write` re-emits them into
     /// a fresh `.rsrc` section, patching internal offsets relative to
@@ -107,6 +111,7 @@ impl Default for Module {
             entry_point_token: cecli_core::Token::NIL,
             debug: None,
             sas_blobs: std::collections::BTreeMap::new(),
+            external_value_types: Vec::new(),
             win32_resources: None,
             debug_entries: Vec::new(),
         }

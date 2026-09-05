@@ -138,9 +138,9 @@ fn dump(path: &str, with_il: bool) -> Result<(), String> {
                     for ins in &body.instructions {
                         let op = operand_display(m, &ins.operand);
                         if op.is_empty() {
-                            println!("    IL_{:04}: {}", ins.offset, ins.opcode.name);
+                            println!("    IL_{:04X}: {}", ins.offset, ins.opcode.name);
                         } else {
-                            println!("    IL_{:04}: {} {}", ins.offset, ins.opcode.name, op);
+                            println!("    IL_{:04X}: {} {}", ins.offset, ins.opcode.name, op);
                         }
                     }
                 }

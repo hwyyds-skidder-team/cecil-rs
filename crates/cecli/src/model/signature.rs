@@ -15,6 +15,7 @@ use cecli_core::flags::{
 };
 use cecli_core::io::{ByteReader, ByteWriter};
 use cecli_core::{ElementType, Error, Result};
+use std::sync::{Arc, OnceLock};
 
 use super::types::{
     ConstantValue, FieldSignature, LocalVariable, MethodSignature, PropertySignature, TypeDesc,
@@ -54,22 +55,10 @@ pub trait SigContext {
         Err(Error::unsupported("this SigContext cannot decode TypeDefOrRef cells"))
     }
 
-    /// Hoists a composite child element into its own encodable unit and
-    /// returns the `TypeDefOrRef` cell that refers to it. Called for inline
-    /// child positions (array/pointer elements, generic arguments, cmod
-    /// targets) when the context supports subtree interning.
-    ///
-    /// This is the write-side counterpart of Arc sharing: a shared subtree
-    /// becomes one `TypeSpec` row referenced by `CLASS + cell` from every
-    /// parent, so DAG-shaped type graphs stay linear in write time AND
-    /// output size (inline expansion would re-emit the subtree per
-    /// reference). The default (`None`) keeps elements inline — exact
-    /// legacy formatting — for contexts without a token map.
-    ///
-    /// The wire stays legal either way: a `CLASS`/`VALUETYPE` element with a
-    /// TypeSpec cell is a valid type element anywhere a bare one is (the
-    /// reader resolves it through the same `TypeDefOrRef` path).
-    fn hoist_element(&self, e: &std::sync::Arc<TypeDesc>) -> Result<Option<u32>> {
+    /// Optional cached inline encoding of a shared child. Composite children
+    /// must stay inline: CLASS/VALUETYPE followed by a TypeSpec token is not
+    /// accepted by the CLR signature grammar.
+    fn encoded_element(&self, e: &Arc<TypeDesc>) -> Result<Option<Arc<[u8]>>> {
         let _ = e;
         Ok(None)
     }
@@ -175,6 +164,38 @@ fn bad_element(code: u8) -> Error {
 /// built from many shallow blobs cannot multiply the frame count.
 const MAX_SIG_DEPTH: u32 = 64;
 
+/// Composite signatures frequently wrap the same primitive nodes (arrays,
+/// byrefs and pointers in particular). Their children are already expressed
+/// as immutable `Arc<TypeDesc>` values, so canonical primitive children can
+/// be shared across signatures without changing mutation semantics:
+/// `Arc::make_mut` still detaches before a caller modifies one.
+fn primitive_arc(code: u8) -> Option<Arc<TypeDesc>> {
+    const CACHE_LEN: usize = 0x1D;
+    static CACHE: OnceLock<[Option<Arc<TypeDesc>>; CACHE_LEN]> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        std::array::from_fn(|code| {
+            primitive_name(code as u8).map(|name| Arc::new(TypeDesc::Internal(name.to_owned())))
+        })
+    });
+    cache.get(code as usize)?.clone()
+}
+
+/// Reads a child node directly into its shared representation. Looking at
+/// the next element byte first avoids constructing and immediately dropping
+/// an owned primitive `String` before wrapping it in an `Arc`.
+fn read_type_arc(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Result<Arc<TypeDesc>> {
+    if depth > MAX_SIG_DEPTH {
+        return Err(Error::bad_image("signature nesting deeper than 64 levels"));
+    }
+    if let Some(&code) = r.bytes().get(r.position()) {
+        if let Some(ty) = primitive_arc(code) {
+            r.u8()?;
+            return Ok(ty);
+        }
+    }
+    Ok(Arc::new(read_type_elem(r, ctx, depth)?))
+}
+
 /// Reads one type element at the reader's current position.
 ///
 /// `ELEMENT_TYPE_VOID` is tolerated anywhere (C++/CLI mixed images; Cecil does
@@ -184,20 +205,17 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Resul
         return Err(Error::bad_image("signature nesting deeper than 64 levels"));
     }
     let et = r.u8()?;
+    if let Some(name) = primitive_name(et) {
+        return Ok(TypeDesc::Internal(name.into()));
+    }
     match et {
         // ELEMENT_TYPE_VOID outside return slots appears in C++/CLI mixed
         // images; Cecil tolerates it, so we map it to the canonical internal.
-        ET_VOID => Ok(TypeDesc::Internal("void".into())),
-        code if primitive_name(code).is_some() => {
-            Ok(TypeDesc::Internal(primitive_name(code).unwrap().into()))
-        }
         ET_VALUE_TYPE | ET_CLASS => ctx.tdor_type(et == ET_VALUE_TYPE, r.compressed_u32()?, depth),
-        ET_PTR => Ok(TypeDesc::Ptr(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?))),
-        ET_BYREF => Ok(TypeDesc::ByRef(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?))),
-        ET_PINNED => Ok(TypeDesc::Pinned(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?))),
-        ET_SZ_ARRAY => {
-            Ok(TypeDesc::SzArray(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?)))
-        }
+        ET_PTR => Ok(TypeDesc::Ptr(read_type_arc(r, ctx, depth + 1)?)),
+        ET_BYREF => Ok(TypeDesc::ByRef(read_type_arc(r, ctx, depth + 1)?)),
+        ET_PINNED => Ok(TypeDesc::Pinned(read_type_arc(r, ctx, depth + 1)?)),
+        ET_SZ_ARRAY => Ok(TypeDesc::SzArray(read_type_arc(r, ctx, depth + 1)?)),
         ET_ARRAY => read_array_elem(r, ctx, depth + 1),
         ET_GENERIC_INST => {
             let marker = r.u8()?;
@@ -212,9 +230,9 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Resul
                 depth,
             )?);
             let arity = r.compressed_u32()?;
-            let mut arguments = Vec::new();
+            let mut arguments = Vec::with_capacity((arity as usize).min(r.remaining()));
             for _ in 0..arity {
-                arguments.push(std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?));
+                arguments.push(read_type_arc(r, ctx, depth + 1)?);
             }
             Ok(TypeDesc::GenericInstance { definition, arguments })
         }
@@ -226,7 +244,7 @@ fn read_type_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Resul
         }
         ET_CMOD_REQD | ET_CMOD_OPT => {
             let modifier = std::sync::Arc::new(ctx.tdor_type(false, r.compressed_u32()?, depth)?);
-            let unmodified = std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?);
+            let unmodified = read_type_arc(r, ctx, depth + 1)?;
             Ok(TypeDesc::CMod { required: et == ET_CMOD_REQD, modifier, unmodified })
         }
         ET_SENTINEL => Ok(TypeDesc::Sentinel),
@@ -251,7 +269,7 @@ fn compressed_index(r: &mut ByteReader) -> Result<u16> {
 
 /// Multi-dimensional array element: rank, sizes count + sizes, lower-bound count + bounds.
 fn read_array_elem(r: &mut ByteReader, ctx: &dyn SigContext, depth: u32) -> Result<TypeDesc> {
-    let element = std::sync::Arc::new(read_type_elem(r, ctx, depth + 1)?);
+    let element = read_type_arc(r, ctx, depth + 1)?;
     let rank = r.compressed_u32()?;
     let num_sizes = r.compressed_u32()?;
     let mut sizes = Vec::new();
@@ -310,7 +328,7 @@ fn get_method_signature(
     let param_count = r.compressed_u32()?;
     let return_type = read_type_elem(r, ctx, depth + 1)?;
 
-    let mut parameters = Vec::new();
+    let mut parameters = Vec::with_capacity((param_count as usize).min(r.remaining()));
     let mut vararg: Option<usize> = None;
     for _ in 0..param_count {
         // A SENTINEL prefixes the first vararg parameter; it shares the blob
@@ -427,22 +445,29 @@ pub fn write_type_element(ty: &TypeDesc, w: &mut ByteWriter, ctx: &dyn SigContex
     Ok(())
 }
 
-/// Writes one inline child element, hoisting it to its own encodable unit
-/// when the context supports it (token-map backed writers intern the subtree
-/// as a `TypeSpec` row and reference it by cell; unit contexts keep the
-/// element inline).
+/// Resource bound for expanding shared type graphs into legal inline blobs.
+/// Exponentially large signatures fail rather than emitting invalid TypeSpec
+/// shortcuts or allocating unbounded output.
+pub(crate) const MAX_INLINE_SIGNATURE_BYTES: usize = 1024 * 1024;
+
+/// Writes an inline child, optionally reusing its cached encoded bytes.
 fn put_child_elem(
     w: &mut ByteWriter,
     e: &std::sync::Arc<TypeDesc>,
     ctx: &dyn SigContext,
 ) -> Result<()> {
-    if let Some(cell) = ctx.hoist_element(e)? {
-        w.u8(ET_CLASS);
-        w.compressed_u32(cell);
-        Ok(())
+    if let Some(bytes) = ctx.encoded_element(e)? {
+        if bytes.len() > MAX_INLINE_SIGNATURE_BYTES.saturating_sub(w.len()) {
+            return Err(Error::unsupported("expanded signature exceeds 1 MiB"));
+        }
+        w.bytes(&bytes);
     } else {
-        write_type_element(e, w, ctx)
+        write_type_element(e, w, ctx)?;
     }
+    if w.len() > MAX_INLINE_SIGNATURE_BYTES {
+        return Err(Error::unsupported("expanded signature exceeds 1 MiB"));
+    }
+    Ok(())
 }
 
 /// Writes the `CLASS|VALUETYPE + cell` pair for a definition/reference type.
@@ -538,7 +563,7 @@ pub fn parse_property_signature(blob: &[u8], ctx: &dyn SigContext) -> Result<Pro
     }
     let param_count = r.compressed_u32()?;
     let property_type = read_type_elem(&mut r, ctx, 0)?;
-    let mut parameters = Vec::new();
+    let mut parameters = Vec::with_capacity((param_count as usize).min(r.remaining()));
     for _ in 0..param_count {
         parameters.push(read_type_elem(&mut r, ctx, 0)?);
     }
@@ -551,7 +576,7 @@ pub fn parse_local_var_sig(blob: &[u8], ctx: &dyn SigContext) -> Result<Vec<Loca
     let mut r = ByteReader::new(blob);
     expect_prolog(&mut r, ET_LOCAL_SIG, "local variable signature")?;
     let count = r.compressed_u32()?;
-    let mut vars = Vec::new();
+    let mut vars = Vec::with_capacity((count as usize).min(r.remaining()));
     for index in 0..count {
         let pinned = {
             let pos = r.position();

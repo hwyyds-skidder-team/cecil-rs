@@ -134,6 +134,7 @@ pub fn read_module(image: &cecli_pe::Image, opts: &ReadOptions) -> Result<(Modul
     let mut ctx = ReadContext::new(&md);
 
     let mut module = Module { entry_point_token: image.entry_point_token(), ..Default::default() };
+    reserve_table_capacity(&mut module, &mut ctx, &md);
     ctx.entry_point_token = module.entry_point_token;
 
     populate_shell(&mut module, image, md.version_string());
@@ -186,8 +187,38 @@ pub fn read_module(image: &cecli_pe::Image, opts: &ReadOptions) -> Result<(Modul
     module.assembly_refs = ctx.asm_refs.clone();
     module.module_refs = ctx.mod_refs.clone();
     read_files_exported_types_resources(&mut module, &ctx, image, &md)?;
+    module.external_value_types = ctx.external_value_types.borrow().clone();
 
     Ok((module, ctx))
+}
+
+/// Most model arenas have a one-to-one metadata table. Reserve their final
+/// size up front so normal images do not repeatedly grow and copy thousands
+/// of already-populated definitions while reading.
+fn reserve_table_capacity(module: &mut Module, ctx: &mut ReadContext, md: &MetadataReader) {
+    let type_count = md.row_count(T::TypeDef) as usize;
+    let method_count = md.row_count(T::MethodDef) as usize;
+    let field_count = md.row_count(T::Field) as usize;
+    let property_count = md.row_count(T::Property) as usize;
+    let event_count = md.row_count(T::Event) as usize;
+    let generic_count = md.row_count(T::GenericParam) as usize;
+
+    module.types.reserve_exact(type_count);
+    module.methods.reserve_exact(method_count);
+    module.fields.reserve_exact(field_count);
+    module.properties.reserve_exact(property_count);
+    module.events.reserve_exact(event_count);
+    module.generic_parameters.reserve_exact(generic_count);
+    module.resources.reserve_exact(md.row_count(T::ManifestResource) as usize);
+    module.file_rows.reserve_exact(md.row_count(T::File) as usize);
+    module.exported_types.reserve_exact(md.row_count(T::ExportedType) as usize);
+
+    ctx.type_defs.reserve_exact(type_count);
+    ctx.method_defs.reserve_exact(method_count);
+    ctx.field_defs.reserve_exact(field_count);
+    ctx.prop_defs.reserve_exact(property_count);
+    ctx.event_defs.reserve_exact(event_count);
+    ctx.gen_params.reserve_exact(generic_count);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +360,8 @@ fn attach_member_ranges(module: &mut Module, rows: &[TypedefRow], md: &MetadataR
     for i in 0..rows.len() {
         let f_end = list_end(&field_starts, i, field_count);
         let mut f = field_starts[i].max(1);
+        let f_limit = f_end.min(field_count.saturating_add(1));
+        module.types[i].fields.reserve_exact(f_limit.saturating_sub(f) as usize);
         while f < f_end && f <= field_count {
             if !field_taken[f as usize - 1] {
                 field_taken[f as usize - 1] = true;
@@ -339,6 +372,8 @@ fn attach_member_ranges(module: &mut Module, rows: &[TypedefRow], md: &MetadataR
 
         let m_end = list_end(&method_starts, i, method_count);
         let mut m = method_starts[i].max(1);
+        let m_limit = m_end.min(method_count.saturating_add(1));
+        module.types[i].methods.reserve_exact(m_limit.saturating_sub(m) as usize);
         while m < m_end && m <= method_count {
             let idx = m as usize - 1;
             if method_owner[idx] == u32::MAX {
@@ -465,6 +500,13 @@ fn read_properties_events_semantics(
     for (i, start) in event_starts.iter().enumerate() {
         let end = list_end(&event_starts, i, event_count);
         let mut e = (*start).max(1);
+        let parent = event_parents[i];
+        if parent >= 1 && parent as usize <= module.types.len() {
+            let limit = end.min(event_count.saturating_add(1));
+            module.types[parent as usize - 1]
+                .events
+                .reserve_exact(limit.saturating_sub(e) as usize);
+        }
         while e < end && e <= event_count {
             let attributes = EventAttributes::from_bits_truncate(cell_u16(md, T::Event, e, 0)?);
             let name = cell_str(md, T::Event, e, 1)?;
@@ -480,7 +522,6 @@ fn read_properties_events_semantics(
                 event_type,
                 ..Default::default()
             });
-            let parent = event_parents[i];
             if parent >= 1 && parent as usize <= module.types.len() {
                 module.types[parent as usize - 1].events.push(EventId(e - 1));
             }
@@ -500,6 +541,13 @@ fn read_properties_events_semantics(
     for (i, start) in prop_starts.iter().enumerate() {
         let end = list_end(&prop_starts, i, prop_count);
         let mut p = (*start).max(1);
+        let parent = prop_parents[i];
+        if parent >= 1 && parent as usize <= module.types.len() {
+            let limit = end.min(prop_count.saturating_add(1));
+            module.types[parent as usize - 1]
+                .properties
+                .reserve_exact(limit.saturating_sub(p) as usize);
+        }
         while p < end && p <= prop_count {
             let attributes =
                 PropertyAttributes::from_bits_truncate(cell_u16(md, T::Property, p, 0)?);
@@ -515,7 +563,6 @@ fn read_properties_events_semantics(
                 signature,
                 ..Default::default()
             });
-            let parent = prop_parents[i];
             if parent >= 1 && parent as usize <= module.types.len() {
                 module.types[parent as usize - 1]
                     .properties

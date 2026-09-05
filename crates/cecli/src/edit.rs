@@ -92,6 +92,113 @@ fn shift_targets(body: &mut ResolvedBody, from: i32, delta: i32, skip: Option<us
     }
 }
 
+/// Shifts exception-handler boundaries for an insertion of `delta` bytes
+/// at `pos` (the offset of the instruction the new bytes precede).
+///
+/// Clause starts at or after `pos` slide by `delta`; a region strictly
+/// containing `pos` grows by `delta`. This mirrors what `shift_targets`
+/// does for branch operands — without it, any structural edit of a body
+/// with try/catch clauses corrupts the clause boundaries.
+fn shift_eh_insert(body: &mut ResolvedBody, pos: i32, delta: i32) {
+    if delta == 0 {
+        return;
+    }
+    for clause in &mut body.exception_handlers {
+        if clause.try_offset >= pos {
+            clause.try_offset += delta;
+        }
+        if clause.handler_offset >= pos {
+            clause.handler_offset += delta;
+        }
+        if clause.filter_offset > 0 && clause.filter_offset >= pos {
+            clause.filter_offset += delta;
+        }
+        if clause.try_offset < pos && pos < clause.try_offset + clause.try_length {
+            clause.try_length += delta;
+        }
+        if clause.handler_offset < pos && pos < clause.handler_offset + clause.handler_length {
+            clause.handler_length += delta;
+        }
+    }
+}
+
+/// Shifts exception-handler boundaries for a replacement at `offset` whose
+/// encoded size changed by `delta`: the replaced instruction occupies
+/// `[offset, offset + old_size)`, so regions containing that span grow.
+fn shift_eh_replace(body: &mut ResolvedBody, offset: i32, delta: i32) {
+    if delta == 0 {
+        return;
+    }
+    for clause in &mut body.exception_handlers {
+        if clause.try_offset > offset {
+            clause.try_offset += delta;
+        }
+        if clause.handler_offset > offset {
+            clause.handler_offset += delta;
+        }
+        if clause.filter_offset > 0 && clause.filter_offset > offset {
+            clause.filter_offset += delta;
+        }
+        if clause.try_offset <= offset && offset < clause.try_offset + clause.try_length {
+            clause.try_length += delta;
+        }
+        if clause.handler_offset <= offset && offset < clause.handler_offset + clause.handler_length {
+            clause.handler_length += delta;
+        }
+    }
+}
+
+/// Shifts exception-handler boundaries for the removal of the byte span
+/// `[pos, pos + removed)`. Regions overlapping the span are clamped;
+/// clause starts inside the span (dangling, like branch targets into it)
+/// collapse to the span start.
+fn shift_eh_remove(body: &mut ResolvedBody, pos: i32, removed: i32) {
+    let span_end = pos + removed;
+    for clause in &mut body.exception_handlers {
+        let try_end = clause.try_offset + clause.try_length;
+        let new_start = if clause.try_offset >= span_end {
+            clause.try_offset - removed
+        } else if clause.try_offset >= pos {
+            pos
+        } else {
+            clause.try_offset
+        };
+        let new_end = if try_end >= span_end {
+            try_end - removed
+        } else if try_end > pos {
+            pos
+        } else {
+            try_end
+        };
+        clause.try_offset = new_start;
+        clause.try_length = (new_end - new_start).max(0);
+
+        let handler_end = clause.handler_offset + clause.handler_length;
+        let new_start = if clause.handler_offset >= span_end {
+            clause.handler_offset - removed
+        } else if clause.handler_offset >= pos {
+            pos
+        } else {
+            clause.handler_offset
+        };
+        let new_end = if handler_end >= span_end {
+            handler_end - removed
+        } else if handler_end > pos {
+            pos
+        } else {
+            handler_end
+        };
+        clause.handler_offset = new_start;
+        clause.handler_length = (new_end - new_start).max(0);
+
+        if clause.filter_offset >= span_end {
+            clause.filter_offset -= removed;
+        } else if clause.filter_offset >= pos {
+            clause.filter_offset = pos;
+        }
+    }
+}
+
 /// Recomputes instruction offsets from the current instruction order and
 /// sizes, fixing absolute branch/switch targets along the way.
 ///
@@ -140,6 +247,32 @@ pub fn renumber(body: &mut ResolvedBody) {
                 }
             }
             _ => {}
+        }
+    }
+
+    // Exception-clause boundaries are byte offsets into the same layout;
+    // remap region starts/ends through the same old->new map (a region end
+    // is either an instruction start or the end-of-body anchor, both of
+    // which the map carries).
+    let map_region = |start: i32, len: i32| -> Option<(i32, i32)> {
+        let new_start = *map.get(&start)?;
+        let end = start.checked_add(len)?;
+        let new_end = *map.get(&end)?;
+        Some((new_start, new_end - new_start))
+    };
+    for clause in &mut body.exception_handlers {
+        if let Some((start, len)) = map_region(clause.try_offset, clause.try_length) {
+            clause.try_offset = start;
+            clause.try_length = len;
+        }
+        if let Some((start, len)) = map_region(clause.handler_offset, clause.handler_length) {
+            clause.handler_offset = start;
+            clause.handler_length = len;
+        }
+        if clause.filter_offset > 0 {
+            if let Some(new) = map.get(&clause.filter_offset) {
+                clause.filter_offset = *new;
+            }
         }
     }
 }
@@ -246,6 +379,7 @@ impl<'a> BodyEditor<'a> {
         let at = index.min(len);
         self.body.instructions.insert(at, instr.clone());
         shift_targets(self.body, pos, size, Some(at));
+        shift_eh_insert(self.body, pos, size);
         self.relayout();
     }
 
@@ -264,10 +398,12 @@ impl<'a> BodyEditor<'a> {
     pub fn replace(&mut self, index: usize, instr: RInstruction) {
         let old_size = encoded_size(&self.body.instructions[index]) as i32;
         let new_size = encoded_size(&instr) as i32;
-        let pos_after = self.body.instructions[index].offset + old_size;
+        let pos = self.body.instructions[index].offset;
+        let pos_after = pos + old_size;
         self.body.instructions[index] = instr;
         if new_size != old_size {
             shift_targets(self.body, pos_after, new_size - old_size, Some(index));
+            shift_eh_replace(self.body, pos, new_size - old_size);
             self.relayout();
         }
     }
@@ -293,6 +429,7 @@ impl<'a> BodyEditor<'a> {
             self.body.instructions[range.start..end].iter().map(|i| encoded_size(i) as i32).sum();
         self.body.instructions.drain(range.start..end);
         shift_targets(self.body, start_pos + removed, -removed, None);
+        shift_eh_remove(self.body, start_pos, removed);
         self.relayout();
     }
 
@@ -578,6 +715,9 @@ fn optimize_branches(body: &mut ResolvedBody) {
         let pos_after = offset + opcode.size as i32 + 4;
         body.instructions[index].opcode = short;
         shift_targets(body, pos_after, -3, None);
+        // The final three operand bytes disappear. Translate both ends of
+        // each EH region (including the code-size anchor) and filter starts.
+        shift_eh_remove(body, pos_after - 3, 3);
         recompute_offsets(body);
         index += 1;
     }
@@ -854,6 +994,82 @@ mod tests {
         assert_eq!(b.instructions[0].opcode, op::BR);
         assert_eq!(b.instructions[0].operand, ROperand::Branch(144));
         assert_eq!(b.instructions.last().unwrap().offset, 144);
+    }
+
+    #[test]
+    fn optimize_branches_preserves_exception_regions() {
+        use crate::model::types::{ExceptionHandlerIL, ExceptionKind};
+
+        // Branches before the try, inside it, and inside the handler all
+        // shrink. Region boundaries must follow their original instructions.
+        let mut b = make_body(vec![
+            instr(0, op::BR, ROperand::Branch(5)),
+            instr(5, op::NOP, ROperand::None),
+            instr(6, op::LEAVE, ROperand::Branch(18)),
+            instr(11, op::NOP, ROperand::None),
+            instr(12, op::BR, ROperand::Branch(17)),
+            instr(17, op::ENDFINALLY, ROperand::None),
+            instr(18, op::RET, ROperand::None),
+        ]);
+        b.exception_handlers.push(ExceptionHandlerIL {
+            kind: ExceptionKind::Finally,
+            try_offset: 5,
+            try_length: 6,
+            handler_offset: 11,
+            handler_length: 7,
+            filter_offset: 0,
+            catch_type: None,
+        });
+        let original = b.clone();
+        crate::flow::Cfg::build(&b).unwrap();
+
+        optimize_macros(&mut b);
+
+        let h = &b.exception_handlers[0];
+        assert_eq!((h.try_offset, h.try_length), (2, 3));
+        assert_eq!((h.handler_offset, h.handler_length), (5, 4));
+        crate::flow::Cfg::build(&b).unwrap();
+        let optimized = b.clone();
+        optimize_macros(&mut b);
+        assert_eq!(b.instructions, optimized.instructions);
+        assert_eq!(b.exception_handlers, optimized.exception_handlers);
+        simplify_macros(&mut b);
+        assert_eq!(b.instructions, original.instructions);
+        assert_eq!(b.exception_handlers, original.exception_handlers);
+    }
+
+    #[test]
+    fn optimize_branches_preserves_filter_and_end_of_body_boundaries() {
+        use crate::model::types::{ExceptionHandlerIL, ExceptionKind};
+
+        // Handler ends at code size rather than at another instruction.
+        let mut b = make_body(vec![
+            instr(0, op::BR, ROperand::Branch(6)),
+            instr(5, op::RET, ROperand::None),
+            instr(6, op::LEAVE, ROperand::Branch(5)),
+            instr(11, op::POP, ROperand::None),
+            instr(12, op::LDC_I4_1, ROperand::None),
+            instr(13, op::ENDFILTER, ROperand::None),
+            instr(15, op::POP, ROperand::None),
+            instr(16, op::LEAVE, ROperand::Branch(5)),
+        ]);
+        b.exception_handlers.push(ExceptionHandlerIL {
+            kind: ExceptionKind::Filter,
+            try_offset: 6,
+            try_length: 5,
+            filter_offset: 11,
+            handler_offset: 15,
+            handler_length: 6,
+            catch_type: None,
+        });
+
+        optimize_macros(&mut b);
+
+        let h = &b.exception_handlers[0];
+        assert_eq!((h.try_offset, h.try_length), (3, 2));
+        assert_eq!(h.filter_offset, 5);
+        assert_eq!((h.handler_offset, h.handler_length), (9, 3));
+        crate::flow::Cfg::build(&b).unwrap();
     }
 
     #[test]

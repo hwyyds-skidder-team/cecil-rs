@@ -2195,6 +2195,13 @@ mod tests {
             })
             .expect("classified write");
         assert_eq!(field_sig_marker(&classified), Some(0x11), "resolution writes VALUETYPE");
+        // Rewriting the already classified image must not need dep again.
+        let mut roundtrip = classified;
+        for _ in 0..2 {
+            let read = AssemblyDefinition::read(&roundtrip).unwrap();
+            roundtrip = read.write().unwrap();
+            assert_eq!(field_sig_marker(&roundtrip), Some(0x11), "preserve input VALUETYPE");
+        }
     }
 
     /// Facade resolution (`resolve_type_with`, the Cecil

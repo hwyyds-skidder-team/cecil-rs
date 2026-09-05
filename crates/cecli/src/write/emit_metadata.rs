@@ -45,7 +45,7 @@ const FIELD_DATA_ALIGN: usize = 8;
 
 /// Rows of the tables Mono.Cecil sorts before serialization
 /// (`MetadataBuilder.SortTables`): buffered during emission, then added to
-/// the builder stably-sorted by their first-column parent/key cell ascending
+/// the builder stably-sorted by their ECMA-335 parent/key cell ascending
 /// (coded-cell numeric compare) right before the metadata root finalizes.
 /// These tables are leaves - no emitted cell references their rids - so
 /// deferring their `add_row` calls is rid-safe. (`CustomDebugInformation`
@@ -68,7 +68,7 @@ struct SortedTables {
 }
 
 impl SortedTables {
-    /// Stably sorts every buffer by its first cell and drains it into
+    /// Stably sorts every buffer by its table-specific key and drains it into
     /// `builder`; FieldRva placeholder rows extend `rva_patches` with their
     /// FINAL (sorted) row indexes.
     fn flush(
@@ -88,25 +88,25 @@ impl SortedTables {
             mut field_rva,
             nested_class,
         } = self;
-        for (table, mut rows) in [
-            (TableIndex::Constant, constant),
-            (TableIndex::CustomAttribute, custom_attribute),
-            (TableIndex::FieldMarshal, field_marshal),
-            (TableIndex::DeclSecurity, decl_security),
-            (TableIndex::ClassLayout, class_layout),
-            (TableIndex::FieldLayout, field_layout),
-            (TableIndex::MethodSemantics, method_semantics),
-            (TableIndex::ImplMap, impl_map),
-            (TableIndex::NestedClass, nested_class),
+        for (table, key, mut rows) in [
+            (TableIndex::Constant, 2, constant),
+            (TableIndex::CustomAttribute, 0, custom_attribute),
+            (TableIndex::FieldMarshal, 0, field_marshal),
+            (TableIndex::DeclSecurity, 1, decl_security),
+            (TableIndex::ClassLayout, 2, class_layout),
+            (TableIndex::FieldLayout, 1, field_layout),
+            (TableIndex::MethodSemantics, 2, method_semantics),
+            (TableIndex::ImplMap, 1, impl_map),
+            (TableIndex::NestedClass, 0, nested_class),
         ] {
             // `sort_by_key` is stable: equal keys keep first-encounter order,
             // matching Cecil's sort stability guarantees.
-            rows.sort_by_key(|row| row[0]);
+            rows.sort_by_key(|row| row[key]);
             for row in rows {
                 builder.add_row(table, &row)?;
             }
         }
-        field_rva.sort_by_key(|(_, row)| row[0]);
+        field_rva.sort_by_key(|(_, row)| row[1]);
         for (fid, row) in &field_rva {
             let rid = builder.add_row(TableIndex::FieldRva, row)?;
             if row[0] == 0 {
@@ -839,7 +839,7 @@ pub fn emit_metadata_with(
     for s in &pending.standalone_sigs {
         builder.add_row(TableIndex::StandAloneSig, &[*s as u64])?;
     }
-    // -- Emit the Cecil-sorted tables stably ordered by their first column.
+    // -- Emit sorted tables using their ECMA-335 key columns.
     sorted.flush(builder, &mut rva_patches)?;
 
     let entry_point_token =
@@ -1270,22 +1270,20 @@ mod tests {
                 .bits();
         assert_eq!(cell::<u16>(&reader, TableIndex::MethodDef, 1, 2), want_flags);
         assert_eq!(strings.get(cell::<u32>(&reader, TableIndex::MethodDef, 1, 3)).unwrap(), "GetX");
-        // Semantics rows are STABLY SORTED by their FIRST column - the
-        // SemanticsAttributes flag (A7-F1) - not the parent cell: the
-        // Property getter (flag 2) precedes the Event add-on (flag 8)
-        // although add_E was emitted first.
+        // HasSemantics sorts by Association: Event rid 1 (cell 2) comes
+        // before Property rid 1 (cell 3), regardless of accessor flags.
         let sem = reader.row(TableIndex::MethodSemantics, 1).unwrap();
         assert_eq!(
             cecli_metadata::decode_coded(&coded::HAS_SEMANTICS, sem[2]),
-            Some((TableIndex::Property, 1))
+            Some((TableIndex::Event, 1))
         );
-        assert_eq!(sem[1], 2, "getter is MethodDef rid 2");
+        assert_eq!(sem[1], 3, "add_E is MethodDef rid 3");
         let sem2 = reader.row(TableIndex::MethodSemantics, 2).unwrap();
         assert_eq!(
             cecli_metadata::decode_coded(&coded::HAS_SEMANTICS, sem2[2]),
-            Some((TableIndex::Event, 1))
+            Some((TableIndex::Property, 1))
         );
-        assert_eq!(sem2[1], 3, "add_E is MethodDef rid 3");
+        assert_eq!(sem2[1], 2, "getter is MethodDef rid 2");
 
         // Resource name spot cell.
         assert_eq!(
@@ -1377,19 +1375,22 @@ mod tests {
     }
 
     #[test]
-    fn sorted_tables_flush_stably_by_first_cell() {
-        // A7-F1: Cecil sorts Constant/CustomAttribute/FieldMarshal/DeclSecurity/
-        // ClassLayout/FieldLayout/MethodSemantics/ImplMap/FieldRva/NestedClass by
-        // their first-column key cell before serialization. Keys are pushed in
-        // deliberately descending order here.
+    fn sorted_tables_flush_stably_by_ecma_key() {
+        // The sorted mask promises ordering by each table's parent key,
+        // which is not necessarily its first physical column.
         let mut builder = MetadataBuilder::new("v4.0.30319");
         let mut patches = Vec::new();
         let mut s = SortedTables::default();
         s.custom_attribute.push(vec![7, 1, 2]);
         s.custom_attribute.push(vec![3, 3, 4]);
-        s.method_semantics.push(vec![9, 1, 30]);
+        s.method_semantics.push(vec![9, 1, 32]);
         s.method_semantics.push(vec![5, 99, 31]);
-        s.method_semantics.push(vec![5, 98, 32]); // equal key: stability keeps 99 first
+        s.method_semantics.push(vec![2, 98, 31]); // equal association: stable order
+        s.constant = vec![vec![8, 0, 8, 0], vec![14, 0, 4, 0]];
+        s.decl_security = vec![vec![1, 8, 0], vec![2, 4, 0]];
+        s.class_layout = vec![vec![1, 4, 2], vec![8, 8, 1]];
+        s.field_layout = vec![vec![0, 2], vec![8, 1]];
+        s.impl_map = vec![vec![1, 8, 0, 0], vec![2, 4, 0, 0]];
         s.field_rva.push((FieldId(1), vec![0, 2])); // placeholder patch
         s.field_rva.push((FieldId(0), vec![0x2000, 1]));
         s.flush(&mut builder, &mut patches).expect("flush");
@@ -1402,14 +1403,21 @@ mod tests {
         assert_eq!(reader.row_count(TableIndex::MethodSemantics), 3);
         assert_eq!(reader.column(TableIndex::MethodSemantics, 1, 0).unwrap(), 5);
         assert_eq!(reader.column(TableIndex::MethodSemantics, 1, 1).unwrap(), 99);
-        assert_eq!(reader.column(TableIndex::MethodSemantics, 2, 0).unwrap(), 5);
+        assert_eq!(reader.column(TableIndex::MethodSemantics, 2, 0).unwrap(), 2);
         assert_eq!(reader.column(TableIndex::MethodSemantics, 2, 1).unwrap(), 98);
-        // FieldRva rows sort ascending by Rva cell; the zero placeholder lands
-        // first. Patches record the ZERO-BASED sorted position (the consumer
-        // adds one to reach the final rid).
+        for (table, key, first) in [
+            (TableIndex::Constant, 2, 4),
+            (TableIndex::DeclSecurity, 1, 4),
+            (TableIndex::ClassLayout, 2, 1),
+            (TableIndex::FieldLayout, 1, 1),
+            (TableIndex::ImplMap, 1, 4),
+        ] {
+            assert_eq!(reader.column(table, 1, key).unwrap(), first, "{table:?}");
+        }
+        // FieldRva sorts by Field, and patches follow the sorted position.
         assert_eq!(reader.row_count(TableIndex::FieldRva), 2);
-        assert_eq!(reader.column(TableIndex::FieldRva, 1, 0).unwrap(), 0);
-        assert_eq!(reader.column(TableIndex::FieldRva, 2, 0).unwrap(), 0x2000);
-        assert_eq!(patches, vec![(FieldId(1), 0)]);
+        assert_eq!(reader.column(TableIndex::FieldRva, 1, 0).unwrap(), 0x2000);
+        assert_eq!(reader.column(TableIndex::FieldRva, 2, 0).unwrap(), 0);
+        assert_eq!(patches, vec![(FieldId(1), 1)]);
     }
 }

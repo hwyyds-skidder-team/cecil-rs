@@ -20,7 +20,7 @@ pub mod variable;
 
 pub use body::{
     decode_method_body, encode_body_header, encode_method_body, parse_body_header, read_code,
-    write_code, MethodBody, ParsedHeader,
+    read_code_with, write_code, MethodBody, ParsedHeader,
 };
 pub use code::Code;
 pub use exceptions::{

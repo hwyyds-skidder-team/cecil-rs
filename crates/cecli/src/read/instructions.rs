@@ -28,13 +28,14 @@
 //!   the whole-module read. Structural problems (bad body header, truncated
 //!   code stream, unreadable local signature, unresolvable catch type) still
 //!   return `Err`, matching Mono.Cecil's throwing behavior.
-//! * Each method body is decoded at most once: RVAs already processed are
-//!   skipped, which guards against overlapping/cyclic reads when several
-//!   method rows share one RVA (e.g. explicit overrides).
+//! * Compilers may share identical method bodies by giving multiple methods
+//!   the same RVA. Decode once, then clone into every owning method so each
+//!   retains its body and subsequent edits remain independent.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
-use cecli_cil::{parse_body_header, parse_sections, read_code};
+use cecli_cil::{parse_body_header, parse_sections, read_code_with};
 use cecli_core::flags::{MethodAttributes, MethodImplAttributes};
 use cecli_core::{Error, Result, TableIndex, Token};
 use cecli_metadata::MetadataReader;
@@ -74,7 +75,7 @@ pub fn resolve_bodies_opts(
         return Ok(());
     }
 
-    let mut visited_rvas: HashSet<u64> = HashSet::new();
+    let mut bodies_by_rva: HashMap<u64, usize> = HashMap::with_capacity(module.methods.len());
     for index in 0..module.methods.len() {
         // Arena order == MethodDef table row order; the RVA is read straight
         // from the metadata row (column 0), the object model does not keep it.
@@ -83,18 +84,20 @@ pub fn resolve_bodies_opts(
         let Some(rva) = il_body_rva(rva, &module.methods[index]) else {
             continue;
         };
-        // Guard against overlapping/cyclic reads: each body is decoded once.
-        if !visited_rvas.insert(rva) {
+        if let Some(&owner) = bodies_by_rva.get(&rva) {
+            module.methods[index].body = module.methods[owner].body.clone();
             continue;
         }
         let code = image.rva(rva)?;
         let body = decode_resolved_body(&code, ctx, md)?;
         capture_sas_blobs(&body, ctx);
         module.methods[index].body = Some(body);
+        bodies_by_rva.insert(rva, index);
     }
     // Hand the captured `calli` signature blobs to the object model so the
     // writer can reach them after the read context is gone.
     module.sas_blobs = std::mem::take(&mut ctx.sas_blobs);
+    module.external_value_types = ctx.external_value_types.borrow().clone();
     Ok(())
 }
 
@@ -129,33 +132,35 @@ fn decode_resolved_body(
     let header_len = if header.fat { 12usize } else { 1usize };
     // `code` is the whole body image; the IL stream starts past the header
     // (mirrors the `data[code_start..code_end]` slicing in cecli-cil).
-    let instructions = read_code(&code[header_len..], header.code_size as usize)?;
-
-    let mut rinstructions = Vec::with_capacity(instructions.len());
-    for ins in instructions {
-        let operand = match ins.opcode.operand_type {
-            cecli_cil::OperandType::InlineTok
-            | cecli_cil::OperandType::InlineType
-            | cecli_cil::OperandType::InlineMethod
-            | cecli_cil::OperandType::InlineField => {
-                resolve_token(ctx, md, token_of(&ins.operand), ins.opcode.operand_type)
-            }
-            // `calli`: the StandAloneSig row's blob is parsed into a typed
-            // CallSite signature (Cecil `CodeReader.GetCallSite`); rows that
-            // fail to parse keep the raw token (deferred-resolution policy).
-            cecli_cil::OperandType::InlineSig => {
-                let token = token_of(&ins.operand);
-                match call_site(ctx, md, token) {
-                    Ok(sig) => ROperand::CallSite(Box::new(sig)),
-                    Err(_) => ROperand::Token(token),
+    let mut rinstructions = Vec::with_capacity(header.code_size as usize / 2 + 1);
+    read_code_with(
+        &code[header_len..],
+        header.code_size as usize,
+        |offset, opcode, raw_operand| {
+            let operand = match opcode.operand_type {
+                cecli_cil::OperandType::InlineTok
+                | cecli_cil::OperandType::InlineType
+                | cecli_cil::OperandType::InlineMethod
+                | cecli_cil::OperandType::InlineField => {
+                    resolve_token(ctx, md, token_of(&raw_operand), opcode.operand_type)
                 }
-            }
-            cecli_cil::OperandType::InlineString => resolve_user_string(ctx, md, &ins.operand),
-            _ => plain_operand(ins.operand),
-        };
-        rinstructions.push(RInstruction { offset: ins.offset, opcode: ins.opcode, operand });
-    }
-
+                // `calli`: the StandAloneSig row's blob is parsed into a typed
+                // CallSite signature (Cecil `CodeReader.GetCallSite`); rows that
+                // fail to parse keep the raw token (deferred-resolution policy).
+                cecli_cil::OperandType::InlineSig => {
+                    let token = token_of(&raw_operand);
+                    match call_site(ctx, md, token) {
+                        Ok(sig) => ROperand::CallSite(Box::new(sig)),
+                        Err(_) => ROperand::Token(token),
+                    }
+                }
+                cecli_cil::OperandType::InlineString => resolve_user_string(ctx, md, &raw_operand),
+                _ => plain_operand(raw_operand),
+            };
+            rinstructions.push(RInstruction { offset, opcode, operand });
+            Ok(())
+        },
+    )?;
     let locals = decode_locals(header.locals_token, ctx, md)?;
 
     let mut exception_handlers = Vec::new();
@@ -268,6 +273,27 @@ fn resolve_user_string(
     }
 }
 
+fn capture_sas_blobs(body: &ResolvedBody, ctx: &mut ReadContext) {
+    for ins in &body.instructions {
+        if ins.opcode.operand_type != cecli_cil::OperandType::InlineSig {
+            continue;
+        }
+        let ROperand::Token(token) = &ins.operand else {
+            continue;
+        };
+        let rid = token.rid();
+        if token.table_byte() != TableIndex::StandAloneSig as u8
+            || rid == 0
+            || ctx.sas_blobs.contains_key(&rid)
+        {
+            continue;
+        }
+        if let Some(blob) = ctx.stand_alone_sigs.get((rid - 1) as usize) {
+            ctx.sas_blobs.insert(rid, blob.clone());
+        }
+    }
+}
+
 /// Encodes a TypeDef/TypeRef/TypeSpec token into its TypeDefOrRef coded cell
 /// (`(rid << 2) | tag`, matching `cecli_core::coded::TYPE_DEF_OR_REF`).
 fn tdor_cell(token: Token) -> u32 {
@@ -304,6 +330,9 @@ fn resolve_token(
     token: Token,
     expected: cecli_cil::OperandType,
 ) -> ROperand {
+    if skip_token_resolution() {
+        return ROperand::Token(token);
+    }
     // `InlineTok` accepts any shape; the other kinds expect exactly one.
     let wants = |want: cecli_cil::OperandType| {
         expected == cecli_cil::OperandType::InlineTok || expected == want
@@ -362,6 +391,12 @@ fn resolve_token(
     }
 }
 
+#[inline]
+fn skip_token_resolution() -> bool {
+    static SKIP: OnceLock<bool> = OnceLock::new();
+    *SKIP.get_or_init(|| std::env::var_os("CECLI_SKIP_TOKEN_RESOLUTION").is_some())
+}
+
 /// Parses the `StandAloneSig` local-variable signature referenced by the body
 /// header into typed local slots. A `NIL` token means "no locals".
 fn decode_locals(
@@ -412,27 +447,6 @@ fn call_site(ctx: &ReadContext, md: &MetadataReader<'_>, token: Token) -> Result
     parse_method_signature(blob, &sig_ctx)
 }
 
-fn capture_sas_blobs(body: &ResolvedBody, ctx: &mut ReadContext) {
-    for ins in &body.instructions {
-        if ins.opcode.operand_type != cecli_cil::OperandType::InlineSig {
-            continue;
-        }
-        let ROperand::Token(token) = &ins.operand else {
-            continue;
-        };
-        let rid = token.rid();
-        if token.table_byte() != TableIndex::StandAloneSig as u8
-            || rid == 0
-            || ctx.sas_blobs.contains_key(&rid)
-        {
-            continue;
-        }
-        if let Some(blob) = ctx.stand_alone_sigs.get((rid - 1) as usize) {
-            ctx.sas_blobs.insert(rid, blob.clone());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use cecli_cil::opcodes;
@@ -443,6 +457,57 @@ mod tests {
 
     use super::*;
     use crate::model::types::{ExternalMethod, ExternalType, TypeDesc};
+
+    #[test]
+    fn shared_rva_bodies_are_kept_for_every_method() {
+        use crate::model::types::{MethodDefinition, TypeDefinition};
+        use crate::AssemblyDefinition;
+
+        let mut asm = AssemblyDefinition::default();
+        let tid = asm.main.add_type(TypeDefinition {
+            name: "SharedBodies".into(),
+            ..Default::default()
+        });
+        for name in ["First", "Second"] {
+            asm.main.add_method(tid, MethodDefinition {
+                name: name.into(),
+                attributes: MethodAttributes::PUBLIC | MethodAttributes::STATIC,
+                body: Some(ResolvedBody {
+                    instructions: vec![RInstruction {
+                        offset: 0,
+                        opcode: opcodes::RET,
+                        operand: ROperand::None,
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        let bytes = asm.write().unwrap();
+        let image = Image::parse(&bytes).unwrap();
+        let (md_rva, _) = image.metadata_rva().unwrap();
+        let md_bytes = image.rva(md_rva).unwrap();
+        let original = MetadataReader::parse(&md_bytes).unwrap();
+        let rva = original.column(TableIndex::MethodDef, 1, 0).unwrap();
+        // Give both MethodDef rows the exact same body in the real PE image.
+        let mut builder = MetadataBuilder::new("v4.0.30319");
+        for _ in 0..2 {
+            builder.add_row(TableIndex::MethodDef, &[rva, 0, 0, 0, 0, 1]).unwrap();
+        }
+        let metadata = builder.finalize();
+        let md = MetadataReader::parse(&metadata).unwrap();
+        for method in &mut asm.main.methods {
+            method.body = None;
+        }
+        resolve_bodies(&mut asm.main, &mut ReadContext::default(), &md, &image).unwrap();
+        assert!(asm.main.methods.iter().all(|m| m.body.is_some()));
+        // Bodies remain independently editable despite sharing the input RVA.
+        asm.main.methods[0].body.as_mut().unwrap().instructions[0].opcode = opcodes::THROW;
+        assert_eq!(asm.main.methods[1].body.as_ref().unwrap().instructions[0].opcode, opcodes::RET);
+        let written = asm.write().unwrap();
+        let reread = AssemblyDefinition::read(&written).unwrap();
+        assert!(reread.main.methods.iter().all(|m| m.body.is_some()));
+    }
 
     /// Builds an in-memory metadata root carrying a `StandAloneSig` locals
     /// signature (int32 + object), one `TypeRef` (`System.Exception`) and the

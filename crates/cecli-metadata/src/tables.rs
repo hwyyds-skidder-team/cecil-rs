@@ -207,6 +207,11 @@ struct TableLayout {
     /// stream data (after the header and row-count array).
     offset: u64,
     columns: Vec<ColumnDesc>,
+    /// Resolved physical widths, parallel to `columns`.
+    ///
+    /// Keeping this out of the public `ColumnDesc` preserves its API while
+    /// avoiding repeated coded-index width scans on every cell access.
+    widths: Vec<u8>,
 }
 
 /// Complete layout of all tables in one metadata root: row counts, column
@@ -248,13 +253,16 @@ impl TableSet {
             };
 
             let mut columns = Vec::with_capacity(kinds.len());
+            let mut widths = Vec::with_capacity(kinds.len());
             let mut row_offset = 0u16;
             for &kind in kinds {
+                let width = probe.kind_width(&kind) as u8;
                 columns.push(ColumnDesc { kind, offset: row_offset });
-                row_offset += probe.kind_width(&kind) as u16;
+                widths.push(width);
+                row_offset += width as u16;
             }
 
-            *layout = Some(TableLayout { row_size: row_offset, offset, columns });
+            *layout = Some(TableLayout { row_size: row_offset, offset, columns, widths });
             offset += row_offset as u64 * probe.counts[i] as u64;
         }
 
@@ -415,7 +423,7 @@ impl TableSet {
         let desc = *layout.columns.get(col).ok_or_else(|| {
             Error::argument(format!("column {col} out of range for table {}", table.name()))
         })?;
-        let width = self.kind_width(&desc.kind);
+        let width = layout.widths[col] as usize;
         let pos = layout.offset + (rid as u64 - 1) * layout.row_size as u64 + desc.offset as u64;
         Ok((pos, width))
     }

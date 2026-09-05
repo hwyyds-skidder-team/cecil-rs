@@ -255,6 +255,17 @@ impl Image {
     /// which mixed-mode C++/CLI images routinely reference.
     pub fn section_at_virtual_address(&self, rva: u64) -> Option<&Section> {
         let rva = rva.min(u32::MAX as u64) as u32;
+        // Metadata and method bodies are normally colocated in `.text`. The
+        // parsed metadata section is a stable, validated index, so checking it
+        // first avoids scanning every PE section for the hot RVA path.
+        if let Some(section) = self.sections.get(self.metadata_section) {
+            let mapped_end = section
+                .virtual_address
+                .saturating_add(section.virtual_size.max(section.size_of_raw_data));
+            if rva >= section.virtual_address && rva < mapped_end {
+                return Some(section);
+            }
+        }
         self.sections.iter().find(|s| {
             let mapped_end =
                 s.virtual_address.saturating_add(s.virtual_size.max(s.size_of_raw_data));

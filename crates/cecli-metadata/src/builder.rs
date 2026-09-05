@@ -50,7 +50,14 @@ struct UserStringHeapBuffer {
 
 impl UserStringHeapBuffer {
     fn new() -> Self {
-        UserStringHeapBuffer { data: Vec::new(), map: HashMap::new() }
+        // The heap starts with a single 0 byte (Mono.Cecil seeds
+        // UserStringHeapBuffer with `new byte[] { 0 }`): heap offset 0 is
+        // reserved for the null string reference, so the first real string
+        // lands at offset 1 and no ldstr token is ever 0x70000000.
+        UserStringHeapBuffer {
+            data: vec![0u8],
+            map: HashMap::new(),
+        }
     }
 
     fn insert(&mut self, s: &str) -> u32 {
