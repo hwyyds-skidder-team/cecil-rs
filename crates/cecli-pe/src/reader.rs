@@ -212,7 +212,11 @@ fn read_metadata(
     if end > source.bytes().len() {
         return Err(Error::bad_image("metadata directory extends past the file"));
     }
-    let mut r = ByteReader::at(source.bytes(), start);
+    // Keep the cursor inside the declared metadata directory. Without this
+    // bound, a truncated stream name could scan into unrelated PE sections
+    // and accept bytes beyond the metadata directory as stream metadata.
+    let metadata = &source.bytes()[start..end];
+    let mut r = ByteReader::new(metadata);
 
     if r.u32()? != 0x424A_5342 {
         return Err(Error::bad_image("missing BSJB metadata signature"));

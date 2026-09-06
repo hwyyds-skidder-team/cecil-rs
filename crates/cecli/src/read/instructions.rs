@@ -132,40 +132,50 @@ fn decode_resolved_body(
     let header_len = if header.fat { 12usize } else { 1usize };
     // `code` is the whole body image; the IL stream starts past the header
     // (mirrors the `data[code_start..code_end]` slicing in cecli-cil).
+    let code_size = header.code_size as usize;
+    let available_code = code
+        .len()
+        .checked_sub(header_len)
+        .ok_or_else(|| Error::bad_image("method body header exceeds input length"))?;
+    if code_size > available_code {
+        return Err(Error::bad_image(format!(
+            "code size {code_size} exceeds available {available_code} bytes"
+        )));
+    }
     let mut rinstructions = Vec::with_capacity(header.code_size as usize / 2 + 1);
-    read_code_with(
-        &code[header_len..],
-        header.code_size as usize,
-        |offset, opcode, raw_operand| {
-            let operand = match opcode.operand_type {
-                cecli_cil::OperandType::InlineTok
-                | cecli_cil::OperandType::InlineType
-                | cecli_cil::OperandType::InlineMethod
-                | cecli_cil::OperandType::InlineField => {
-                    resolve_token(ctx, md, token_of(&raw_operand), opcode.operand_type)
+    read_code_with(&code[header_len..], code_size, |offset, opcode, raw_operand| {
+        let operand = match opcode.operand_type {
+            cecli_cil::OperandType::InlineTok
+            | cecli_cil::OperandType::InlineType
+            | cecli_cil::OperandType::InlineMethod
+            | cecli_cil::OperandType::InlineField => {
+                resolve_token(ctx, md, token_of(&raw_operand), opcode.operand_type)
+            }
+            // `calli`: the StandAloneSig row's blob is parsed into a typed
+            // CallSite signature (Cecil `CodeReader.GetCallSite`); rows that
+            // fail to parse keep the raw token (deferred-resolution policy).
+            cecli_cil::OperandType::InlineSig => {
+                let token = token_of(&raw_operand);
+                match call_site(ctx, md, token) {
+                    Ok(sig) => ROperand::CallSite(Box::new(sig)),
+                    Err(_) => ROperand::Token(token),
                 }
-                // `calli`: the StandAloneSig row's blob is parsed into a typed
-                // CallSite signature (Cecil `CodeReader.GetCallSite`); rows that
-                // fail to parse keep the raw token (deferred-resolution policy).
-                cecli_cil::OperandType::InlineSig => {
-                    let token = token_of(&raw_operand);
-                    match call_site(ctx, md, token) {
-                        Ok(sig) => ROperand::CallSite(Box::new(sig)),
-                        Err(_) => ROperand::Token(token),
-                    }
-                }
-                cecli_cil::OperandType::InlineString => resolve_user_string(ctx, md, &raw_operand),
-                _ => plain_operand(raw_operand),
-            };
-            rinstructions.push(RInstruction { offset, opcode, operand });
-            Ok(())
-        },
-    )?;
+            }
+            cecli_cil::OperandType::InlineString => resolve_user_string(ctx, md, &raw_operand),
+            _ => plain_operand(raw_operand),
+        };
+        rinstructions.push(RInstruction { offset, opcode, operand });
+        Ok(())
+    })?;
     let locals = decode_locals(header.locals_token, ctx, md)?;
 
     let mut exception_handlers = Vec::new();
     if header.more_sects {
-        let sections_offset = align4(header_len + header.code_size as usize);
+        let sections_offset = align4(
+            header_len
+                .checked_add(code_size)
+                .ok_or_else(|| Error::bad_image("method body section offset overflows"))?,
+        );
         let sections = code
             .get(sections_offset..)
             .ok_or_else(|| Error::bad_image("exception section starts past end of body"))?;
@@ -680,6 +690,21 @@ mod tests {
         assert_eq!(body.instructions.len(), 1);
         assert_eq!(body.instructions[0].offset, 0);
         assert_eq!(body.instructions[0].operand, ROperand::Branch(102));
+    }
+
+    #[test]
+    fn resolved_body_rejects_oversized_code_before_reserving() {
+        let mut body = ByteWriter::new();
+        body.u16(0x3003); // fat header
+        body.u16(8);
+        body.u32(u32::MAX);
+        body.u32(0);
+        assert!(decode_resolved_body(
+            body.into_vec().as_slice(),
+            &ReadContext::default(),
+            &test_metadata().0
+        )
+        .is_err());
     }
 
     /// Only managed IL bodies are decoded: abstract, P/Invoke, native and

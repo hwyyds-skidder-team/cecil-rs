@@ -237,25 +237,41 @@ pub fn parse_sections(data: &[u8]) -> Result<(Vec<ExceptionHandler>, bool)> {
     let mut handlers = Vec::new();
     let mut reader = ByteReader::new(data);
     loop {
+        let section_start = reader.position();
         let flags = reader.u8()?;
         if flags & EH_TABLE == 0 {
             return Err(Error::bad_image("section without eh_table flag"));
         }
         let fat = flags & FAT_FORMAT != 0;
-        let count = if fat {
+        let size = if fat {
             let b0 = reader.u8()?;
             let b1 = reader.u8()?;
             let b2 = reader.u8()?;
-            let size = b0 as usize | (b1 as usize) << 8 | (b2 as usize) << 16;
-            size / FAT_CLAUSE_SIZE
+            b0 as usize | (b1 as usize) << 8 | (b2 as usize) << 16
         } else {
             let size = reader.u8()? as usize;
             reader.read_bytes(2)?;
-            size / SMALL_CLAUSE_SIZE
+            size
         };
+        if size < 4 {
+            return Err(Error::bad_image("exception section size is smaller than its header"));
+        }
+        let section_end = section_start
+            .checked_add(size)
+            .ok_or_else(|| Error::bad_image("exception section range overflows"))?;
+        if section_end > data.len() {
+            return Err(Error::bad_image("exception section extends past method body"));
+        }
+        let clause_size = if fat { FAT_CLAUSE_SIZE } else { SMALL_CLAUSE_SIZE };
+        let clause_bytes = size - 4;
+        if !clause_bytes.is_multiple_of(clause_size) {
+            return Err(Error::bad_image("exception section has a partial clause"));
+        }
+        let count = clause_bytes / clause_size;
         for _ in 0..count {
             handlers.push(read_clause(&mut reader, fat)?);
         }
+        reader.seek(section_end)?;
         if flags & MORE_SECTS == 0 {
             return Ok((handlers, false));
         }
@@ -381,5 +397,12 @@ mod tests {
         // 255), so the heuristic forces fat at count >= 0x15 — exactly the
         // layout rule write_section applies.
         assert!(requires_fat_section(&many, false));
+    }
+
+    #[test]
+    fn rejects_zero_length_chained_section() {
+        // MORE_SECTS with a zero-sized section used to leave the cursor at
+        // the same aligned position forever.
+        assert!(parse_sections(&[EH_TABLE | MORE_SECTS, 0, 0, 0]).is_err());
     }
 }

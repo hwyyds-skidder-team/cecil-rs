@@ -271,6 +271,12 @@ impl BitSet {
         if !(0..=0x0100_0000).contains(&count) {
             return Err(Error::bad_image(format!("native pdb: invalid bitset word count {count}")));
         }
+        let available = bits.remaining() / 4;
+        if count as usize > available {
+            return Err(Error::bad_image(format!(
+                "native pdb: bitset declares {count} words but only {available} fit"
+            )));
+        }
         let mut words = Vec::with_capacity(count as usize);
         for _ in 0..count {
             words.push(bits.read_u32()?);
@@ -284,6 +290,10 @@ impl BitSet {
             Some(w) => w & (1 << (index % 32)) != 0,
             None => false,
         }
+    }
+
+    fn bit_capacity(&self) -> usize {
+        self.words.len().saturating_mul(32)
     }
 }
 
@@ -567,6 +577,12 @@ fn load_name_index(bits: &mut BitReader<'_>) -> Result<NameIndex> {
     let present = BitSet::read(bits)?;
     let deleted = BitSet::read(bits)?;
     let _ = deleted; // Cecil ignores the deleted bitset too.
+
+    if cnt > max || max as usize > present.bit_capacity() {
+        return Err(Error::bad_image(format!(
+            "native pdb: name-index range max {max} exceeds present bitset or count {cnt}"
+        )));
+    }
 
     let mut result = HashMap::new();
     let mut seen = 0usize;
@@ -1484,6 +1500,14 @@ mod tests {
         }
 
         image
+    }
+
+    #[test]
+    fn rejects_bitset_count_larger_than_input_before_allocating() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0100_0000u32.to_le_bytes());
+        let mut bits = BitReader::new(&bytes);
+        assert!(BitSet::read(&mut bits).is_err());
     }
 
     // -- stream builders ---------------------------------------------------

@@ -160,6 +160,12 @@ pub fn encode_body_header(
 /// of `data`. Unknown encodings or truncated operands yield errors; no panic
 /// occurs on malformed input.
 pub fn read_code(data: &[u8], code_size: usize) -> Result<Vec<Instruction>> {
+    if code_size > data.len() {
+        return Err(Error::bad_image(format!(
+            "code size {code_size} exceeds available {} bytes",
+            data.len()
+        )));
+    }
     // Most real-world IL instructions occupy 1-3 bytes. A modest estimate
     // prevents the repeated growth that otherwise occurs for every method,
     // without reserving one model element per byte of IL.
@@ -392,8 +398,10 @@ fn write_simple_operand(writer: &mut ByteWriter, operand: &Operand, ot: OperandT
 pub fn decode_method_body(data: &[u8]) -> Result<(MethodBody, usize)> {
     let header = parse_body_header(data)?;
     let header_len = if header.fat { 12 } else { 1 };
-    let code_start = header_len;
-    let code_end = code_start + header.code_size as usize;
+    let code_start: usize = header_len;
+    let code_end = code_start
+        .checked_add(header.code_size as usize)
+        .ok_or_else(|| Error::bad_image("method body code range overflows"))?;
     if code_end > data.len() {
         return Err(Error::bad_image("method body code exceeds input length"));
     }
@@ -542,6 +550,14 @@ mod tests {
         assert!(parse_body_header(&[]).is_err());
         assert!(parse_body_header(&[0x00]).is_err()); // format bits 0
         assert!(parse_body_header(&[0x03, 0x30]).is_err()); // truncated fat
+    }
+
+    #[test]
+    fn rejects_oversized_code_before_reserving() {
+        // The declared size is intentionally far larger than the available
+        // input. This must return an error before attempting a huge Vec
+        // allocation.
+        assert!(read_code(&[], usize::MAX).is_err());
     }
 
     /// Decode -> encode roundtrip over a program with branches and a switch.

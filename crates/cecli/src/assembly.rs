@@ -126,9 +126,10 @@ impl AssemblyDefinition {
         let eager = opts.reading_mode == crate::resolver::ReadingMode::Immediate;
         if eager {
             // Decode IL bodies against the parsed metadata root.
-            let (md_rva, _) = image.metadata_rva()?;
+            let (md_rva, md_size) = image.metadata_rva()?;
             let md_slice = image.rva(md_rva)?;
-            let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref())?;
+            let md =
+                cecli_metadata::MetadataReader::parse(&md_slice[..md_size.min(md_slice.len())])?;
             crate::read::instructions::resolve_bodies_opts(
                 &mut module,
                 &mut ctx,
@@ -255,9 +256,9 @@ impl AssemblyDefinition {
             return Ok(());
         };
         let image = cecli_pe::Image::parse(&lazy.raw)?;
-        let (md_rva, _) = image.metadata_rva()?;
+        let (md_rva, md_size) = image.metadata_rva()?;
         let md_slice = image.rva(md_rva)?;
-        let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref())?;
+        let md = cecli_metadata::MetadataReader::parse(&md_slice[..md_size.min(md_slice.len())])?;
         let mut ctx = lazy.ctx;
         crate::read::instructions::resolve_bodies_opts(
             &mut self.main,
@@ -757,9 +758,9 @@ pub(crate) fn read_standalone_module(bytes: &[u8]) -> Result<Module> {
     let image = cecli_pe::Image::parse(bytes)?;
     let read_opts = crate::read::context::ReadOptions::default();
     let (mut module, mut ctx) = crate::read::module_reader::read_module(&image, &read_opts)?;
-    let (md_rva, _) = image.metadata_rva()?;
+    let (md_rva, md_size) = image.metadata_rva()?;
     let md_slice = image.rva(md_rva)?;
-    let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref())?;
+    let md = cecli_metadata::MetadataReader::parse(&md_slice[..md_size.min(md_slice.len())])?;
     crate::read::instructions::resolve_bodies_opts(
         &mut module,
         &mut ctx,
@@ -1867,9 +1868,10 @@ mod tests {
 
         // No Assembly row in the emitted metadata (netmodule semantics).
         let image = cecli_pe::Image::parse(&out).expect("emitted image parses");
-        let (md_rva, _) = image.metadata_rva().expect("metadata directory");
+        let (md_rva, md_size) = image.metadata_rva().expect("metadata directory");
         let md_slice = image.rva(md_rva).expect("metadata slice");
-        let md = cecli_metadata::MetadataReader::parse(md_slice.as_ref()).expect("metadata parses");
+        let md = cecli_metadata::MetadataReader::parse(&md_slice[..md_size.min(md_slice.len())])
+            .expect("metadata parses");
         assert_eq!(md.row_count(cecli_core::TableIndex::Assembly), 0, "no Assembly row");
 
         // A strong-name key is rejected for standalone modules.
