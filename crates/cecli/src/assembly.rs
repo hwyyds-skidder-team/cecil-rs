@@ -719,9 +719,16 @@ fn locate_netmodule_bytes(
 ) -> Option<Vec<u8>> {
     if let Some(origin) = origin {
         if let Some(dir) = origin.parent() {
-            let sibling = dir.join(name);
-            if sibling.is_file() {
-                return std::fs::read(&sibling).ok();
+            // A File-table name is a file name, not an arbitrary path. Do not
+            // let an untrusted manifest escape the assembly directory.
+            let file_name = std::path::Path::new(name);
+            if file_name.components().count() == 1
+                && matches!(file_name.components().next(), Some(std::path::Component::Normal(_)))
+            {
+                let sibling = dir.join(file_name);
+                if sibling.is_file() {
+                    return std::fs::read(&sibling).ok();
+                }
             }
         }
     }

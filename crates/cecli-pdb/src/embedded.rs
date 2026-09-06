@@ -27,6 +27,11 @@ pub mod image_debug_type {
 /// MPDB container magic (`0x4d 0x50 0x44 0x42`).
 const MPDB_MAGIC: [u8; 4] = *b"MPDB";
 
+// Embedded PDBs are carried by an untrusted PE debug directory. Keep the
+// declared size bounded before allocating or inflating the payload so a tiny
+// compressed bomb cannot force a multi-gigabyte allocation.
+const MAX_EMBEDDED_PDB_SIZE: usize = 256 * 1024 * 1024;
+
 /// Wraps a finished portable PDB into the MPDB container: magic,
 /// uncompressed length, raw-Deflate-compressed PDB bytes.
 pub fn wrap_embedded(pdb: &[u8]) -> Result<Vec<u8>> {
@@ -53,6 +58,11 @@ pub fn unwrap_embedded(payload: &[u8]) -> Result<Vec<u8>> {
         return Err(Error::bad_image("embedded pdb payload is missing the MPDB magic"));
     }
     let declared = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
+    if declared > MAX_EMBEDDED_PDB_SIZE {
+        return Err(Error::bad_image(format!(
+            "embedded pdb declared size {declared} exceeds limit {MAX_EMBEDDED_PDB_SIZE}"
+        )));
+    }
     let mut decoder = flate2::read::DeflateDecoder::new(&payload[8..]);
     let mut pdb = Vec::with_capacity(declared);
     decoder
@@ -108,6 +118,14 @@ mod tests {
         lying.extend_from_slice(&999u32.to_le_bytes());
         lying.extend_from_slice(&[0x78]); // not valid raw deflate of 999 bytes
         assert!(unwrap_embedded(&lying).is_err());
+    }
+
+    #[test]
+    fn unwrap_rejects_untrusted_oversized_declaration_before_allocating() {
+        let mut payload = b"MPDB".to_vec();
+        payload.extend_from_slice(&((MAX_EMBEDDED_PDB_SIZE as u32) + 1).to_le_bytes());
+        payload.push(0);
+        assert!(unwrap_embedded(&payload).is_err());
     }
 
     #[test]

@@ -142,7 +142,8 @@ fn shift_eh_replace(body: &mut ResolvedBody, offset: i32, delta: i32) {
         if clause.try_offset <= offset && offset < clause.try_offset + clause.try_length {
             clause.try_length += delta;
         }
-        if clause.handler_offset <= offset && offset < clause.handler_offset + clause.handler_length {
+        if clause.handler_offset <= offset && offset < clause.handler_offset + clause.handler_length
+        {
             clause.handler_length += delta;
         }
     }
@@ -695,12 +696,6 @@ fn optimize_branches(body: &mut ResolvedBody) {
             index += 1;
             continue;
         }
-        // Displacement of the long (5-byte) form.
-        let displacement = target - (offset + opcode.size as i32 + 4);
-        if !(-128..=127).contains(&displacement) {
-            index += 1;
-            continue;
-        }
         let short = match short_branch(opcode.code) {
             Some(short) => short,
             None => {
@@ -709,16 +704,27 @@ fn optimize_branches(body: &mut ResolvedBody) {
             }
         };
 
-        // Shrinking saves exactly 3 bytes; every boundary at or after this
-        // instruction's end slides up - including this branch's own target
-        // when it points forward.
-        let pos_after = offset + opcode.size as i32 + 4;
+        // Test the displacement of the candidate short form. A backward
+        // target does not move when the branch shrinks, so its short
+        // displacement is three bytes less negative than the long one.
+        let old_end = offset + opcode.size as i32 + 4;
+        let new_target = if target >= old_end { target - 3 } else { target };
+        let displacement = new_target - (offset + short.size as i32 + 1);
+        if !(-128..=127).contains(&displacement) {
+            index += 1;
+            continue;
+        }
+
+        // Shrinking saves exactly 3 bytes. `renumber` remaps absolute targets
+        // through their old instruction boundaries; shifting them here first
+        // would make that mapping run twice and can redirect a forward edge
+        // to the wrong block (including the method entry).
+        let pos_after = old_end;
         body.instructions[index].opcode = short;
-        shift_targets(body, pos_after, -3, None);
         // The final three operand bytes disappear. Translate both ends of
         // each EH region (including the code-size anchor) and filter starts.
         shift_eh_remove(body, pos_after - 3, 3);
-        recompute_offsets(body);
+        renumber(body);
         index += 1;
     }
 }
@@ -994,6 +1000,23 @@ mod tests {
         assert_eq!(b.instructions[0].opcode, op::BR);
         assert_eq!(b.instructions[0].operand, ROperand::Branch(144));
         assert_eq!(b.instructions.last().unwrap().offset, 144);
+    }
+
+    #[test]
+    fn optimize_shortens_backward_branch_at_short_boundary() {
+        // A long branch at offset 125 has long displacement -130, but its
+        // short form reaches offset 0 with displacement -127.
+        let mut instructions: Vec<_> =
+            (0..125).map(|offset| instr(offset, op::NOP, ROperand::None)).collect();
+        instructions.push(instr(125, op::BR, ROperand::Branch(0)));
+        instructions.push(instr(130, op::RET, ROperand::None));
+        let mut b = make_body(instructions);
+
+        optimize_macros(&mut b);
+
+        assert_eq!(b.instructions[125].opcode, op::BR_S);
+        assert_eq!(b.instructions[125].operand, ROperand::Branch(0));
+        assert_eq!(b.instructions.last().unwrap().offset, 127);
     }
 
     #[test]

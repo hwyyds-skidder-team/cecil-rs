@@ -457,10 +457,10 @@ pub fn recompute_max_stack(module: &Module, body: &ResolvedBody) -> Result<u16> 
             }
             let (pops, pushes) = stack_effect(module, ins)?;
             d = d
-                .checked_sub(pops as u32)
+                .checked_sub(pops)
                 .ok_or_else(|| Error::bad_image("cfg: evaluation stack underflow"))?;
-            max = max.max(d + pushes as u32);
-            d += pushes as u32;
+            max = max.max(d + pushes);
+            d += pushes;
         }
         // Branch comparand pops are already applied by stack_effect; the
         // exit depth is simply the post-instruction depth.
@@ -494,7 +494,7 @@ pub fn recompute_max_stack(module: &Module, body: &ResolvedBody) -> Result<u16> 
 }
 
 /// Value pops of a branch/switch at block exit (0 for non-branches).
-fn branch_pops(ins: &RInstruction) -> u8 {
+fn branch_pops(ins: &RInstruction) -> u32 {
     match &ins.operand {
         ROperand::Branch(_) if is_unconditional_branch(ins) => 0,
         // brtrue/brfalse compare one value; every other conditional branch
@@ -513,7 +513,11 @@ fn branch_pops(ins: &RInstruction) -> u8 {
 
 /// (pops, pushes) of one instruction; `call`-family effects come from the
 /// resolved signature operand, Def targets through `module`.
-fn stack_effect(module: &Module, ins: &RInstruction) -> Result<(u8, u8)> {
+/// Stack effect (pops, pushes) of one instruction, ECMA-accurate.
+///
+/// Public for obfuscation passes that need per-instruction depth tracking
+/// (e.g. deciding where a body can be safely cut into dispatchable blocks).
+pub fn stack_effect(module: &Module, ins: &RInstruction) -> Result<(u32, u32)> {
     let name = ins.opcode.name;
 
     // Call family: variadic by signature.
@@ -522,7 +526,7 @@ fn stack_effect(module: &Module, ins: &RInstruction) -> Result<(u8, u8)> {
             (ROperand::Method(mr), "call" | "callvirt" | "newobj") => {
                 let sig = signature_of(module, mr)?;
                 let this = if sig.has_this && name != "newobj" { 1 } else { 0 };
-                let pops = sig.parameters.len() as u8 + this;
+                let pops = sig.parameters.len() as u32 + this;
                 let pushes = if name == "newobj" {
                     1
                 } else if is_void(&sig.return_type) {
@@ -536,7 +540,7 @@ fn stack_effect(module: &Module, ins: &RInstruction) -> Result<(u8, u8)> {
                 let this = if sig.has_this { 1 } else { 0 };
                 // arguments + implicit this + the function pointer itself
                 Ok((
-                    sig.parameters.len() as u8 + this + 1,
+                    sig.parameters.len() as u32 + this + 1,
                     if is_void(&sig.return_type) { 0 } else { 1 },
                 ))
             }
@@ -565,7 +569,7 @@ fn stack_effect(module: &Module, ins: &RInstruction) -> Result<(u8, u8)> {
         return Ok((0, 0));
     }
 
-    let effect: (u8, u8) = if name.starts_with("ldarg")
+    let effect: (u32, u32) = if name.starts_with("ldarg")
         || name.starts_with("ldloc")
         || name.starts_with("ldc")
         || name.starts_with("ldsfld")

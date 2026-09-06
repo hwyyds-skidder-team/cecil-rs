@@ -257,6 +257,13 @@ pub fn probe_version(path: &Path) -> Result<Version> {
 /// exact-spelling file exists, mirroring Windows' case-insensitive file
 /// system semantics (a `foo.DLL` satisfies a request for `foo.dll`).
 fn probe_directory(dir: &Path, stem: &str) -> Option<PathBuf> {
+    let stem_path = Path::new(stem);
+    if stem_path.components().count() != 1
+        || !matches!(stem_path.components().next(), Some(std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+
     // Fast path: exact-spelling candidates in priority order.
     for ext in CANDIDATE_EXTENSIONS {
         let candidate = dir.join(format!("{stem}{ext}"));
@@ -548,6 +555,18 @@ mod tests {
         let err = resolve_in_dirs(&reference("ghost"), &[]).expect_err("must fail");
         let msg = err.to_string();
         assert!(msg.contains("ghost"), "message names assembly: {msg}");
+    }
+
+    #[test]
+    fn rejects_path_traversal_in_assembly_name() {
+        let dir = make_temp_dir(&next_unique_tag());
+        std::fs::write(dir.join("secret.dll"), b"secret").expect("write secret");
+
+        let err = resolve_in_dirs(&reference("../secret"), std::slice::from_ref(&dir))
+            .expect_err("path traversal must not escape the search directory");
+        assert!(err.to_string().contains("../secret"));
+
+        cleanup_dir(&dir);
     }
 
     #[test]

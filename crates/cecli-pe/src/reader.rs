@@ -78,7 +78,7 @@ pub fn read_image(raw: Vec<u8>) -> Result<Image> {
     let cli_header = read_cli_header(&mut r, cli_directory, &sections)?;
 
     let (metadata_section, runtime_version, streams) =
-        read_metadata(&mut r, cli_header.metadata_rva, &sections)?;
+        read_metadata(&r, cli_header.metadata_rva, cli_header.metadata_size as usize, &sections)?;
 
     let debug_entries = read_debug_header(
         &mut r,
@@ -200,11 +200,19 @@ type MetadataInfo = (usize, String, Vec<crate::image::MetadataStream>);
 ///
 /// Returns `(metadata section index, runtime version string, streams)`.
 fn read_metadata(
-    r: &mut ByteReader<'_>,
+    source: &ByteReader<'_>,
     metadata_rva: u64,
+    metadata_size: usize,
     sections: &[Section],
 ) -> Result<MetadataInfo> {
-    r.seek(resolve_rva_offset(metadata_rva, sections)?)?;
+    let start = resolve_rva_offset(metadata_rva, sections)?;
+    let end = start
+        .checked_add(metadata_size)
+        .ok_or_else(|| Error::bad_image("metadata directory range overflows"))?;
+    if end > source.bytes().len() {
+        return Err(Error::bad_image("metadata directory extends past the file"));
+    }
+    let mut r = ByteReader::at(source.bytes(), start);
 
     if r.u32()? != 0x424A_5342 {
         return Err(Error::bad_image("missing BSJB metadata signature"));
@@ -216,7 +224,7 @@ fn read_metadata(
     if version_length < 0 || version_length as usize > r.remaining() {
         return Err(Error::bad_image(format!("invalid metadata version length {version_length}")));
     }
-    let runtime_version = read_zero_terminated_string(r, version_length as usize)?;
+    let runtime_version = read_zero_terminated_string(&mut r, version_length as usize)?;
 
     // Flags (2).
     r.seek(r.position() + 2)?;
@@ -234,7 +242,7 @@ fn read_metadata(
     for _ in 0..stream_count {
         let offset = r.u32()? as u64; // relative to the metadata root
         let size = r.u32()? as u64;
-        let name = read_aligned_string(r)?;
+        let name = read_aligned_string(&mut r)?;
         streams.push(crate::image::MetadataStream { name, offset, size });
     }
 
@@ -246,7 +254,7 @@ fn read_metadata(
 fn read_aligned_string(r: &mut ByteReader<'_>) -> Result<String> {
     let start = r.position();
     let mut buf = Vec::new();
-    for _ in 0..16 {
+    loop {
         let b = r.u8()?;
         if b == 0 {
             break;

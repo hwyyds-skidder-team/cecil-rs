@@ -40,7 +40,8 @@ fn main() {
         let mut asm = AssemblyDefinition::read_with(&bytes, &opts).unwrap();
         model.push(start.elapsed());
         let start = Instant::now();
-        black_box(asm.load_bodies().unwrap());
+        asm.load_bodies().unwrap();
+        black_box(());
         body.push(start.elapsed());
     }
     let (min, med, avg) = stats(model);
@@ -58,11 +59,14 @@ fn main() {
         let mut count = 0usize;
         for rid in 1..=md.row_count(TableIndex::MethodDef) {
             let rva = md.column(TableIndex::MethodDef, rid, 0).unwrap();
-            if rva == 0 { continue; }
+            if rva == 0 {
+                continue;
+            }
             let body = image.rva(rva).unwrap();
             let header = cecli_cil::parse_body_header(&body).unwrap();
             let header_len = if header.fat { 12 } else { 1 };
-            let code = cecli_cil::read_code(&body[header_len..], header.code_size as usize).unwrap();
+            let code =
+                cecli_cil::read_code(&body[header_len..], header.code_size as usize).unwrap();
             count += code.len();
             black_box(code);
         }

@@ -464,24 +464,25 @@ mod tests {
         use crate::AssemblyDefinition;
 
         let mut asm = AssemblyDefinition::default();
-        let tid = asm.main.add_type(TypeDefinition {
-            name: "SharedBodies".into(),
-            ..Default::default()
-        });
+        let tid =
+            asm.main.add_type(TypeDefinition { name: "SharedBodies".into(), ..Default::default() });
         for name in ["First", "Second"] {
-            asm.main.add_method(tid, MethodDefinition {
-                name: name.into(),
-                attributes: MethodAttributes::PUBLIC | MethodAttributes::STATIC,
-                body: Some(ResolvedBody {
-                    instructions: vec![RInstruction {
-                        offset: 0,
-                        opcode: opcodes::RET,
-                        operand: ROperand::None,
-                    }],
+            asm.main.add_method(
+                tid,
+                MethodDefinition {
+                    name: name.into(),
+                    attributes: MethodAttributes::PUBLIC | MethodAttributes::STATIC,
+                    body: Some(ResolvedBody {
+                        instructions: vec![RInstruction {
+                            offset: 0,
+                            opcode: opcodes::RET,
+                            operand: ROperand::None,
+                        }],
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            });
+                },
+            );
         }
         let bytes = asm.write().unwrap();
         let image = Image::parse(&bytes).unwrap();

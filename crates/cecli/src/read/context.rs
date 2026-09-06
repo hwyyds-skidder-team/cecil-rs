@@ -795,13 +795,12 @@ mod tests {
         let sctx = CtxSigContext { ctx: &ctx, md: &md };
         // Generic external value type, array element, then the same type as
         // an optional modifier (no CLASS/VALUETYPE byte in modifier encoding).
-        let signatures: &[&[u8]] = &[
-            &[0x15, 0x11, 0x05, 0x01, 0x08],
-            &[0x1D, 0x11, 0x05],
-            &[0x20, 0x05, 0x08],
-        ];
-        let types: Vec<_> = signatures.iter()
-            .map(|sig| parse_type_element(sig, 0, &sctx, 0, false).unwrap().0).collect();
+        let signatures: &[&[u8]] =
+            &[&[0x15, 0x11, 0x05, 0x01, 0x08], &[0x1D, 0x11, 0x05], &[0x20, 0x05, 0x08]];
+        let types: Vec<_> = signatures
+            .iter()
+            .map(|sig| parse_type_element(sig, 0, &sctx, 0, false).unwrap().0)
+            .collect();
         assert_eq!(ctx.external_value_types.borrow().len(), 1);
         let module = crate::Module {
             external_value_types: ctx.external_value_types.borrow().clone(),
