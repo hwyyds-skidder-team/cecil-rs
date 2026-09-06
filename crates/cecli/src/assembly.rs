@@ -96,7 +96,7 @@ impl AssemblyDefinition {
     ) -> Result<Self> {
         let path = path.as_ref();
         let bytes = std::fs::read(path).map_err(Error::Io)?;
-        Self::read_impl(&bytes, Some(path.to_path_buf()), opts)
+        Self::read_impl_owned(bytes, Some(path.to_path_buf()), opts)
     }
 
     /// Reads an assembly from raw bytes honoring reader parameters.
@@ -114,8 +114,29 @@ impl AssemblyDefinition {
         opts: &crate::resolver::ReaderParameters,
     ) -> Result<Self> {
         let image = cecli_pe::Image::parse(bytes)?;
+        Self::read_impl_image(image, origin, opts)
+    }
+
+    fn read_impl_owned(
+        bytes: Vec<u8>,
+        origin: Option<std::path::PathBuf>,
+        opts: &crate::resolver::ReaderParameters,
+    ) -> Result<Self> {
+        let image = cecli_pe::Image::parse_owned(bytes)?;
+        Self::read_impl_image(image, origin, opts)
+    }
+
+    fn read_impl_image(
+        image: cecli_pe::Image,
+        origin: Option<std::path::PathBuf>,
+        opts: &crate::resolver::ReaderParameters,
+    ) -> Result<Self> {
+        let (md_rva, md_size) = image.metadata_rva()?;
+        let md_slice = image.rva(md_rva)?;
+        let md = cecli_metadata::MetadataReader::parse(&md_slice[..md_size.min(md_slice.len())])?;
         let read_opts = crate::read::context::ReadOptions::default();
-        let (mut module, mut ctx) = crate::read::module_reader::read_module(&image, &read_opts)?;
+        let (mut module, mut ctx) =
+            crate::read::module_reader::read_module_with_metadata(&image, &md, &read_opts)?;
 
         // Method-body policy: `Immediate` (the default) decodes every body
         // up front. `Lazy`/`Deferred` skip the decode and stash the raw
@@ -126,10 +147,6 @@ impl AssemblyDefinition {
         let eager = opts.reading_mode == crate::resolver::ReadingMode::Immediate;
         if eager {
             // Decode IL bodies against the parsed metadata root.
-            let (md_rva, md_size) = image.metadata_rva()?;
-            let md_slice = image.rva(md_rva)?;
-            let md =
-                cecli_metadata::MetadataReader::parse(&md_slice[..md_size.min(md_slice.len())])?;
             crate::read::instructions::resolve_bodies_opts(
                 &mut module,
                 &mut ctx,
@@ -239,7 +256,7 @@ impl AssemblyDefinition {
 
         let entry_point = method_of_token(&ctx, module.entry_point_token);
 
-        let lazy = if eager { None } else { Some(LazyAssembly { raw: bytes.to_vec(), ctx }) };
+        let lazy = if eager { None } else { Some(LazyAssembly { raw: image.raw().to_vec(), ctx }) };
         Ok(AssemblyDefinition { name, main: module, modules, entry_point, lazy })
     }
 

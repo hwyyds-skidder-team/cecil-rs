@@ -123,70 +123,81 @@ fn list_end(starts: &[u32], i: usize, count: u32) -> u32 {
 /// parsed image. Returns the owned object model plus the token maps required
 /// by later phases (body resolution, writing, facade glue).
 pub fn read_module(image: &cecli_pe::Image, opts: &ReadOptions) -> Result<(Module, ReadContext)> {
-    // Bodies belong to unit R3 (`resolve_bodies`); never loaded here.
-    let _ = opts;
-
     let (md_rva, md_size) = image.metadata_rva()?;
     let mapped = image.rva(md_rva)?;
     let root = &mapped[..md_size.min(mapped.len())];
     let md = MetadataReader::parse(root)?;
 
-    let mut ctx = ReadContext::new(&md);
+    read_module_with_metadata(image, &md, opts)
+}
+
+/// Reads a module using a metadata reader that was already parsed from this
+/// image. Callers that also need the metadata for a later phase can avoid a
+/// second full root parse by using this entry point.
+pub fn read_module_with_metadata(
+    image: &cecli_pe::Image,
+    md: &MetadataReader<'_>,
+    opts: &ReadOptions,
+) -> Result<(Module, ReadContext)> {
+    // Bodies belong to unit R3 (`resolve_bodies`); never loaded here.
+    let _ = opts;
+
+    let mut ctx = ReadContext::new(md);
 
     let mut module = Module { entry_point_token: image.entry_point_token(), ..Default::default() };
-    reserve_table_capacity(&mut module, &mut ctx, &md);
+    reserve_table_capacity(&mut module, &mut ctx, md);
     ctx.entry_point_token = module.entry_point_token;
 
     populate_shell(&mut module, image, md.version_string());
-    read_module_row(&mut module, &md)?;
+    read_module_row(&mut module, md)?;
 
     // ---- Arenas in table row order ------------------------------------
-    let typedef_rows = read_type_defs(&mut module, &mut ctx, &md)?;
-    let nested_parents = read_nested_classes(&module, &md)?;
+    let typedef_rows = read_type_defs(&mut module, &mut ctx, md)?;
+    let nested_parents = read_nested_classes(&module, md)?;
     apply_nesting(&mut module, &nested_parents);
-    read_fields(&mut module, &mut ctx, &md)?;
-    read_methods(&mut module, &mut ctx, &md)?;
-    attach_member_ranges(&mut module, &typedef_rows, &md);
-    let param_owners = read_params(&mut module, &md)?;
-    read_properties_events_semantics(&mut module, &ctx, &md)?;
-    let constraint_owners = read_generic_params(&mut module, &mut ctx, &md)?;
+    read_fields(&mut module, &mut ctx, md)?;
+    read_methods(&mut module, &mut ctx, md)?;
+    attach_member_ranges(&mut module, &typedef_rows, md);
+    let param_owners = read_params(&mut module, md)?;
+    read_properties_events_semantics(&mut module, &ctx, md)?;
+    let constraint_owners = read_generic_params(&mut module, &mut ctx, md)?;
 
     // TypeSpec / MemberRef rows eagerly decoded into the context in
     // deterministic table order so every cross-reference below resolves
     // through one uniform path.
-    ctx.resolve_lazy_tables(&md)?;
+    ctx.resolve_lazy_tables(md)?;
 
     // ---- Cross-table attachments ---------------------------------------
-    let interface_impl_owners = read_base_types_and_interfaces(&mut module, &ctx, &md)?;
-    read_class_layouts(&mut module, &md)?;
-    read_field_layouts(&mut module, &md)?;
-    read_field_rvas(&mut module, image, &md)?;
-    read_constants(&mut module, &md, &param_owners)?;
-    read_marshal_specs(&mut module, &ctx, &md, &param_owners)?;
-    read_impl_maps(&mut module, &md)?;
-    read_method_impls(&mut module, &ctx, &md)?;
+    let interface_impl_owners = read_base_types_and_interfaces(&mut module, &ctx, md)?;
+    read_class_layouts(&mut module, md)?;
+    read_field_layouts(&mut module, md)?;
+    read_field_rvas(&mut module, image, md)?;
+    read_constants(&mut module, md, &param_owners)?;
+    read_marshal_specs(&mut module, &ctx, md, &param_owners)?;
+    read_impl_maps(&mut module, md)?;
+    read_method_impls(&mut module, &ctx, md)?;
     // Assembly-scope data is read before the DeclSecurity / CustomAttribute
     // passes so rows parented to the `Assembly` table can be attached to
     // [`ReadContext::assembly_row`].
     let has_assembly_row = md.row_count(T::Assembly) > 0;
     if has_assembly_row {
-        ctx.assembly_row = Some(read_assembly_row(image, &md)?);
+        ctx.assembly_row = Some(read_assembly_row(image, md)?);
     } else {
         // No Assembly row => netmodule (Mono.Cecil ReadModuleManifest).
         module.kind = ModuleKind::NetModule;
     }
-    read_decl_security(&mut module, &mut ctx, &md)?;
+    read_decl_security(&mut module, &mut ctx, md)?;
     read_custom_attributes(
         &mut module,
         &mut ctx,
-        &md,
+        md,
         &param_owners,
         &interface_impl_owners,
         &constraint_owners,
     )?;
     module.assembly_refs = ctx.asm_refs.clone();
     module.module_refs = ctx.mod_refs.clone();
-    read_files_exported_types_resources(&mut module, &ctx, image, &md)?;
+    read_files_exported_types_resources(&mut module, &ctx, image, md)?;
     module.external_value_types = ctx.external_value_types.borrow().clone();
 
     Ok((module, ctx))
@@ -1329,7 +1340,10 @@ fn embedded_resource_data(image: &cecli_pe::Image, offset: u32) -> Result<Vec<u8
     let directory = &directory[..end];
 
     let start = offset as usize;
-    if start + 4 > directory.len() {
+    let Some(payload_start) = start.checked_add(4) else {
+        return Err(bad("embedded resource offset overflows the resources directory".into()));
+    };
+    if payload_start > directory.len() {
         return Err(bad(format!(
             "embedded resource offset {start} outside the resources directory"
         )));
@@ -1343,13 +1357,15 @@ fn embedded_resource_data(image: &cecli_pe::Image, offset: u32) -> Result<Vec<u8
     if length < 0 {
         return Err(bad(format!("negative embedded resource length {length}")));
     }
-    let data_end = start + 4 + length as usize;
+    let Some(data_end) = payload_start.checked_add(length as usize) else {
+        return Err(bad("embedded resource length overflows the resources directory".into()));
+    };
     if data_end > directory.len() {
         return Err(bad(format!(
             "embedded resource of {length} bytes at offset {start} overruns the resources directory"
         )));
     }
-    Ok(directory[start + 4..data_end].to_vec())
+    Ok(directory[payload_start..data_end].to_vec())
 }
 
 // ---------------------------------------------------------------------------

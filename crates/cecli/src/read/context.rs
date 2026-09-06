@@ -229,13 +229,16 @@ impl ReadContext {
                 };
                 let payload = r.position();
                 let len = (raw & !1) as usize;
-                if !len.is_multiple_of(2) || payload + len > data.len() {
+                let Some(end) = payload.checked_add(len) else {
+                    break;
+                };
+                if !len.is_multiple_of(2) || end > data.len() {
                     break;
                 }
                 let s = md.heaps().user_strings.get(pos as u32).unwrap_or_default();
                 ctx.us_offsets.push(pos as u32);
                 ctx.us_strings.push(s);
-                pos = payload + len;
+                pos = end;
             }
         }
 

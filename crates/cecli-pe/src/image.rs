@@ -218,6 +218,13 @@ impl Image {
         crate::reader::read_image(data.to_vec())
     }
 
+    /// Parses a complete PE / CLI image, taking ownership of the input
+    /// buffer. This avoids copying a file that is already owned by the
+    /// caller (for example, bytes read from disk).
+    pub fn parse_owned(data: Vec<u8>) -> Result<Image> {
+        crate::reader::read_image(data)
+    }
+
     /// The full original file bytes this image was parsed from.
     pub fn raw(&self) -> &[u8] {
         &self.raw
