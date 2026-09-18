@@ -492,6 +492,51 @@ fn read_params(module: &mut Module, md: &MetadataReader) -> Result<Vec<Option<(M
 // Properties / Events / MethodSemantics
 // ---------------------------------------------------------------------------
 
+/// Read PropertyMap/EventMap runs only when every member row has exactly one
+/// valid owner. The arenas below must stay in metadata row order: gaps or
+/// overlapping runs would make `rid - 1` handles point at the wrong definition.
+fn read_member_map(
+    md: &MetadataReader,
+    map: T,
+    member: T,
+    type_count: usize,
+) -> Result<Vec<(usize, std::ops::Range<u32>)>> {
+    let map_count = md.row_count(map);
+    let member_count = md.row_count(member);
+    if map_count == 0 {
+        if member_count != 0 {
+            return Err(bad(format!("{map:?} missing for nonempty {member:?} table")));
+        }
+        return Ok(Vec::new());
+    }
+
+    let limit =
+        member_count.checked_add(1).ok_or_else(|| bad(format!("{map:?} member count overflow")))?;
+    let mut parents_seen = vec![false; type_count];
+    let mut ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::with_capacity(map_count as usize);
+    for rid in 1..=map_count {
+        let parent = cell_u32(md, map, rid, 0)?;
+        let parent_slot = checked_slot(parent as usize, type_count, &format!("{map:?} parent"))?;
+        if parents_seen[parent_slot] {
+            return Err(bad(format!("{map:?} row {rid}: duplicate parent {parent}")));
+        }
+        parents_seen[parent_slot] = true;
+
+        let start = cell_u32(md, map, rid, 1)?;
+        if start == 0 || start > limit || (rid == 1 && start != 1) {
+            return Err(bad(format!("{map:?} row {rid}: invalid list start {start}")));
+        }
+        if let Some((_, previous)) = ranges.last_mut() {
+            if start < previous.start {
+                return Err(bad(format!("{map:?} row {rid}: decreasing list start {start}")));
+            }
+            previous.end = start;
+        }
+        ranges.push((parent_slot, start..limit));
+    }
+    Ok(ranges)
+}
+
 /// Creates the property and event arenas from their maps, attaches them to
 /// owning types, and wires accessor links from `MethodSemantics` rows.
 fn read_properties_events_semantics(
@@ -500,25 +545,10 @@ fn read_properties_events_semantics(
     md: &MetadataReader,
 ) -> Result<()> {
     // -- Events ----------------------------------------------------------
-    let event_count = md.row_count(T::Event);
-    let event_map_count = md.row_count(T::EventMap);
-    let mut event_starts = Vec::with_capacity(event_map_count as usize);
-    let mut event_parents = Vec::with_capacity(event_map_count as usize);
-    for rid in 1..=event_map_count {
-        event_parents.push(cell_u32(md, T::EventMap, rid, 0)?);
-        event_starts.push(cell_u32(md, T::EventMap, rid, 1)?);
-    }
-    for (i, start) in event_starts.iter().enumerate() {
-        let end = list_end(&event_starts, i, event_count);
-        let mut e = (*start).max(1);
-        let parent = event_parents[i];
-        if parent >= 1 && parent as usize <= module.types.len() {
-            let limit = end.min(event_count.saturating_add(1));
-            module.types[parent as usize - 1]
-                .events
-                .reserve_exact(limit.saturating_sub(e) as usize);
-        }
-        while e < end && e <= event_count {
+    let event_ranges = read_member_map(md, T::EventMap, T::Event, module.types.len())?;
+    for (parent, range) in event_ranges {
+        module.types[parent].events.reserve_exact(range.len());
+        for e in range {
             let attributes = EventAttributes::from_bits_truncate(cell_u16(md, T::Event, e, 0)?);
             let name = cell_str(md, T::Event, e, 1)?;
             let event_type = md
@@ -533,33 +563,15 @@ fn read_properties_events_semantics(
                 event_type,
                 ..Default::default()
             });
-            if parent >= 1 && parent as usize <= module.types.len() {
-                module.types[parent as usize - 1].events.push(EventId(e - 1));
-            }
-            e += 1;
+            module.types[parent].events.push(EventId(e - 1));
         }
     }
 
     // -- Properties -------------------------------------------------------
-    let prop_count = md.row_count(T::Property);
-    let prop_map_count = md.row_count(T::PropertyMap);
-    let mut prop_starts = Vec::with_capacity(prop_map_count as usize);
-    let mut prop_parents = Vec::with_capacity(prop_map_count as usize);
-    for rid in 1..=prop_map_count {
-        prop_parents.push(cell_u32(md, T::PropertyMap, rid, 0)?);
-        prop_starts.push(cell_u32(md, T::PropertyMap, rid, 1)?);
-    }
-    for (i, start) in prop_starts.iter().enumerate() {
-        let end = list_end(&prop_starts, i, prop_count);
-        let mut p = (*start).max(1);
-        let parent = prop_parents[i];
-        if parent >= 1 && parent as usize <= module.types.len() {
-            let limit = end.min(prop_count.saturating_add(1));
-            module.types[parent as usize - 1]
-                .properties
-                .reserve_exact(limit.saturating_sub(p) as usize);
-        }
-        while p < end && p <= prop_count {
+    let prop_ranges = read_member_map(md, T::PropertyMap, T::Property, module.types.len())?;
+    for (parent, range) in prop_ranges {
+        module.types[parent].properties.reserve_exact(range.len());
+        for p in range {
             let attributes =
                 PropertyAttributes::from_bits_truncate(cell_u16(md, T::Property, p, 0)?);
             let name = cell_str(md, T::Property, p, 1)?;
@@ -574,12 +586,7 @@ fn read_properties_events_semantics(
                 signature,
                 ..Default::default()
             });
-            if parent >= 1 && parent as usize <= module.types.len() {
-                module.types[parent as usize - 1]
-                    .properties
-                    .push(crate::model::types::PropertyId(p - 1));
-            }
-            p += 1;
+            module.types[parent].properties.push(PropertyId(p - 1));
         }
     }
 
