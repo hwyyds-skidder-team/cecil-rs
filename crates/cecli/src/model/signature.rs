@@ -303,6 +303,9 @@ fn get_method_signature(
     let raw = r.u8()?;
     let has_this = raw & CALL_CONVENTION_HAS_THIS != 0;
     let explicit_this = raw & CALL_CONVENTION_EXPLICIT_THIS != 0;
+    if explicit_this && !has_this {
+        return Err(Error::bad_image("EXPLICIT_THIS requires HAS_THIS in a method signature"));
+    }
     let generic_flag = raw & 0x10 != 0;
     let convention = match raw & 0x0F {
         0x0 => SignatureCallingConvention::Default,
@@ -1220,6 +1223,47 @@ mod tests {
         assert!(ctx.tdor_cell(&TypeDesc::Def(TypeId(0))).is_err());
         assert!(ctx.is_value_type(&TypeDesc::Def(TypeId(0))).is_err());
         assert!(ctx.tdor_type(true, 4, 0).is_err());
+    }
+
+    #[test]
+    fn explicit_this_requires_has_this_on_read() {
+        for convention in [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x09, 0x10] {
+            let mut blob = vec![convention | CALL_CONVENTION_EXPLICIT_THIS];
+            if convention == 0x10 {
+                blob.push(1);
+            }
+            blob.extend_from_slice(&[0, ET_VOID]);
+            let result = parse_method_signature(&blob, &TestCtx::new());
+            assert!(
+                matches!(result, Err(Error::BadImage(_))),
+                "expected BadImage for {blob:02X?}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fnptr_explicit_this_requires_has_this_on_read() {
+        let blob = [ET_FIELD, ET_FNPTR, CALL_CONVENTION_EXPLICIT_THIS, 0, ET_VOID];
+        let result = parse_field_signature(&blob, &TestCtx::new());
+        assert!(matches!(result, Err(Error::BadImage(_))), "expected BadImage, got {result:?}");
+    }
+
+    #[test]
+    fn valid_method_this_flags_roundtrip() {
+        for (has_this, explicit_this) in [(false, false), (true, false), (true, true)] {
+            let sig = MethodSignature {
+                has_this,
+                explicit_this,
+                parameters: vec![TypeDesc::Internal("object".into())],
+                vararg_start: 1,
+                ..Default::default()
+            };
+            roundtrip_method(sig.clone());
+
+            let field = FieldSignature(TypeDesc::FnPtr(Box::new(sig)));
+            let blob = write_field_signature(&field, &TestCtx::new()).unwrap();
+            assert_eq!(parse_field_signature(&blob, &TestCtx::new()).unwrap(), field);
+        }
     }
 
     #[test]
