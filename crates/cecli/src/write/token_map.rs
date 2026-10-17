@@ -714,12 +714,27 @@ fn scope_cell(scope: &ScopeRef, m: &Module) -> Result<u32> {
             Ok((((pos + 1) as u32) << 2) | 1)
         }
         ScopeRef::Assembly(anr) => {
-            let pos = m.assembly_refs.iter().position(|a| a == anr).ok_or_else(|| {
-                Error::argument(format!(
-                    "assembly ref `{}` missing from module.assembly_refs",
-                    anr.name
-                ))
-            })?;
+            // Scopes are cloned before the reader attaches AssemblyRef custom
+            // attributes. Match the row data, not those later annotations (which
+            // can themselves contain references back to this assembly).
+            let pos = m
+                .assembly_refs
+                .iter()
+                .position(|a| {
+                    a.name == anr.name
+                        && a.version == anr.version
+                        && a.culture == anr.culture
+                        && a.public_key_or_token == anr.public_key_or_token
+                        && a.hash == anr.hash
+                        && a.hash_algorithm == anr.hash_algorithm
+                        && a.attributes == anr.attributes
+                })
+                .ok_or_else(|| {
+                    Error::argument(format!(
+                        "assembly ref `{}` missing from module.assembly_refs",
+                        anr.name
+                    ))
+                })?;
             Ok((((pos + 1) as u32) << 2) | 2)
         }
         ScopeRef::Moduleless => Ok(0), // nil scope
@@ -849,6 +864,32 @@ mod tests {
 
     fn assembly_ref() -> AssemblyNameReference {
         AssemblyNameReference { version: ver(4, 0, 0, 0), ..AssemblyNameReference::new("mscorlib") }
+    }
+
+    #[test]
+    fn assembly_scope_matches_row_data_without_custom_attributes() {
+        use crate::model::types::{CustomAttribute, MethodId};
+
+        let mut reference = assembly_ref();
+        reference.public_key_or_token = vec![1; 8];
+        let mut other_key = reference.clone();
+        other_key.public_key_or_token = vec![2; 8];
+        let mut other_version = reference.clone();
+        other_version.version = ver(8, 0, 0, 0);
+        let mut other_culture = reference.clone();
+        other_culture.culture = Some("fr-FR".into());
+        let mut annotated = reference.clone();
+        annotated.custom_attributes.push(CustomAttribute {
+            constructor: MethodRef::Def(MethodId(0)),
+            blob: vec![1, 0, 0, 0],
+        });
+        let m = Module {
+            assembly_refs: vec![other_key, other_version, other_culture, annotated],
+            ..Default::default()
+        };
+        assert_eq!(scope_cell(&ScopeRef::Assembly(reference.clone()), &m).unwrap(), (4 << 2) | 2);
+        reference.version = ver(9, 0, 0, 0);
+        assert!(scope_cell(&ScopeRef::Assembly(reference), &m).is_err());
     }
 
     #[test]

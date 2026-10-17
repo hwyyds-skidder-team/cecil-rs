@@ -192,7 +192,10 @@ fn decode_resolved_body(
             // verbatim there, zero otherwise.
             let filter_offset = handler.filter_start.unwrap_or(0);
             let catch_type = match kind {
-                ExceptionKind::Catch if handler.catch_type != Token::NIL => {
+                ExceptionKind::Catch => {
+                    if handler.catch_type == Token::NIL {
+                        return Err(Error::bad_image("catch type token is nil"));
+                    }
                     // The catch type is a TypeDefOrRef cell; a hostile token
                     // with any other table byte is malformed (tdor_cell's
                     // Token::table would panic on it) — surfaced as the
@@ -671,6 +674,74 @@ mod tests {
         assert_eq!(fin.kind, ExceptionKind::Finally);
         assert_eq!(fin.catch_type, None);
         assert_eq!(fin.handler_offset, 4);
+    }
+
+    fn body_with_exception_clause(
+        kind: cecli_cil::ExceptionHandlerType,
+        catch_type: Token,
+        fat: bool,
+    ) -> Vec<u8> {
+        let mut code = ByteWriter::new();
+        code.u16(0x300B); // fat header, more sections
+        code.u16(1);
+        code.u32(4);
+        code.u32(0); // no locals
+        code.bytes(&[0x00, 0x00, 0x00, 0x2A]); // nop; nop; nop; ret
+        let mut handler = cecli_cil::ExceptionHandler::new(kind);
+        handler.try_length = 2;
+        handler.handler_start = 2;
+        handler.handler_length = 2;
+        handler.catch_type = catch_type;
+        if kind == cecli_cil::ExceptionHandlerType::Filter {
+            handler.filter_start = Some(1);
+        }
+        code.bytes(&cecli_cil::write_section(&[handler], fat).unwrap());
+        code.into_vec()
+    }
+
+    #[test]
+    fn catch_clauses_reject_nil_type_tokens() {
+        let (md, _) = test_metadata();
+        for fat in [false, true] {
+            let code =
+                body_with_exception_clause(cecli_cil::ExceptionHandlerType::Catch, Token::NIL, fat);
+            let result = decode_resolved_body(&code, &test_ctx(), &md);
+            assert!(
+                matches!(result, Err(Error::BadImage(ref message)) if message.contains("catch type")),
+                "nil catch type accepted (fat={fat}): {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn exception_clauses_preserve_valid_type_and_filter_data() {
+        use cecli_cil::ExceptionHandlerType as H;
+
+        let (md, _) = test_metadata();
+        for fat in [false, true] {
+            for (kind, expected) in [
+                (H::Catch, ExceptionKind::Catch),
+                (H::Filter, ExceptionKind::Filter),
+                (H::Finally, ExceptionKind::Finally),
+                (H::Fault, ExceptionKind::Fault),
+            ] {
+                let token =
+                    if kind == H::Catch { Token::new(TableIndex::TypeRef, 1) } else { Token::NIL };
+                let code = body_with_exception_clause(kind, token, fat);
+                let body = decode_resolved_body(&code, &test_ctx(), &md).unwrap();
+                assert_eq!(body.exception_handlers.len(), 1);
+                let handler = &body.exception_handlers[0];
+                assert_eq!(handler.kind, expected);
+                assert_eq!(handler.filter_offset, if kind == H::Filter { 1 } else { 0 });
+                if kind == H::Catch {
+                    assert!(
+                        matches!(&handler.catch_type, Some(TypeDesc::External(t)) if t.name == "Exception")
+                    );
+                } else {
+                    assert!(handler.catch_type.is_none());
+                }
+            }
+        }
     }
 
     /// Documented deferred-error policy: a branch target that does not land
