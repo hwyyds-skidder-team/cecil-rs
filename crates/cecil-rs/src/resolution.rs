@@ -281,9 +281,9 @@ impl<'a> ResolutionEngine<'a> {
                 // Netmodules of the current assembly: matched against already
                 // loaded/cached modules by module name (Cecil looks the name
                 // up in `AssemblyDefinition.Modules`).
-                for i in 0..self.cache.len() {
-                    if self.cache[i].name == *name {
-                        if let Some(id) = find_external_in_module(&self.cache[i], ext) {
+                for (i, module) in self.cache.iter().enumerate() {
+                    if module.name == *name {
+                        if let Some(id) = find_external_in_module(module, ext) {
                             return Ok(Some(ResolvedType { module_index: i + 1, id }));
                         }
                     }
@@ -302,8 +302,8 @@ impl<'a> ResolutionEngine<'a> {
                 if let Some(id) = find_external_in_module(self.primary, ext) {
                     return Ok(Some(ResolvedType { module_index: 0, id }));
                 }
-                for i in 0..self.cache.len() {
-                    if let Some(id) = find_external_in_module(&self.cache[i], ext) {
+                for (i, module) in self.cache.iter().enumerate() {
+                    if let Some(id) = find_external_in_module(module, ext) {
                         return Ok(Some(ResolvedType { module_index: i + 1, id }));
                     }
                 }

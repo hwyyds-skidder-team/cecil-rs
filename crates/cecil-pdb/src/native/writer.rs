@@ -450,11 +450,10 @@ fn names_stream(strings: &[u8]) -> Result<Vec<u8>> {
 
 fn hash_v1(bytes: &[u8]) -> u32 {
     let mut result = 0;
-    let mut chunks = bytes.chunks_exact(4);
-    for chunk in &mut chunks {
-        result ^= u32::from_le_bytes(chunk.try_into().unwrap());
+    let (chunks, tail) = bytes.as_chunks::<4>();
+    for chunk in chunks {
+        result ^= u32::from_le_bytes(*chunk);
     }
-    let tail = chunks.remainder();
     if tail.len() >= 2 {
         result ^= u16::from_le_bytes([tail[0], tail[1]]) as u32;
     }

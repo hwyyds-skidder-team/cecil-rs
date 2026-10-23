@@ -290,12 +290,13 @@ impl ReadContext {
 
         // ModuleRef: Name.
         for rid in 1..=md.row_count(TableIndex::ModuleRef) {
-            match md.column(TableIndex::ModuleRef, rid, 0) {
-                Ok(idx) => {
-                    ctx.mod_refs.push(md.heaps().strings.get(idx as u32).unwrap_or("").to_owned())
-                }
-                Err(_) => ctx.mod_refs.push(String::new()),
-            }
+            // Match ImplMap's recovery decoding so a P/Invoke scope keeps
+            // the same name as its ModuleRef even when the heap is malformed.
+            let name = md
+                .column(TableIndex::ModuleRef, rid, 0)
+                .and_then(|idx| ctx.heap_name(md, idx as u32, TableIndex::ModuleRef, rid))
+                .unwrap_or_default();
+            ctx.mod_refs.push(name);
         }
 
         // StandAloneSig: Signature blob (raw; parsed by body readers).

@@ -1062,12 +1062,8 @@ fn needs_windows_runtime_prefix(t: &crate::model::types::TypeDefinition) -> bool
         return false;
     }
     let Some(TypeDesc::External(base)) = &t.base_type else { return false };
-    if base.namespace == "System"
-        && matches!(base.name.as_str(), "Attribute" | "MulticastDelegate" | "ValueType")
-    {
-        return false;
-    }
-    true
+    !(base.namespace == "System"
+        && matches!(base.name.as_str(), "Attribute" | "MulticastDelegate" | "ValueType"))
 }
 
 /// `IsAttribute`: base-type reference is the external `System.Attribute`.

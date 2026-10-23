@@ -134,7 +134,7 @@ impl Addresses {
             if data.len() % 40 != 0 {
                 return Err(Error::bad_image("native pdb: truncated section-header stream"));
             }
-            for section in data.chunks_exact(40) {
+            for section in data.as_chunks::<40>().0 {
                 sections.push(u32::from_le_bytes(section[12..16].try_into().unwrap()));
             }
         }
@@ -143,7 +143,7 @@ impl Addresses {
             if data.len() % 8 != 0 {
                 return Err(Error::bad_image("native pdb: truncated OMAP stream"));
             }
-            for entry in data.chunks_exact(8) {
+            for entry in data.as_chunks::<8>().0 {
                 let from = u32::from_le_bytes(entry[..4].try_into().unwrap());
                 let to = u32::from_le_bytes(entry[4..].try_into().unwrap());
                 if omap.last().is_some_and(|&(previous, _)| previous >= from) {

@@ -348,7 +348,7 @@ impl MetadataBuilder {
             tw.u32(count);
         }
 
-        for i in 0..TABLE_COUNT {
+        for (i, rows) in self.rows.iter().enumerate() {
             if valid >> i & 1 == 0 {
                 continue;
             }
@@ -359,7 +359,7 @@ impl MetadataBuilder {
             for (width, kind) in widths.iter_mut().zip(kinds) {
                 *width = set.kind_width(kind);
             }
-            for row in self.rows[i].chunks_exact(kinds.len()) {
+            for row in rows.chunks_exact(kinds.len()) {
                 for (cell, &width) in row.iter().zip(&widths) {
                     write_cell(&mut tw, *cell, width);
                 }
