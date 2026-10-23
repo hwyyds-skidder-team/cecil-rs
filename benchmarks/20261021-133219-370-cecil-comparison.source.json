@@ -1,0 +1,517 @@
+[
+    {
+        "path":  "Cargo.lock",
+        "bytes":  26641,
+        "sha256":  "077bbfdd319c8d3c401cfc2a3b3934b7f2541def6b4b7f1a885bb2ee4c517a5a"
+    },
+    {
+        "path":  "Cargo.toml",
+        "bytes":  670,
+        "sha256":  "5fed9dc8f241521a74d1aeef115f1028c2ed010e72f203e47166aad0ac581bd7"
+    },
+    {
+        "path":  "crates/cecli/benches/assembly.rs",
+        "bytes":  5468,
+        "sha256":  "7bf9e3c5a5aef95bb447f8a5562e77c937da4fdb19f532766badd7d4547386ca"
+    },
+    {
+        "path":  "crates/cecli/Cargo.toml",
+        "bytes":  626,
+        "sha256":  "67277601e78f52d72ec295d4b330ebf3aae332c0e0b9a7b2254992210bb8bffd"
+    },
+    {
+        "path":  "crates/cecli/examples/alloc_profile.rs",
+        "bytes":  4585,
+        "sha256":  "24a4beea0f1546790b9cff30eb81cf006afe36a42024777d2179c000304e89e1"
+    },
+    {
+        "path":  "crates/cecli/examples/compare_cecil.rs",
+        "bytes":  24581,
+        "sha256":  "4818596b8e806a7ad0e5ac033df6fc2db847e7f8cccf24a955e3b4d36beae596"
+    },
+    {
+        "path":  "crates/cecli/examples/memberref_stats.rs",
+        "bytes":  3160,
+        "sha256":  "ca44cec8c17c717a0d0dfcae43ade402e298519bc52a72cfa5cb24ee6d4481f1"
+    },
+    {
+        "path":  "crates/cecli/examples/timing.rs",
+        "bytes":  2841,
+        "sha256":  "c19d8592423bc48b97fb5ac06a2d8e63eba6be2537f828219b4c91b68a24e409"
+    },
+    {
+        "path":  "crates/cecli/examples/write_profile.rs",
+        "bytes":  5557,
+        "sha256":  "ff3230e0308b60fe1b7dfb7e52bc3394398bf39db8e4020cac4d22c31ea7a1c9"
+    },
+    {
+        "path":  "crates/cecli/src/assembly.rs",
+        "bytes":  113599,
+        "sha256":  "3aaac7bef0a0adec443a4a60d52dc8c233cb4dde8c8005398875f3ed63f3a223"
+    },
+    {
+        "path":  "crates/cecli/src/callgraph.rs",
+        "bytes":  22293,
+        "sha256":  "5c201eca69eca5dd87b7c42eb10104fab14c6b0e4bbc11955f647f98bbf896b6"
+    },
+    {
+        "path":  "crates/cecli/src/diff.rs",
+        "bytes":  18275,
+        "sha256":  "3afe94c03276fd4593fc4910d71efcbd8c31b6e25a94ae75adfeb9284f95a15f"
+    },
+    {
+        "path":  "crates/cecli/src/edit.rs",
+        "bytes":  57598,
+        "sha256":  "a8f1b84cbea20f9a33754ef171fec679dac3cd19bcb2fe2aac0fa63723a591d1"
+    },
+    {
+        "path":  "crates/cecli/src/flow.rs",
+        "bytes":  39741,
+        "sha256":  "1cc3d3a6a7db2cb83ba469f9cac3b7d065a21800e1f51e5d7f2393b7a2c2ea3f"
+    },
+    {
+        "path":  "crates/cecli/src/importer.rs",
+        "bytes":  35631,
+        "sha256":  "0b5f9f83775901ff038f60886ad4bf275700caeafeaba011dc6eefc99fad247b"
+    },
+    {
+        "path":  "crates/cecli/src/index.rs",
+        "bytes":  9368,
+        "sha256":  "b604a9c6ed5dbc463c78422c5352f70e2b7f656c8db3adfca6898800e5c5ab1e"
+    },
+    {
+        "path":  "crates/cecli/src/lib.rs",
+        "bytes":  8551,
+        "sha256":  "cf0f6dfccf5ffbab9b778ad53c9b3553ffcd44a661a8d2e6c6d59bce35deb376"
+    },
+    {
+        "path":  "crates/cecli/src/model/custom_attribute.rs",
+        "bytes":  64234,
+        "sha256":  "1cc8a8df7ec23d6e231559d641e527fb2e0b5599e4a16a2a0c4a2b0a89c71dfe"
+    },
+    {
+        "path":  "crates/cecli/src/model/marshal.rs",
+        "bytes":  37384,
+        "sha256":  "24a650bc03f6d769cf179b30e9b5932a4b8cf52ee7fd3db3386a99d3c619b959"
+    },
+    {
+        "path":  "crates/cecli/src/model/mod.rs",
+        "bytes":  353,
+        "sha256":  "371aaa1b2d94bed2efb6da81b2f71357913ba6d13fce40e2549062266902fd46"
+    },
+    {
+        "path":  "crates/cecli/src/model/removal.rs",
+        "bytes":  31283,
+        "sha256":  "41f5723ef3691cba986ca5f3f45b8d0fb73000c73e39b0928fa741d120f30327"
+    },
+    {
+        "path":  "crates/cecli/src/model/security.rs",
+        "bytes":  15196,
+        "sha256":  "e0b1e9014fcdd9c01273271643e8fbf6b0b237144e47de14b0a3dd9248d91114"
+    },
+    {
+        "path":  "crates/cecli/src/model/signature.rs",
+        "bytes":  50893,
+        "sha256":  "1b7113fcc23e6a2bdeedf971a2091603e9f792c747a5976a270d37c06446a01e"
+    },
+    {
+        "path":  "crates/cecli/src/model/substitution.rs",
+        "bytes":  14891,
+        "sha256":  "29aa21e5aa40e86298108a2a1a35a1a7900db21ebea1cbfa4437036dda9165bc"
+    },
+    {
+        "path":  "crates/cecli/src/model/types.rs",
+        "bytes":  23263,
+        "sha256":  "694ce1199e588b54cf7c02e55c6b55017a071dbcb6d6060f08f09d37be54bea1"
+    },
+    {
+        "path":  "crates/cecli/src/module_def.rs",
+        "bytes":  25191,
+        "sha256":  "19f5c8c5cc85456a3acb9b9e580b5512432ad2ca5c41e8be98955629d7886bf8"
+    },
+    {
+        "path":  "crates/cecli/src/read/context.rs",
+        "bytes":  58984,
+        "sha256":  "3675320cf02c32a4a79b7cf57c4e079c036130e2d377841fcf1e20194f19ee4d"
+    },
+    {
+        "path":  "crates/cecli/src/read/instructions.rs",
+        "bytes":  37332,
+        "sha256":  "71d23685f437255946cb4804cd2164aa7aee5674eec1b8082832452005e778ee"
+    },
+    {
+        "path":  "crates/cecli/src/read/mod.rs",
+        "bytes":  80,
+        "sha256":  "56ce9cb9ef1ae1d1dca9a5b589c87a9b61b953d14dd7c1450619b0bad95590e8"
+    },
+    {
+        "path":  "crates/cecli/src/read/module_reader.rs",
+        "bytes":  76341,
+        "sha256":  "6b85c2589fa02236779c68694edaddaf20e9a2658d66c2f1b8c83718c3031621"
+    },
+    {
+        "path":  "crates/cecli/src/resolution.rs",
+        "bytes":  46824,
+        "sha256":  "6b2d01fc630bdedc52228b27abf108cfc4badaa3da6c4284582601c8c7412c89"
+    },
+    {
+        "path":  "crates/cecli/src/resolver.rs",
+        "bytes":  32246,
+        "sha256":  "d7890974cb513d509456e25771198ff691ffd5280176af4aab9c802bb6581990"
+    },
+    {
+        "path":  "crates/cecli/src/strongname.rs",
+        "bytes":  45760,
+        "sha256":  "8921dc6f3d75873e8725cf978ed5d166a9ca556684873a029f707044fed00c82"
+    },
+    {
+        "path":  "crates/cecli/src/type_parser.rs",
+        "bytes":  25549,
+        "sha256":  "518c2dd7582702cee3f3b79b1c939e5b64fabc2fb8c76cd9de5bbee3ec93080d"
+    },
+    {
+        "path":  "crates/cecli/src/type_system.rs",
+        "bytes":  10309,
+        "sha256":  "9e095bcb3a92e0f1075597e9593f940dc467ed9fd20f47f91edd37d9d0ea461a"
+    },
+    {
+        "path":  "crates/cecli/src/winrt.rs",
+        "bytes":  105296,
+        "sha256":  "a7e50dd139656552fab31db56df951dde7413a7fb8b51442f1de6034e6ea9880"
+    },
+    {
+        "path":  "crates/cecli/src/write/classifier.rs",
+        "bytes":  23,
+        "sha256":  "04815d106422ebe3e51b67945d5bc6ccfaed6c8a7ef7b78d3695132a5c448f9c"
+    },
+    {
+        "path":  "crates/cecli/src/write/emit_il.rs",
+        "bytes":  31908,
+        "sha256":  "5169e3fd6e4b7020c2161b6ba81b683a701ff66e40d32ec3ae26c0a05c7e1a1e"
+    },
+    {
+        "path":  "crates/cecli/src/write/emit_metadata.rs",
+        "bytes":  58306,
+        "sha256":  "a6642100b0f7ae17b6fd6aa445af299da3850b03bc7b49494d0e91850583f27b"
+    },
+    {
+        "path":  "crates/cecli/src/write/mod.rs",
+        "bytes":  116,
+        "sha256":  "6662e4b783792fcfafcb882629848a0254f286e7c21be0814f1dbdea9c67fc02"
+    },
+    {
+        "path":  "crates/cecli/src/write/resources.rs",
+        "bytes":  13799,
+        "sha256":  "a5d7a1b4566fdf41a125c7afcea9efd1fe57575aec16166ab98ccccc7566cd31"
+    },
+    {
+        "path":  "crates/cecli/src/write/token_map.rs",
+        "bytes":  60922,
+        "sha256":  "dce2f6fc06027efc482403b4fbe4bcafe45d9a184ce4d14e7b543d3a7d5a2cb6"
+    },
+    {
+        "path":  "crates/cecli/src/xref.rs",
+        "bytes":  29227,
+        "sha256":  "0560f878569a56ec2ee1ddc808c4e43698dbe28c39dfff1fd684510651435d16"
+    },
+    {
+        "path":  "crates/cecli/tests/assembly_ref_attributes.rs",
+        "bytes":  3509,
+        "sha256":  "3ab2340b1592fd3aadc37839750d3a7afff4589435e90bf09d316feb0c8f1fc4"
+    },
+    {
+        "path":  "crates/cecli/tests/fixtures_roundtrip.rs",
+        "bytes":  9427,
+        "sha256":  "1e5da0505756c1275c1cb5d08caad276e73415bc566ea508fc58935ae50c5b6c"
+    },
+    {
+        "path":  "crates/cecli/tests/helpers/mod.rs",
+        "bytes":  7673,
+        "sha256":  "669e05ae468d6e79454e33afcbaf96be6a5e5bb15d3c229d62f49ff60d03d68e"
+    },
+    {
+        "path":  "crates/cecli/tests/member_maps.rs",
+        "bytes":  6011,
+        "sha256":  "dc2f006f2971a8cb848a4051ab4955c59cdd1ec49e7dad2d99487a8a86f0d2b3"
+    },
+    {
+        "path":  "crates/cecli-cil/Cargo.toml",
+        "bytes":  148,
+        "sha256":  "3d1842270bd4d785be977d151f8923c6e8e70051d70775420c3737ce658906eb"
+    },
+    {
+        "path":  "crates/cecli-cil/src/body.rs",
+        "bytes":  28918,
+        "sha256":  "ecae3562d79394cae5a82a38de84bd097116b1273b34e56f9f82211ca4a8e191"
+    },
+    {
+        "path":  "crates/cecli-cil/src/code.rs",
+        "bytes":  4044,
+        "sha256":  "4426db2c73c969fb4e7ba721905cb075fa474f244a9f9e6c7ad5241a9903622c"
+    },
+    {
+        "path":  "crates/cecli-cil/src/exceptions.rs",
+        "bytes":  15651,
+        "sha256":  "f4e413732121f77da755b18bcf1aa1ce32b5035a1e9d6ddc4e07591b840535e5"
+    },
+    {
+        "path":  "crates/cecli-cil/src/instruction.rs",
+        "bytes":  3816,
+        "sha256":  "f60ff33f9118949223ce3dc76730037deb9fcceb28e0b45110a1820073f8ec1c"
+    },
+    {
+        "path":  "crates/cecli-cil/src/lib.rs",
+        "bytes":  1242,
+        "sha256":  "bae8fac88b7bd7911a5118cab5cb5dfc0561269e48a024b514adfceb3bc0f555"
+    },
+    {
+        "path":  "crates/cecli-cil/src/opcode.rs",
+        "bytes":  3847,
+        "sha256":  "a62405d16b18181173d87d236774474db6c68d6d00a529b09ed0d0f5f0de0041"
+    },
+    {
+        "path":  "crates/cecli-cil/src/opcodes.rs",
+        "bytes":  33478,
+        "sha256":  "90861cf8c85c592096341c325c54dd99e8ece84e73a549c443e801be438aae64"
+    },
+    {
+        "path":  "crates/cecli-cil/src/variable.rs",
+        "bytes":  1210,
+        "sha256":  "1722140889f498d8e04caa491ddcf18ffb7911b1f0f95117260ea81148bd9848"
+    },
+    {
+        "path":  "crates/cecli-cli/Cargo.toml",
+        "bytes":  368,
+        "sha256":  "6cd7e9ec4fb45b3c6527f3738200e9e5bc1bc1fa42c5b2c3d84ea5984d77af80"
+    },
+    {
+        "path":  "crates/cecli-cli/src/main.rs",
+        "bytes":  22146,
+        "sha256":  "742ea2b19f7a4dc5e013fb1346a96fce7a93de2aaab0877611e98597d718b456"
+    },
+    {
+        "path":  "crates/cecli-core/Cargo.toml",
+        "bytes":  254,
+        "sha256":  "5a53b70c37ff362dee2181e847b58dfab960159f5ace06cb8132e180505f12f0"
+    },
+    {
+        "path":  "crates/cecli-core/src/element.rs",
+        "bytes":  7754,
+        "sha256":  "a1b77210ef4655f4664d620c453693bc0fd2a2fe35a344eaee4b6a664a640d1d"
+    },
+    {
+        "path":  "crates/cecli-core/src/error.rs",
+        "bytes":  1768,
+        "sha256":  "586709810003df1c7a61998006dee89fc8fe5822eb1c22c816ee470ef359c057"
+    },
+    {
+        "path":  "crates/cecli-core/src/flags.rs",
+        "bytes":  14299,
+        "sha256":  "f5cd2084b4e4b8f8f8a4a8ac5da7d6b943cff04a131e6e628799d486fecb10eb"
+    },
+    {
+        "path":  "crates/cecli-core/src/io.rs",
+        "bytes":  11108,
+        "sha256":  "b107aba92e2024648951eccaf148c8a6837ab1d0b06a0370cfdbff65ce034378"
+    },
+    {
+        "path":  "crates/cecli-core/src/lib.rs",
+        "bytes":  433,
+        "sha256":  "2e29478b759a49500238878311f5bee6e15b07a705a4e131aade139e41257efd"
+    },
+    {
+        "path":  "crates/cecli-core/src/token.rs",
+        "bytes":  16466,
+        "sha256":  "b714f1bc82534ae769bfbcb938bd84497c281ded63988e8347a8d4b893f963a6"
+    },
+    {
+        "path":  "crates/cecli-mdb/Cargo.toml",
+        "bytes":  148,
+        "sha256":  "44598b0fc9b7c71f311a3532e4773b2d8b143ab49069542e0161f43ae4903379"
+    },
+    {
+        "path":  "crates/cecli-mdb/src/lib.rs",
+        "bytes":  82,
+        "sha256":  "443e6cec79fda8cf1bc745130ca4e928c0be7c6186529e77c6808fca2e928aec"
+    },
+    {
+        "path":  "crates/cecli-mdb/src/reader.rs",
+        "bytes":  30437,
+        "sha256":  "ac4166f021743960c86ffee37a248ed2ddf94cda7865d35e3fa58c554b693df5"
+    },
+    {
+        "path":  "crates/cecli-mdb/src/writer.rs",
+        "bytes":  20113,
+        "sha256":  "13d4023775f98005931316ec3e998e2bf16fd8e21863c4ef98a3762781292084"
+    },
+    {
+        "path":  "crates/cecli-metadata/Cargo.toml",
+        "bytes":  179,
+        "sha256":  "6efd1a230d3e29d95719525090e7f1efd4cfd4ef3427f0b847d07d5d7be26d2a"
+    },
+    {
+        "path":  "crates/cecli-metadata/src/builder.rs",
+        "bytes":  27571,
+        "sha256":  "112be2d5437e289b074fbdb97b88bff4de8ca35953916c8f75fefcc9a5e07a8a"
+    },
+    {
+        "path":  "crates/cecli-metadata/src/heaps.rs",
+        "bytes":  8239,
+        "sha256":  "dbd4c93fb2e457b0f32bee4efb104e1997b804f5abe7b04ce0c12572b9527541"
+    },
+    {
+        "path":  "crates/cecli-metadata/src/lib.rs",
+        "bytes":  1964,
+        "sha256":  "88764c002b6a48b90058b815b05bfb73d6df7d1287c75dd326a745a2c96ccdc6"
+    },
+    {
+        "path":  "crates/cecli-metadata/src/reader.rs",
+        "bytes":  8865,
+        "sha256":  "cb5e6d5df2830301fcabb4692be20720db3f258d43c50a8847cdf775a2594d75"
+    },
+    {
+        "path":  "crates/cecli-metadata/src/root.rs",
+        "bytes":  7500,
+        "sha256":  "35215494cd7bf8ff1015e53795dae15289ed534a8c40b827270bc7b70df06adc"
+    },
+    {
+        "path":  "crates/cecli-metadata/src/tables.rs",
+        "bytes":  22980,
+        "sha256":  "8cbf22ed09503af3575bcb106a211df030653adbfbb61f01f3f15b5c32ae8d77"
+    },
+    {
+        "path":  "crates/cecli-pdb/Cargo.toml",
+        "bytes":  242,
+        "sha256":  "f9a8e5dc4bd664d06cfd618fbc69c3e3391ba180476b9890a0b7f3576f92cf0f"
+    },
+    {
+        "path":  "crates/cecli-pdb/src/document.rs",
+        "bytes":  1503,
+        "sha256":  "b876433b90dd7f9a0f7d40bca98a26d92480cc46c82b4beb3b5ddcc7eb9e9cf4"
+    },
+    {
+        "path":  "crates/cecli-pdb/src/embedded.rs",
+        "bytes":  5275,
+        "sha256":  "02d06cffea324788f3f5c0dc84127e3872e03a52fbaad1efa4d15d927f3cd120"
+    },
+    {
+        "path":  "crates/cecli-pdb/src/lib.rs",
+        "bytes":  162,
+        "sha256":  "36778dd986e7d1ebe2f9a1e8c0495b78176872f9d0564e2a38b5829e15c8c0c0"
+    },
+    {
+        "path":  "crates/cecli-pdb/src/native/mod.rs",
+        "bytes":  766,
+        "sha256":  "7569291fe9915008a8f2e268c89aa0861a8de2f201848a48366940f56a1183b6"
+    },
+    {
+        "path":  "crates/cecli-pdb/src/native/msf.rs",
+        "bytes":  22763,
+        "sha256":  "3795e9b4a4dea7217f92081e10bd2bcb60e7ea0a7f16ef923cfa369fffe3c611"
+    },
+    {
+        "path":  "crates/cecli-pdb/src/native/symbols.rs",
+        "bytes":  77934,
+        "sha256":  "a974ca34b65ae02c3db993e903bb1db5c78b00cf547765438c30047488f6610d"
+    },
+    {
+        "path":  "crates/cecli-pdb/src/portable_reader.rs",
+        "bytes":  32908,
+        "sha256":  "e8f8ef750e3068de0ebed8c4efece9184261e7da73586d2363227380ca2992b1"
+    },
+    {
+        "path":  "crates/cecli-pdb/src/portable_writer.rs",
+        "bytes":  35596,
+        "sha256":  "7ebdaf9c86b5c4a58f6a95c725daee228fdc938b5913121004e489d583b3d811"
+    },
+    {
+        "path":  "crates/cecli-pe/Cargo.toml",
+        "bytes":  173,
+        "sha256":  "d79c4f6fa753fb9371cfe53ae9d1d14b3144b2cf64c684b53d2378436b3f7e89"
+    },
+    {
+        "path":  "crates/cecli-pe/src/buffer.rs",
+        "bytes":  11269,
+        "sha256":  "9d4258b111c6eea12aa08ebd5b016d8f39460dd2184d6d0d18607daa739aee93"
+    },
+    {
+        "path":  "crates/cecli-pe/src/image.rs",
+        "bytes":  13538,
+        "sha256":  "b511064dd9a8793c147236f6bf5d78fadb35d82ca2cf881637dfe282cee095e3"
+    },
+    {
+        "path":  "crates/cecli-pe/src/lib.rs",
+        "bytes":  1481,
+        "sha256":  "6e7510c153e80355f8c0391437039ab40666f5427630d474b4c9090d790d813e"
+    },
+    {
+        "path":  "crates/cecli-pe/src/reader.rs",
+        "bytes":  17598,
+        "sha256":  "3719ea57c034de4341ed3f91aa8458c70ec970b944f70a04b7892de824339390"
+    },
+    {
+        "path":  "crates/cecli-pe/src/section.rs",
+        "bytes":  1688,
+        "sha256":  "fda53d5f73eae284af82a8aeb516e3c64a8dced36b9920ccd9102f2ac0917598"
+    },
+    {
+        "path":  "crates/cecli-pe/src/testutil.rs",
+        "bytes":  4219,
+        "sha256":  "bbc40ef5d489ec251ffb81f68473b7aeb5685475e45116a8880c1de8a4418662"
+    },
+    {
+        "path":  "crates/cecli-pe/src/writer.rs",
+        "bytes":  37947,
+        "sha256":  "cb35d67407250f62077f030ed80b6d277f92ee35d6f9c2224b74c475061d171c"
+    },
+    {
+        "path":  "crates/cecli-rocks/Cargo.toml",
+        "bytes":  200,
+        "sha256":  "216b82be82a467c9240effa8202ab35a9d384d083cc7aad98737c5c6d0024f0a"
+    },
+    {
+        "path":  "crates/cecli-rocks/src/doccomment.rs",
+        "bytes":  25729,
+        "sha256":  "c4b10dc1a58b8449e3d93afd2690beeacff15a0d742a165270354bd1948624cb"
+    },
+    {
+        "path":  "crates/cecli-rocks/src/ilparser.rs",
+        "bytes":  17098,
+        "sha256":  "ef53b8586499a19e9041aa4fa5f9fdf877f3ec4ecb467f6d1ba5918b27644cfb"
+    },
+    {
+        "path":  "crates/cecli-rocks/src/lib.rs",
+        "bytes":  121,
+        "sha256":  "106ec83326af749d933333a3dd8b3145f362723709aecd393dc62d20289de88f"
+    },
+    {
+        "path":  "crates/cecli-rocks/src/reflect.rs",
+        "bytes":  41583,
+        "sha256":  "5cf12fc95c3b212f97d8846785ad4f047ea9a65cb4dbe97033eff6cf2f4f50e6"
+    },
+    {
+        "path":  "scripts/compare-cecil/CecilBench.cs",
+        "bytes":  22425,
+        "sha256":  "0ebdd8a85e99b0f0c25da6d9e73d06925c42594aa158a2ccd96f125058d680ee"
+    },
+    {
+        "path":  "scripts/compare-cecil/experiment_rva.py",
+        "bytes":  2841,
+        "sha256":  "9ef83cdb20171d8ef030f1d9d5f988f3b21d47e68e48d0f2b31919f557bf0448"
+    },
+    {
+        "path":  "scripts/compare-cecil/README.md",
+        "bytes":  5401,
+        "sha256":  "240391f55e27dc03ec98d31f5c63b008ebed9f1bb8544a3facbac9931674f073"
+    },
+    {
+        "path":  "scripts/compare-cecil/report.py",
+        "bytes":  15442,
+        "sha256":  "02fc5c40d34834d8401f09d2094f00fbe245c37ec298fc30d2e9dcd5155f384f"
+    },
+    {
+        "path":  "scripts/compare-cecil/run.ps1",
+        "bytes":  14669,
+        "sha256":  "b06ad5030a0cf0fbf5b26df0b1ad04a663e9acd7c54e2ac39d1a77c7e85e8edc"
+    }
+]

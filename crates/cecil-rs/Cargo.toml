@@ -1,0 +1,31 @@
+[package]
+name = "cecil-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "cecil"
+
+[dependencies]
+cecil-core.workspace = true
+cecil-pe.workspace = true
+cecil-metadata.workspace = true
+cecil-cil.workspace = true
+cecil-pdb.workspace = true
+cecil-mdb.workspace = true
+rsa = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
+
+[features]
+strongname = ["dep:rsa", "dep:sha2"]
+fast-allocator = ["dep:mimalloc"]
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "assembly"
+harness = false

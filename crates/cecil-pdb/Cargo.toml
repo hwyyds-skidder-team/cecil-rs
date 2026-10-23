@@ -1,0 +1,12 @@
+[package]
+name = "cecil-pdb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cecil-core.workspace = true
+cecil-metadata.workspace = true
+cecil-cil.workspace = true
+flate2 = "1"
+sha2.workspace = true

@@ -1,0 +1,27 @@
+/target
+**/*.rs.bk
+
+# cargo-fuzz: corpora are seeded from fixtures/ at run time (see
+# .github/workflows/fuzz.yml); never commit grown corpora or crash artifacts.
+fuzz/corpus
+fuzz/artifacts
+fuzz/coverage
+fuzz/target
+fuzz/Cargo.lock
+
+# criterion benchmark reports
+target/criterion
+tmp/
+
+/target-baseline/
+/.baseline/
+
+# Local agent settings and Python caches
+/.pi/
+/.claude/
+__pycache__/
+*.py[cod]
+
+# Supplied local repro archives; benchmark source snapshots remain tracked
+/fuzz-roundtrip*.zip
+/MSVisualC_*.zip

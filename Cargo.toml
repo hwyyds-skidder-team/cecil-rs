@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cecil-core",
+    "crates/cecil-pe",
+    "crates/cecil-metadata",
+    "crates/cecil-cil",
+    "crates/cecil-rs",
+    "crates/cecil-pdb",
+    "crates/cecil-mdb",
+    "crates/cecil-rocks",
+    "crates/cecil-cli",
+]
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.dependencies]
+cecil = { package = "cecil-rs", path = "crates/cecil-rs" }
+bitflags = "2"
+rsa = "0.9"
+sha2 = "0.10"
+criterion = "0.5"
+mimalloc = "0.1"
+cecil-core = { path = "crates/cecil-core" }
+cecil-pe = { path = "crates/cecil-pe" }
+cecil-metadata = { path = "crates/cecil-metadata" }
+cecil-cil = { path = "crates/cecil-cil" }
+cecil-pdb = { path = "crates/cecil-pdb" }
+cecil-mdb = { path = "crates/cecil-mdb" }
+cecil-rocks = { path = "crates/cecil-rocks" }
+
+[profile.release]
+debug = true
+lto = "thin"
+codegen-units = 1

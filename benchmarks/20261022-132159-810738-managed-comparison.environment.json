@@ -1,0 +1,1968 @@
+{
+  "suite": "managed-7x3x3-v1",
+  "required_comparisons": 63,
+  "recorded_at": "2026-10-22T13:24:10.987594+08:00",
+  "commit": "d508c8cca9f3be36a9eefb165e9638ca9b1bee61",
+  "git_status": " M Cargo.lock\n M Cargo.toml\n M README.md\n M crates/cecli-cil/src/body.rs\n M crates/cecli-cil/src/exceptions.rs\n M crates/cecli-cli/Cargo.toml\n M crates/cecli-cli/src/main.rs\n M crates/cecli-core/src/io.rs\n M crates/cecli-metadata/src/builder.rs\n M crates/cecli-metadata/src/heaps.rs\n M crates/cecli-metadata/src/reader.rs\n M crates/cecli-metadata/src/root.rs\n M crates/cecli-metadata/src/tables.rs\n M crates/cecli-pe/src/image.rs\n M crates/cecli-pe/src/reader.rs\n M crates/cecli-pe/src/writer.rs\n M crates/cecli-rocks/src/doccomment.rs\n M crates/cecli-rocks/src/reflect.rs\n M crates/cecli/Cargo.toml\n M crates/cecli/src/assembly.rs\n M crates/cecli/src/edit.rs\n M crates/cecli/src/flow.rs\n M crates/cecli/src/importer.rs\n M crates/cecli/src/index.rs\n M crates/cecli/src/lib.rs\n M crates/cecli/src/model/custom_attribute.rs\n M crates/cecli/src/model/marshal.rs\n M crates/cecli/src/model/removal.rs\n M crates/cecli/src/model/security.rs\n M crates/cecli/src/model/signature.rs\n M crates/cecli/src/model/substitution.rs\n M crates/cecli/src/model/types.rs\n M crates/cecli/src/read/context.rs\n M crates/cecli/src/read/instructions.rs\n M crates/cecli/src/read/module_reader.rs\n M crates/cecli/src/resolution.rs\n M crates/cecli/src/type_parser.rs\n M crates/cecli/src/type_system.rs\n M crates/cecli/src/winrt.rs\n M crates/cecli/src/write/emit_il.rs\n M crates/cecli/src/write/emit_metadata.rs\n M crates/cecli/src/write/token_map.rs\n M crates/cecli/src/xref.rs\n?? .pi/agent/settings.json\n?? MSVisualC_607905.zip\n?? benchmarks/20261020-130510-cecil-comparison.environment.json\n?? benchmarks/20261020-131630-cecil-comparison.environment.json\n?? benchmarks/20261020-131630-cecil-comparison.raw.csv\n?? benchmarks/20261020-131630-cecil-comparison.raw.jsonl\n?? benchmarks/20261020-131630-cecil-comparison.raw.md\n?? benchmarks/20261020-132609-cecil-comparison.environment.json\n?? benchmarks/20261020-132609-cecil-comparison.raw.csv\n?? benchmarks/20261020-132609-cecil-comparison.raw.jsonl\n?? benchmarks/20261020-132609-cecil-comparison.raw.md\n?? benchmarks/20261021-130344-cecil-comparison.environment.json\n?? benchmarks/20261021-130344-cecil-comparison.raw.csv\n?? benchmarks/20261021-130344-cecil-comparison.raw.jsonl\n?? benchmarks/20261021-130344-cecil-comparison.raw.md\n?? benchmarks/20261021-132210-049-cecil-comparison.environment.json\n?? benchmarks/20261021-132210-049-cecil-comparison.source.json\n?? benchmarks/20261021-132210-049-cecil-comparison.source.zip\n?? benchmarks/20261021-132231-764-cecil-comparison.environment.json\n?? benchmarks/20261021-132231-764-cecil-comparison.raw.acceptance.json\n?? benchmarks/20261021-132231-764-cecil-comparison.raw.csv\n?? benchmarks/20261021-132231-764-cecil-comparison.raw.jsonl\n?? benchmarks/20261021-132231-764-cecil-comparison.raw.md\n?? benchmarks/20261021-132231-764-cecil-comparison.source.json\n?? benchmarks/20261021-132231-764-cecil-comparison.source.zip\n?? benchmarks/20261021-132630-739-cecil-comparison.environment.json\n?? benchmarks/20261021-132630-739-cecil-comparison.raw.acceptance.json\n?? benchmarks/20261021-132630-739-cecil-comparison.raw.csv\n?? benchmarks/20261021-132630-739-cecil-comparison.raw.jsonl\n?? benchmarks/20261021-132630-739-cecil-comparison.raw.md\n?? benchmarks/20261021-132630-739-cecil-comparison.source.json\n?? benchmarks/20261021-132630-739-cecil-comparison.source.zip\n?? benchmarks/20261021-133219-370-cecil-comparison.environment.json\n?? benchmarks/20261021-133219-370-cecil-comparison.raw.acceptance.json\n?? benchmarks/20261021-133219-370-cecil-comparison.raw.csv\n?? benchmarks/20261021-133219-370-cecil-comparison.raw.jsonl\n?? benchmarks/20261021-133219-370-cecil-comparison.raw.md\n?? benchmarks/20261021-133219-370-cecil-comparison.source.json\n?? benchmarks/20261021-133219-370-cecil-comparison.source.zip\n?? benchmarks/20261021-135035-arc-allocation-profile.json\n?? benchmarks/20261022-132159-810738-managed-comparison.source.json\n?? benchmarks/20261022-132159-810738-managed-comparison.source.zip\n?? crates/cecli/examples/compare_cecil.rs\n?? crates/cecli/examples/write_profile.rs\n?? \"fuzz-roundtrip (1).zip\"\n?? \"fuzz-roundtrip (2).zip\"\n?? fuzz-roundtrip.zip\n?? plan/20260912-222446-fix-fuzz-roundtrip-Plan.md\n?? plan/20260918-225854-harden-metadata-roundtrip-Plan.md\n?? plan/20261002-212609-fix-fuzz-roundtrip-2-Plan.md\n?? plan/20261017-131010-fix-two-fuzz-roundtrip-archives-Plan.md\n?? plan/20261020-125457-compare-cecil-performance-Plan.md\n?? plan/20261021-130152-optimize-beyond-cecil-Plan.md\n?? scripts/compare-cecil/CecilBench.cs\n?? scripts/compare-cecil/README.md\n?? scripts/compare-cecil/__pycache__/report.cpython-313.pyc\n?? scripts/compare-cecil/experiment_rva.py\n?? scripts/compare-cecil/report.py\n?? scripts/compare-cecil/run.ps1\n?? scripts/compare-managed/AsmResolverBench.cs\n?? scripts/compare-managed/BenchProtocol.cs\n?? scripts/compare-managed/DnlibBench.cs\n?? scripts/compare-managed/__pycache__/prepare.cpython-313.pyc\n?? scripts/compare-managed/packages.lock.json\n?? scripts/compare-managed/prepare.py\n?? scripts/compare-managed/report.py\n?? scripts/compare-managed/run.ps1\n?? scripts/compare-managed/run.py\n",
+  "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "rounds": 3,
+  "samples_per_round": 11,
+  "sample_ms": 120,
+  "warmup_ms": 800,
+  "modes": [
+    "read",
+    "write",
+    "roundtrip"
+  ],
+  "implementations": [
+    "cecli-rs",
+    "Mono.Cecil",
+    "dnlib",
+    "AsmResolver"
+  ],
+  "inputs": [
+    {
+      "name": "hello.exe",
+      "path": "D:\\cecli-rs\\fixtures\\hello.exe",
+      "bytes": 3584,
+      "sha256": "225832b65e14b18263587de23c13e86ed5a8ca9dc24b4fa6f9becfdc833dd518"
+    },
+    {
+      "name": "System.Runtime.dll (fixture)",
+      "path": "D:\\cecli-rs\\fixtures\\System.Runtime.dll",
+      "bytes": 22128,
+      "sha256": "125cdf18f9d657c8345aa7ef36f81fa29670124f5eaf2cc1c48053190107aab2"
+    },
+    {
+      "name": "SQLite-net.dll",
+      "path": "D:\\cecli-rs\\fixtures\\SQLite-net.dll",
+      "bytes": 71168,
+      "sha256": "ff561924f6fdbc9fc5b0f68e7caf55361fdf1003e43680423da9e3385f29b0ce"
+    },
+    {
+      "name": "cecil.dll (fixture)",
+      "path": "D:\\cecli-rs\\fixtures\\cecil.dll",
+      "bytes": 344064,
+      "sha256": "77ea4f1e8b6bb6af600a95992b26765d2d7bf9c1292683134563f457023c25fe"
+    },
+    {
+      "name": "Mono.Cecil.dll (0.11.6)",
+      "path": "D:\\cecli-rs\\target\\compare-managed\\cecil\\lib\\netstandard2.0\\Mono.Cecil.dll",
+      "bytes": 361472,
+      "sha256": "831dca77470d85cb6ffbea3072daa7a3df5b7c9fcfd9c3f43674a9be99d4bfcf"
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.dll",
+      "path": "D:\\cecli-rs\\target\\compare-managed\\roslyn\\tasks\\netcore\\bincore\\Microsoft.CodeAnalysis.dll",
+      "bytes": 3029800,
+      "sha256": "395736b2d0e02be77bedc3847b269da7a93bf8e49cd3431a4a8e68d2c52d5846"
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.CSharp.dll",
+      "path": "D:\\cecli-rs\\target\\compare-managed\\roslyn\\tasks\\netcore\\bincore\\Microsoft.CodeAnalysis.CSharp.dll",
+      "bytes": 6697768,
+      "sha256": "53302acca07700e9bb10dcf21034435d6e0454c8eebf2481164ec13e520004c9"
+    }
+  ],
+  "validation": [
+    {
+      "name": "hello.exe",
+      "counts": {
+        "types": 2,
+        "methods": 2,
+        "fields": 0,
+        "properties": 0,
+        "events": 0,
+        "attributes": 2,
+        "bodies": 2,
+        "instructions": 8,
+        "locals": 0,
+        "handlers": 0
+      },
+      "readers": {
+        "cecli-rs": {
+          "scheme": "rust-model-v1-fnv1a128",
+          "metadata": "7ef25bbebc2cc2efd95ffc15726f7b79",
+          "bodies": "b55de6fc69415943d1abc9c24dd5d47f",
+          "metadata_records": 12,
+          "body_records": 2
+        },
+        "Mono.Cecil": {
+          "scheme": "cecil-model-v1-sha256",
+          "metadata": "429e4acce3209705feab941808d780fb8e075f9a89e655a9c9d2d5667a37d3b1",
+          "bodies": "be99c78e44485deac1b4ae3eed4d6c1ed3fe568b727389f52dbd61078e4ccd1b",
+          "metadata_records": 12,
+          "body_records": 2
+        }
+      },
+      "writers": {
+        "cecli-rs": {
+          "implementation": "cecli-rs",
+          "mode": "validate",
+          "input_bytes": 3584,
+          "output_bytes": 3584,
+          "counts": {
+            "types": 2,
+            "methods": 2,
+            "fields": 0,
+            "properties": 0,
+            "events": 0,
+            "attributes": 2,
+            "bodies": 2,
+            "instructions": 8,
+            "locals": 0,
+            "handlers": 0
+          },
+          "semantics": {
+            "scheme": "rust-model-v1-fnv1a128",
+            "metadata": "7ef25bbebc2cc2efd95ffc15726f7b79",
+            "bodies": "b55de6fc69415943d1abc9c24dd5d47f",
+            "metadata_records": 12,
+            "body_records": 2
+          }
+        },
+        "Mono.Cecil": {
+          "implementation": "Mono.Cecil",
+          "version": "0.11.6",
+          "mode": "validate",
+          "input_bytes": 3584,
+          "output_bytes": 3584,
+          "counts": {
+            "types": 2,
+            "methods": 2,
+            "fields": 0,
+            "properties": 0,
+            "events": 0,
+            "attributes": 2,
+            "bodies": 2,
+            "instructions": 8,
+            "locals": 0,
+            "handlers": 0
+          },
+          "semantics": {
+            "scheme": "cecil-model-v1-sha256",
+            "metadata": "429e4acce3209705feab941808d780fb8e075f9a89e655a9c9d2d5667a37d3b1",
+            "bodies": "be99c78e44485deac1b4ae3eed4d6c1ed3fe568b727389f52dbd61078e4ccd1b",
+            "metadata_records": 12,
+            "body_records": 2
+          }
+        },
+        "dnlib": {
+          "implementation": "dnlib",
+          "version": "4.5.0",
+          "mode": "validate",
+          "input_bytes": 3584,
+          "output_bytes": 3584,
+          "counts": {
+            "types": 2,
+            "methods": 2,
+            "fields": 0,
+            "properties": 0,
+            "events": 0,
+            "attributes": 2,
+            "bodies": 2,
+            "instructions": 8,
+            "locals": 0,
+            "handlers": 0
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "String decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, resolved constructor signatures; no argument decoding in Load",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer; its native implementation may decode custom attributes",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        },
+        "AsmResolver": {
+          "implementation": "AsmResolver",
+          "version": "6.0.1",
+          "mode": "validate",
+          "input_bytes": 3584,
+          "output_bytes": 3584,
+          "counts": {
+            "types": 2,
+            "methods": 2,
+            "fields": 0,
+            "properties": 0,
+            "events": 0,
+            "attributes": 2,
+            "bodies": 2,
+            "instructions": 8,
+            "locals": 0,
+            "handlers": 0
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "ToString decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, constructor signatures and uninitialized serialized signature wrappers; no argument decoding",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer, preserving serialized attribute blobs",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        }
+      },
+      "outputs": {
+        "cecli-rs": {
+          "bytes": 3584,
+          "sha256": "df56ade95327e2158184135ab68dcea087ae595d5aa695aa948b5ea020950f8c",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\hello.exe.cecli-rs.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "7ef25bbebc2cc2efd95ffc15726f7b79",
+              "bodies": "b55de6fc69415943d1abc9c24dd5d47f",
+              "metadata_records": 12,
+              "body_records": 2
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "429e4acce3209705feab941808d780fb8e075f9a89e655a9c9d2d5667a37d3b1",
+              "bodies": "be99c78e44485deac1b4ae3eed4d6c1ed3fe568b727389f52dbd61078e4ccd1b",
+              "metadata_records": 12,
+              "body_records": 2
+            }
+          }
+        },
+        "Mono.Cecil": {
+          "bytes": 3584,
+          "sha256": "1636fcaec7bab9a8a42c6ff7f8a37474e1f6b0c94efba70d281addfcd36ac090",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\hello.exe.Mono.Cecil.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "7ef25bbebc2cc2efd95ffc15726f7b79",
+              "bodies": "b55de6fc69415943d1abc9c24dd5d47f",
+              "metadata_records": 12,
+              "body_records": 2
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "429e4acce3209705feab941808d780fb8e075f9a89e655a9c9d2d5667a37d3b1",
+              "bodies": "be99c78e44485deac1b4ae3eed4d6c1ed3fe568b727389f52dbd61078e4ccd1b",
+              "metadata_records": 12,
+              "body_records": 2
+            }
+          }
+        },
+        "dnlib": {
+          "bytes": 3584,
+          "sha256": "7fba7353c1448dc60a532562e536949b7a8781ff667535ef158b7eff4db92f1d",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\hello.exe.dnlib.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "7ef25bbebc2cc2efd95ffc15726f7b79",
+              "bodies": "b55de6fc69415943d1abc9c24dd5d47f",
+              "metadata_records": 12,
+              "body_records": 2
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "429e4acce3209705feab941808d780fb8e075f9a89e655a9c9d2d5667a37d3b1",
+              "bodies": "be99c78e44485deac1b4ae3eed4d6c1ed3fe568b727389f52dbd61078e4ccd1b",
+              "metadata_records": 12,
+              "body_records": 2
+            }
+          }
+        },
+        "AsmResolver": {
+          "bytes": 3584,
+          "sha256": "1f56498db4c288417ee177668483fc516c5959bb9bf37c49d01430cc0e012ed2",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\hello.exe.AsmResolver.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "7ef25bbebc2cc2efd95ffc15726f7b79",
+              "bodies": "b55de6fc69415943d1abc9c24dd5d47f",
+              "metadata_records": 12,
+              "body_records": 2
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "429e4acce3209705feab941808d780fb8e075f9a89e655a9c9d2d5667a37d3b1",
+              "bodies": "be99c78e44485deac1b4ae3eed4d6c1ed3fe568b727389f52dbd61078e4ccd1b",
+              "metadata_records": 12,
+              "body_records": 2
+            }
+          }
+        }
+      },
+      "semantic_validation": "passed",
+      "errors": []
+    },
+    {
+      "name": "System.Runtime.dll (fixture)",
+      "counts": {
+        "types": 9,
+        "methods": 10,
+        "fields": 1,
+        "properties": 1,
+        "events": 0,
+        "attributes": 26,
+        "bodies": 9,
+        "instructions": 33,
+        "locals": 0,
+        "handlers": 0
+      },
+      "readers": {
+        "cecli-rs": {
+          "scheme": "rust-model-v1-fnv1a128",
+          "metadata": "8303015c99a21caedad4e966442e5931",
+          "bodies": "34bacd0ae3b73402ca086a37d67e5838",
+          "metadata_records": 68,
+          "body_records": 10
+        },
+        "Mono.Cecil": {
+          "scheme": "cecil-model-v1-sha256",
+          "metadata": "4c4c2a64bbd8960a89c8a26f8dab7dcff73d9c1c81a0a25aee04b0a93dc429c7",
+          "bodies": "2629e3b9012928c63f13f26f734cb97b8140ccc6c1640e2c8f6d959cb0d8fc9b",
+          "metadata_records": 68,
+          "body_records": 10
+        }
+      },
+      "writers": {
+        "cecli-rs": {
+          "implementation": "cecli-rs",
+          "mode": "validate",
+          "input_bytes": 22128,
+          "output_bytes": 6144,
+          "counts": {
+            "types": 9,
+            "methods": 10,
+            "fields": 1,
+            "properties": 1,
+            "events": 0,
+            "attributes": 26,
+            "bodies": 9,
+            "instructions": 33,
+            "locals": 0,
+            "handlers": 0
+          },
+          "semantics": {
+            "scheme": "rust-model-v1-fnv1a128",
+            "metadata": "8303015c99a21caedad4e966442e5931",
+            "bodies": "34bacd0ae3b73402ca086a37d67e5838",
+            "metadata_records": 68,
+            "body_records": 10
+          }
+        },
+        "Mono.Cecil": {
+          "implementation": "Mono.Cecil",
+          "version": "0.11.6",
+          "mode": "validate",
+          "input_bytes": 22128,
+          "output_bytes": 5632,
+          "counts": {
+            "types": 9,
+            "methods": 10,
+            "fields": 1,
+            "properties": 1,
+            "events": 0,
+            "attributes": 26,
+            "bodies": 9,
+            "instructions": 33,
+            "locals": 0,
+            "handlers": 0
+          },
+          "semantics": {
+            "scheme": "cecil-model-v1-sha256",
+            "metadata": "4c4c2a64bbd8960a89c8a26f8dab7dcff73d9c1c81a0a25aee04b0a93dc429c7",
+            "bodies": "2629e3b9012928c63f13f26f734cb97b8140ccc6c1640e2c8f6d959cb0d8fc9b",
+            "metadata_records": 68,
+            "body_records": 10
+          }
+        },
+        "dnlib": {
+          "implementation": "dnlib",
+          "version": "4.5.0",
+          "mode": "validate",
+          "input_bytes": 22128,
+          "output_bytes": 5632,
+          "counts": {
+            "types": 9,
+            "methods": 10,
+            "fields": 1,
+            "properties": 1,
+            "events": 0,
+            "attributes": 26,
+            "bodies": 9,
+            "instructions": 33,
+            "locals": 0,
+            "handlers": 0
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "String decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, resolved constructor signatures; no argument decoding in Load",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer; its native implementation may decode custom attributes",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        },
+        "AsmResolver": {
+          "implementation": "AsmResolver",
+          "version": "6.0.1",
+          "mode": "validate",
+          "input_bytes": 22128,
+          "output_bytes": 5632,
+          "counts": {
+            "types": 9,
+            "methods": 10,
+            "fields": 1,
+            "properties": 1,
+            "events": 0,
+            "attributes": 26,
+            "bodies": 9,
+            "instructions": 33,
+            "locals": 0,
+            "handlers": 0
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "ToString decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, constructor signatures and uninitialized serialized signature wrappers; no argument decoding",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer, preserving serialized attribute blobs",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        }
+      },
+      "outputs": {
+        "cecli-rs": {
+          "bytes": 6144,
+          "sha256": "e29d6aace7ebd58ff5af244d466f05406b63783a93a519db03023f7fc572774d",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\System.Runtime.dll__fixture_.cecli-rs.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "8303015c99a21caedad4e966442e5931",
+              "bodies": "34bacd0ae3b73402ca086a37d67e5838",
+              "metadata_records": 68,
+              "body_records": 10
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "4c4c2a64bbd8960a89c8a26f8dab7dcff73d9c1c81a0a25aee04b0a93dc429c7",
+              "bodies": "2629e3b9012928c63f13f26f734cb97b8140ccc6c1640e2c8f6d959cb0d8fc9b",
+              "metadata_records": 68,
+              "body_records": 10
+            }
+          }
+        },
+        "Mono.Cecil": {
+          "bytes": 5632,
+          "sha256": "de1f6f897bf700b59ea7ee576fe9c859eb209da563d16d5810cd707eb710face",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\System.Runtime.dll__fixture_.Mono.Cecil.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "8303015c99a21caedad4e966442e5931",
+              "bodies": "34bacd0ae3b73402ca086a37d67e5838",
+              "metadata_records": 68,
+              "body_records": 10
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "4c4c2a64bbd8960a89c8a26f8dab7dcff73d9c1c81a0a25aee04b0a93dc429c7",
+              "bodies": "2629e3b9012928c63f13f26f734cb97b8140ccc6c1640e2c8f6d959cb0d8fc9b",
+              "metadata_records": 68,
+              "body_records": 10
+            }
+          }
+        },
+        "dnlib": {
+          "bytes": 5632,
+          "sha256": "175421913cd1dddc8e7d1d0a7ee0972e92407ff83773462300cc771bc7a0d830",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\System.Runtime.dll__fixture_.dnlib.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "8303015c99a21caedad4e966442e5931",
+              "bodies": "34bacd0ae3b73402ca086a37d67e5838",
+              "metadata_records": 68,
+              "body_records": 10
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "4c4c2a64bbd8960a89c8a26f8dab7dcff73d9c1c81a0a25aee04b0a93dc429c7",
+              "bodies": "2629e3b9012928c63f13f26f734cb97b8140ccc6c1640e2c8f6d959cb0d8fc9b",
+              "metadata_records": 68,
+              "body_records": 10
+            }
+          }
+        },
+        "AsmResolver": {
+          "bytes": 5632,
+          "sha256": "d70898b3a2f022ca1ee846f14ac1650101b4c6c8246894dc484164f146888aa9",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\System.Runtime.dll__fixture_.AsmResolver.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "8303015c99a21caedad4e966442e5931",
+              "bodies": "34bacd0ae3b73402ca086a37d67e5838",
+              "metadata_records": 68,
+              "body_records": 10
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "4c4c2a64bbd8960a89c8a26f8dab7dcff73d9c1c81a0a25aee04b0a93dc429c7",
+              "bodies": "2629e3b9012928c63f13f26f734cb97b8140ccc6c1640e2c8f6d959cb0d8fc9b",
+              "metadata_records": 68,
+              "body_records": 10
+            }
+          }
+        }
+      },
+      "semantic_validation": "passed",
+      "errors": []
+    },
+    {
+      "name": "SQLite-net.dll",
+      "counts": {
+        "types": 81,
+        "methods": 492,
+        "fields": 318,
+        "properties": 69,
+        "events": 1,
+        "attributes": 268,
+        "bodies": 492,
+        "instructions": 7753,
+        "locals": 341,
+        "handlers": 62
+      },
+      "readers": {
+        "cecli-rs": {
+          "scheme": "rust-model-v1-fnv1a128",
+          "metadata": "298524c5b39d0547cd6882a3adbc7e56",
+          "bodies": "8af1d8b7792170f2b255cc84c15b4e50",
+          "metadata_records": 2252,
+          "body_records": 492
+        },
+        "Mono.Cecil": {
+          "scheme": "cecil-model-v1-sha256",
+          "metadata": "5a72a25e9dd7a8d5dba8aa32346a2773d3ce43da045cea441e1f07b27da0f19d",
+          "bodies": "cf03970cd4d8460ea5b43b1a576d19aae7ff5931d9b1219bb463eb493df91096",
+          "metadata_records": 2252,
+          "body_records": 492
+        }
+      },
+      "writers": {
+        "cecli-rs": {
+          "implementation": "cecli-rs",
+          "mode": "validate",
+          "input_bytes": 71168,
+          "output_bytes": 73216,
+          "counts": {
+            "types": 81,
+            "methods": 492,
+            "fields": 318,
+            "properties": 69,
+            "events": 1,
+            "attributes": 268,
+            "bodies": 492,
+            "instructions": 7753,
+            "locals": 341,
+            "handlers": 62
+          },
+          "semantics": {
+            "scheme": "rust-model-v1-fnv1a128",
+            "metadata": "298524c5b39d0547cd6882a3adbc7e56",
+            "bodies": "8af1d8b7792170f2b255cc84c15b4e50",
+            "metadata_records": 2252,
+            "body_records": 492
+          }
+        },
+        "Mono.Cecil": {
+          "implementation": "Mono.Cecil",
+          "version": "0.11.6",
+          "mode": "validate",
+          "input_bytes": 71168,
+          "output_bytes": 71168,
+          "counts": {
+            "types": 81,
+            "methods": 492,
+            "fields": 318,
+            "properties": 69,
+            "events": 1,
+            "attributes": 268,
+            "bodies": 492,
+            "instructions": 7753,
+            "locals": 341,
+            "handlers": 62
+          },
+          "semantics": {
+            "scheme": "cecil-model-v1-sha256",
+            "metadata": "5a72a25e9dd7a8d5dba8aa32346a2773d3ce43da045cea441e1f07b27da0f19d",
+            "bodies": "cf03970cd4d8460ea5b43b1a576d19aae7ff5931d9b1219bb463eb493df91096",
+            "metadata_records": 2252,
+            "body_records": 492
+          }
+        },
+        "dnlib": {
+          "implementation": "dnlib",
+          "version": "4.5.0",
+          "mode": "validate",
+          "input_bytes": 71168,
+          "output_bytes": 70656,
+          "counts": {
+            "types": 81,
+            "methods": 492,
+            "fields": 318,
+            "properties": 69,
+            "events": 1,
+            "attributes": 268,
+            "bodies": 492,
+            "instructions": 7753,
+            "locals": 341,
+            "handlers": 62
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "String decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, resolved constructor signatures; no argument decoding in Load",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer; its native implementation may decode custom attributes",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        },
+        "AsmResolver": {
+          "implementation": "AsmResolver",
+          "version": "6.0.1",
+          "mode": "validate",
+          "input_bytes": 71168,
+          "output_bytes": 71168,
+          "counts": {
+            "types": 81,
+            "methods": 492,
+            "fields": 318,
+            "properties": 69,
+            "events": 1,
+            "attributes": 268,
+            "bodies": 492,
+            "instructions": 7753,
+            "locals": 341,
+            "handlers": 62
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "ToString decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, constructor signatures and uninitialized serialized signature wrappers; no argument decoding",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer, preserving serialized attribute blobs",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        }
+      },
+      "outputs": {
+        "cecli-rs": {
+          "bytes": 73216,
+          "sha256": "8a424cc72adf1715a68efe28d3dd28d9291f1c633e2cdc3c830e52dcdbc46272",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\SQLite-net.dll.cecli-rs.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "298524c5b39d0547cd6882a3adbc7e56",
+              "bodies": "8af1d8b7792170f2b255cc84c15b4e50",
+              "metadata_records": 2252,
+              "body_records": 492
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "5a72a25e9dd7a8d5dba8aa32346a2773d3ce43da045cea441e1f07b27da0f19d",
+              "bodies": "cf03970cd4d8460ea5b43b1a576d19aae7ff5931d9b1219bb463eb493df91096",
+              "metadata_records": 2252,
+              "body_records": 492
+            }
+          }
+        },
+        "Mono.Cecil": {
+          "bytes": 71168,
+          "sha256": "80f40ec990b0033b8869a0e546790eca3318089d2f3b1f5a03389912e37816d3",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\SQLite-net.dll.Mono.Cecil.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "298524c5b39d0547cd6882a3adbc7e56",
+              "bodies": "8af1d8b7792170f2b255cc84c15b4e50",
+              "metadata_records": 2252,
+              "body_records": 492
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "5a72a25e9dd7a8d5dba8aa32346a2773d3ce43da045cea441e1f07b27da0f19d",
+              "bodies": "cf03970cd4d8460ea5b43b1a576d19aae7ff5931d9b1219bb463eb493df91096",
+              "metadata_records": 2252,
+              "body_records": 492
+            }
+          }
+        },
+        "dnlib": {
+          "bytes": 70656,
+          "sha256": "52ff32e7a95c7fafbb1487cb308fd1d0ad902e52ace8ce275056250e3559979f",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\SQLite-net.dll.dnlib.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "298524c5b39d0547cd6882a3adbc7e56",
+              "bodies": "8af1d8b7792170f2b255cc84c15b4e50",
+              "metadata_records": 2252,
+              "body_records": 492
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "5a72a25e9dd7a8d5dba8aa32346a2773d3ce43da045cea441e1f07b27da0f19d",
+              "bodies": "cf03970cd4d8460ea5b43b1a576d19aae7ff5931d9b1219bb463eb493df91096",
+              "metadata_records": 2252,
+              "body_records": 492
+            }
+          }
+        },
+        "AsmResolver": {
+          "bytes": 71168,
+          "sha256": "b3295fc8e39c6dfc5ec2444bfa59dc2355b062e02b7b1162886b11597bbb57dc",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\SQLite-net.dll.AsmResolver.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "298524c5b39d0547cd6882a3adbc7e56",
+              "bodies": "8af1d8b7792170f2b255cc84c15b4e50",
+              "metadata_records": 2252,
+              "body_records": 492
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "5a72a25e9dd7a8d5dba8aa32346a2773d3ce43da045cea441e1f07b27da0f19d",
+              "bodies": "cf03970cd4d8460ea5b43b1a576d19aae7ff5931d9b1219bb463eb493df91096",
+              "metadata_records": 2252,
+              "body_records": 492
+            }
+          }
+        }
+      },
+      "semantic_validation": "passed",
+      "errors": []
+    },
+    {
+      "name": "cecil.dll (fixture)",
+      "counts": {
+        "types": 298,
+        "methods": 2783,
+        "fields": 1745,
+        "properties": 766,
+        "events": 1,
+        "attributes": 152,
+        "bodies": 2686,
+        "instructions": 62880,
+        "locals": 4787,
+        "handlers": 50
+      },
+      "readers": {
+        "cecli-rs": {
+          "scheme": "rust-model-v1-fnv1a128",
+          "metadata": "8379caa83dd603453d8b2acbc71e5138",
+          "bodies": "defb70212c52be2e725fc94d206736a4",
+          "metadata_records": 11092,
+          "body_records": 2783
+        },
+        "Mono.Cecil": {
+          "scheme": "cecil-model-v1-sha256",
+          "metadata": "613bdb1fcee1d1873fe4355451dcccac9732a5b55230c2906c8c7803c18b6338",
+          "bodies": "7957261574d1c4f86fe61a5ddf6e217948f3338dd804016794dd7680727f4a37",
+          "metadata_records": 11092,
+          "body_records": 2783
+        }
+      },
+      "writers": {
+        "cecli-rs": {
+          "implementation": "cecli-rs",
+          "mode": "validate",
+          "input_bytes": 344064,
+          "output_bytes": 354304,
+          "counts": {
+            "types": 298,
+            "methods": 2783,
+            "fields": 1745,
+            "properties": 766,
+            "events": 1,
+            "attributes": 152,
+            "bodies": 2686,
+            "instructions": 62880,
+            "locals": 4787,
+            "handlers": 50
+          },
+          "semantics": {
+            "scheme": "rust-model-v1-fnv1a128",
+            "metadata": "8379caa83dd603453d8b2acbc71e5138",
+            "bodies": "defb70212c52be2e725fc94d206736a4",
+            "metadata_records": 11092,
+            "body_records": 2783
+          }
+        },
+        "Mono.Cecil": {
+          "implementation": "Mono.Cecil",
+          "version": "0.11.6",
+          "mode": "validate",
+          "input_bytes": 344064,
+          "output_bytes": 343552,
+          "counts": {
+            "types": 298,
+            "methods": 2783,
+            "fields": 1745,
+            "properties": 766,
+            "events": 1,
+            "attributes": 152,
+            "bodies": 2686,
+            "instructions": 62880,
+            "locals": 4787,
+            "handlers": 50
+          },
+          "semantics": {
+            "scheme": "cecil-model-v1-sha256",
+            "metadata": "613bdb1fcee1d1873fe4355451dcccac9732a5b55230c2906c8c7803c18b6338",
+            "bodies": "7957261574d1c4f86fe61a5ddf6e217948f3338dd804016794dd7680727f4a37",
+            "metadata_records": 11092,
+            "body_records": 2783
+          }
+        },
+        "dnlib": {
+          "implementation": "dnlib",
+          "version": "4.5.0",
+          "mode": "validate",
+          "input_bytes": 344064,
+          "output_bytes": 341504,
+          "counts": {
+            "types": 298,
+            "methods": 2783,
+            "fields": 1745,
+            "properties": 766,
+            "events": 1,
+            "attributes": 152,
+            "bodies": 2686,
+            "instructions": 62880,
+            "locals": 4787,
+            "handlers": 50
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "String decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, resolved constructor signatures; no argument decoding in Load",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer; its native implementation may decode custom attributes",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        },
+        "AsmResolver": {
+          "implementation": "AsmResolver",
+          "version": "6.0.1",
+          "mode": "validate",
+          "input_bytes": 344064,
+          "output_bytes": 344064,
+          "counts": {
+            "types": 298,
+            "methods": 2783,
+            "fields": 1745,
+            "properties": 766,
+            "events": 1,
+            "attributes": 152,
+            "bodies": 2686,
+            "instructions": 62880,
+            "locals": 4787,
+            "handlers": 50
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "ToString decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, constructor signatures and uninitialized serialized signature wrappers; no argument decoding",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer, preserving serialized attribute blobs",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        }
+      },
+      "outputs": {
+        "cecli-rs": {
+          "bytes": 354304,
+          "sha256": "fc5d8ea8bd6e3b396c185fae876390767a8a745a3160f98c3ae97e1daae97a93",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\cecil.dll__fixture_.cecli-rs.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "8379caa83dd603453d8b2acbc71e5138",
+              "bodies": "defb70212c52be2e725fc94d206736a4",
+              "metadata_records": 11092,
+              "body_records": 2783
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "613bdb1fcee1d1873fe4355451dcccac9732a5b55230c2906c8c7803c18b6338",
+              "bodies": "7957261574d1c4f86fe61a5ddf6e217948f3338dd804016794dd7680727f4a37",
+              "metadata_records": 11092,
+              "body_records": 2783
+            }
+          }
+        },
+        "Mono.Cecil": {
+          "bytes": 343552,
+          "sha256": "88f0073d3aed0894af034a73ff214ade41e5775dfc746cf62db572a0524eb0a2",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\cecil.dll__fixture_.Mono.Cecil.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "8379caa83dd603453d8b2acbc71e5138",
+              "bodies": "defb70212c52be2e725fc94d206736a4",
+              "metadata_records": 11092,
+              "body_records": 2783
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "613bdb1fcee1d1873fe4355451dcccac9732a5b55230c2906c8c7803c18b6338",
+              "bodies": "7957261574d1c4f86fe61a5ddf6e217948f3338dd804016794dd7680727f4a37",
+              "metadata_records": 11092,
+              "body_records": 2783
+            }
+          }
+        },
+        "dnlib": {
+          "bytes": 341504,
+          "sha256": "d40217338db67bfce9e54145a42bf3007e101a6e665dbaadb1e1e7c6a0deb4df",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\cecil.dll__fixture_.dnlib.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "8379caa83dd603453d8b2acbc71e5138",
+              "bodies": "defb70212c52be2e725fc94d206736a4",
+              "metadata_records": 11092,
+              "body_records": 2783
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "613bdb1fcee1d1873fe4355451dcccac9732a5b55230c2906c8c7803c18b6338",
+              "bodies": "7957261574d1c4f86fe61a5ddf6e217948f3338dd804016794dd7680727f4a37",
+              "metadata_records": 11092,
+              "body_records": 2783
+            }
+          }
+        },
+        "AsmResolver": {
+          "bytes": 344064,
+          "sha256": "4fb56d03841fa44688b43b695c54fc058b18705e6d342b70f4597f1dc43c09c2",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\cecil.dll__fixture_.AsmResolver.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "8379caa83dd603453d8b2acbc71e5138",
+              "bodies": "defb70212c52be2e725fc94d206736a4",
+              "metadata_records": 11092,
+              "body_records": 2783
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "613bdb1fcee1d1873fe4355451dcccac9732a5b55230c2906c8c7803c18b6338",
+              "bodies": "7957261574d1c4f86fe61a5ddf6e217948f3338dd804016794dd7680727f4a37",
+              "metadata_records": 11092,
+              "body_records": 2783
+            }
+          }
+        }
+      },
+      "semantic_validation": "passed",
+      "errors": []
+    },
+    {
+      "name": "Mono.Cecil.dll (0.11.6)",
+      "counts": {
+        "types": 351,
+        "methods": 3152,
+        "fields": 1952,
+        "properties": 834,
+        "events": 1,
+        "attributes": 182,
+        "bodies": 3046,
+        "instructions": 55872,
+        "locals": 2089,
+        "handlers": 120
+      },
+      "readers": {
+        "cecli-rs": {
+          "scheme": "rust-model-v1-fnv1a128",
+          "metadata": "77de53c39d340024d9f1dfa742e6eda7",
+          "bodies": "10d372ed84dde49ec111b8363fc1020b",
+          "metadata_records": 12603,
+          "body_records": 3152
+        },
+        "Mono.Cecil": {
+          "scheme": "cecil-model-v1-sha256",
+          "metadata": "9be4cacbf2b3502353af6e0baf2416c86c76a34e5ba3fbe64bb8e25f77a2dac1",
+          "bodies": "fe9bac35688e114ba18144516e4a70effcc43d1aeecc43de647c44fdf3183ab7",
+          "metadata_records": 12603,
+          "body_records": 3152
+        }
+      },
+      "writers": {
+        "cecli-rs": {
+          "implementation": "cecli-rs",
+          "mode": "validate",
+          "input_bytes": 361472,
+          "output_bytes": 374272,
+          "counts": {
+            "types": 351,
+            "methods": 3152,
+            "fields": 1952,
+            "properties": 834,
+            "events": 1,
+            "attributes": 182,
+            "bodies": 3046,
+            "instructions": 55872,
+            "locals": 2089,
+            "handlers": 120
+          },
+          "semantics": {
+            "scheme": "rust-model-v1-fnv1a128",
+            "metadata": "77de53c39d340024d9f1dfa742e6eda7",
+            "bodies": "10d372ed84dde49ec111b8363fc1020b",
+            "metadata_records": 12603,
+            "body_records": 3152
+          }
+        },
+        "Mono.Cecil": {
+          "implementation": "Mono.Cecil",
+          "version": "0.11.6",
+          "mode": "validate",
+          "input_bytes": 361472,
+          "output_bytes": 359936,
+          "counts": {
+            "types": 351,
+            "methods": 3152,
+            "fields": 1952,
+            "properties": 834,
+            "events": 1,
+            "attributes": 182,
+            "bodies": 3046,
+            "instructions": 55872,
+            "locals": 2089,
+            "handlers": 120
+          },
+          "semantics": {
+            "scheme": "cecil-model-v1-sha256",
+            "metadata": "9be4cacbf2b3502353af6e0baf2416c86c76a34e5ba3fbe64bb8e25f77a2dac1",
+            "bodies": "fe9bac35688e114ba18144516e4a70effcc43d1aeecc43de647c44fdf3183ab7",
+            "metadata_records": 12603,
+            "body_records": 3152
+          }
+        },
+        "dnlib": {
+          "implementation": "dnlib",
+          "version": "4.5.0",
+          "mode": "validate",
+          "input_bytes": 361472,
+          "output_bytes": 359424,
+          "counts": {
+            "types": 351,
+            "methods": 3152,
+            "fields": 1952,
+            "properties": 834,
+            "events": 1,
+            "attributes": 182,
+            "bodies": 3046,
+            "instructions": 55872,
+            "locals": 2089,
+            "handlers": 120
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "String decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, resolved constructor signatures; no argument decoding in Load",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer; its native implementation may decode custom attributes",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        },
+        "AsmResolver": {
+          "implementation": "AsmResolver",
+          "version": "6.0.1",
+          "mode": "validate",
+          "input_bytes": 361472,
+          "output_bytes": 360960,
+          "counts": {
+            "types": 351,
+            "methods": 3152,
+            "fields": 1952,
+            "properties": 834,
+            "events": 1,
+            "attributes": 182,
+            "bodies": 3046,
+            "instructions": 55872,
+            "locals": 2089,
+            "handlers": 120
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "ToString decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, constructor signatures and uninitialized serialized signature wrappers; no argument decoding",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer, preserving serialized attribute blobs",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        }
+      },
+      "outputs": {
+        "cecli-rs": {
+          "bytes": 374272,
+          "sha256": "6b14464989e8356a44c995c95f1c5b0bcdc40cc291db5fbbf26f1e5ee8cfe666",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Mono.Cecil.dll__0.11.6_.cecli-rs.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "77de53c39d340024d9f1dfa742e6eda7",
+              "bodies": "10d372ed84dde49ec111b8363fc1020b",
+              "metadata_records": 12603,
+              "body_records": 3152
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "9be4cacbf2b3502353af6e0baf2416c86c76a34e5ba3fbe64bb8e25f77a2dac1",
+              "bodies": "fe9bac35688e114ba18144516e4a70effcc43d1aeecc43de647c44fdf3183ab7",
+              "metadata_records": 12603,
+              "body_records": 3152
+            }
+          }
+        },
+        "Mono.Cecil": {
+          "bytes": 359936,
+          "sha256": "6c50d2b801a505f67393691f0716bc18a4615931d426dfe0b27409c00f67a66c",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Mono.Cecil.dll__0.11.6_.Mono.Cecil.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "77de53c39d340024d9f1dfa742e6eda7",
+              "bodies": "10d372ed84dde49ec111b8363fc1020b",
+              "metadata_records": 12603,
+              "body_records": 3152
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "9be4cacbf2b3502353af6e0baf2416c86c76a34e5ba3fbe64bb8e25f77a2dac1",
+              "bodies": "fe9bac35688e114ba18144516e4a70effcc43d1aeecc43de647c44fdf3183ab7",
+              "metadata_records": 12603,
+              "body_records": 3152
+            }
+          }
+        },
+        "dnlib": {
+          "bytes": 359424,
+          "sha256": "84827b79f03341c00b6e1969ccc0f6fb9312b623df17106b1e4f13eaf9099d3b",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Mono.Cecil.dll__0.11.6_.dnlib.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "77de53c39d340024d9f1dfa742e6eda7",
+              "bodies": "10d372ed84dde49ec111b8363fc1020b",
+              "metadata_records": 12603,
+              "body_records": 3152
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "9be4cacbf2b3502353af6e0baf2416c86c76a34e5ba3fbe64bb8e25f77a2dac1",
+              "bodies": "fe9bac35688e114ba18144516e4a70effcc43d1aeecc43de647c44fdf3183ab7",
+              "metadata_records": 12603,
+              "body_records": 3152
+            }
+          }
+        },
+        "AsmResolver": {
+          "bytes": 360960,
+          "sha256": "c7d1e78fc9a1225ff21afa9fe9d2ef6683115a751f13eee4fc051167fabacffe",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Mono.Cecil.dll__0.11.6_.AsmResolver.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "77de53c39d340024d9f1dfa742e6eda7",
+              "bodies": "10d372ed84dde49ec111b8363fc1020b",
+              "metadata_records": 12603,
+              "body_records": 3152
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "9be4cacbf2b3502353af6e0baf2416c86c76a34e5ba3fbe64bb8e25f77a2dac1",
+              "bodies": "fe9bac35688e114ba18144516e4a70effcc43d1aeecc43de647c44fdf3183ab7",
+              "metadata_records": 12603,
+              "body_records": 3152
+            }
+          }
+        }
+      },
+      "semantic_validation": "passed",
+      "errors": []
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.dll",
+      "counts": {
+        "types": 2338,
+        "methods": 19417,
+        "fields": 9054,
+        "properties": 5413,
+        "events": 4,
+        "attributes": 21289,
+        "bodies": 17192,
+        "instructions": 301569,
+        "locals": 13985,
+        "handlers": 1127
+      },
+      "readers": {
+        "cecli-rs": {
+          "scheme": "rust-model-v1-fnv1a128",
+          "metadata": "4dda55ce50986aaf885e9536a441e742",
+          "bodies": "2210963f2c6eae76ad397d440afa0954",
+          "metadata_records": 105008,
+          "body_records": 19417
+        },
+        "Mono.Cecil": {
+          "scheme": "cecil-model-v1-sha256",
+          "metadata": "b85c296f806b9bbf733c55f73d362703ef8147d889fcc57af092782f00269ac9",
+          "bodies": "50bbc83c92e0920ab04bc7db078aad12b66f1b3a791adc6dbeac8d7704f7c2dd",
+          "metadata_records": 105008,
+          "body_records": 19417
+        }
+      },
+      "writers": {
+        "cecli-rs": {
+          "implementation": "cecli-rs",
+          "mode": "validate",
+          "input_bytes": 3029800,
+          "output_bytes": 3105792,
+          "counts": {
+            "types": 2338,
+            "methods": 19417,
+            "fields": 9054,
+            "properties": 5413,
+            "events": 4,
+            "attributes": 21289,
+            "bodies": 17192,
+            "instructions": 301569,
+            "locals": 13985,
+            "handlers": 1127
+          },
+          "semantics": {
+            "scheme": "rust-model-v1-fnv1a128",
+            "metadata": "4dda55ce50986aaf885e9536a441e742",
+            "bodies": "2210963f2c6eae76ad397d440afa0954",
+            "metadata_records": 105008,
+            "body_records": 19417
+          }
+        },
+        "Mono.Cecil": {
+          "implementation": "Mono.Cecil",
+          "version": "0.11.6",
+          "mode": "validate",
+          "input_bytes": 3029800,
+          "output_bytes": 2999808,
+          "counts": {
+            "types": 2338,
+            "methods": 19417,
+            "fields": 9054,
+            "properties": 5413,
+            "events": 4,
+            "attributes": 21289,
+            "bodies": 17192,
+            "instructions": 301569,
+            "locals": 13985,
+            "handlers": 1127
+          },
+          "semantics": {
+            "scheme": "cecil-model-v1-sha256",
+            "metadata": "b85c296f806b9bbf733c55f73d362703ef8147d889fcc57af092782f00269ac9",
+            "bodies": "50bbc83c92e0920ab04bc7db078aad12b66f1b3a791adc6dbeac8d7704f7c2dd",
+            "metadata_records": 105008,
+            "body_records": 19417
+          }
+        },
+        "dnlib": {
+          "implementation": "dnlib",
+          "version": "4.5.0",
+          "mode": "validate",
+          "input_bytes": 3029800,
+          "output_bytes": 2989568,
+          "counts": {
+            "types": 2338,
+            "methods": 19417,
+            "fields": 9054,
+            "properties": 5413,
+            "events": 4,
+            "attributes": 21289,
+            "bodies": 17192,
+            "instructions": 301569,
+            "locals": 13985,
+            "handlers": 1127
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "String decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, resolved constructor signatures; no argument decoding in Load",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer; its native implementation may decode custom attributes",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        },
+        "AsmResolver": {
+          "implementation": "AsmResolver",
+          "version": "6.0.1",
+          "mode": "validate",
+          "input_bytes": 3029800,
+          "output_bytes": 3009536,
+          "counts": {
+            "types": 2338,
+            "methods": 19417,
+            "fields": 9054,
+            "properties": 5413,
+            "events": 4,
+            "attributes": 21289,
+            "bodies": 17192,
+            "instructions": 301569,
+            "locals": 13985,
+            "handlers": 1127
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "ToString decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, constructor signatures and uninitialized serialized signature wrappers; no argument decoding",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer, preserving serialized attribute blobs",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        }
+      },
+      "outputs": {
+        "cecli-rs": {
+          "bytes": 3105792,
+          "sha256": "8529b2da674cd269ea5324aaa820e5e59fcc29b7c7492fcede3b015dd3d66bac",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Microsoft.CodeAnalysis.dll.cecli-rs.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "4dda55ce50986aaf885e9536a441e742",
+              "bodies": "2210963f2c6eae76ad397d440afa0954",
+              "metadata_records": 105008,
+              "body_records": 19417
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "b85c296f806b9bbf733c55f73d362703ef8147d889fcc57af092782f00269ac9",
+              "bodies": "50bbc83c92e0920ab04bc7db078aad12b66f1b3a791adc6dbeac8d7704f7c2dd",
+              "metadata_records": 105008,
+              "body_records": 19417
+            }
+          }
+        },
+        "Mono.Cecil": {
+          "bytes": 2999808,
+          "sha256": "ed4050d6c01b9cf457e46f8b45387845854117f08b6a4563a30845e70dedfadb",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Microsoft.CodeAnalysis.dll.Mono.Cecil.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "4dda55ce50986aaf885e9536a441e742",
+              "bodies": "2210963f2c6eae76ad397d440afa0954",
+              "metadata_records": 105008,
+              "body_records": 19417
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "b85c296f806b9bbf733c55f73d362703ef8147d889fcc57af092782f00269ac9",
+              "bodies": "50bbc83c92e0920ab04bc7db078aad12b66f1b3a791adc6dbeac8d7704f7c2dd",
+              "metadata_records": 105008,
+              "body_records": 19417
+            }
+          }
+        },
+        "dnlib": {
+          "bytes": 2989568,
+          "sha256": "ab84c79f48c09f7dc9491eec320060a063626e1ff4eacb4215893ecef78ecc59",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Microsoft.CodeAnalysis.dll.dnlib.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "4dda55ce50986aaf885e9536a441e742",
+              "bodies": "2210963f2c6eae76ad397d440afa0954",
+              "metadata_records": 105008,
+              "body_records": 19417
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "b85c296f806b9bbf733c55f73d362703ef8147d889fcc57af092782f00269ac9",
+              "bodies": "50bbc83c92e0920ab04bc7db078aad12b66f1b3a791adc6dbeac8d7704f7c2dd",
+              "metadata_records": 105008,
+              "body_records": 19417
+            }
+          }
+        },
+        "AsmResolver": {
+          "bytes": 3009536,
+          "sha256": "14204d1ecf7925f18996540bb6436cd1017657653ceafdf8aa06a98812c964ae",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Microsoft.CodeAnalysis.dll.AsmResolver.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "4dda55ce50986aaf885e9536a441e742",
+              "bodies": "2210963f2c6eae76ad397d440afa0954",
+              "metadata_records": 105008,
+              "body_records": 19417
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "b85c296f806b9bbf733c55f73d362703ef8147d889fcc57af092782f00269ac9",
+              "bodies": "50bbc83c92e0920ab04bc7db078aad12b66f1b3a791adc6dbeac8d7704f7c2dd",
+              "metadata_records": 105008,
+              "body_records": 19417
+            }
+          }
+        }
+      },
+      "semantic_validation": "passed",
+      "errors": []
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.CSharp.dll",
+      "counts": {
+        "types": 2713,
+        "methods": 42395,
+        "fields": 12661,
+        "properties": 12470,
+        "events": 0,
+        "attributes": 29894,
+        "bodies": 41435,
+        "instructions": 865740,
+        "locals": 40873,
+        "handlers": 724
+      },
+      "readers": {
+        "cecli-rs": {
+          "scheme": "rust-model-v1-fnv1a128",
+          "metadata": "4bbba3cc801c435197925d360c27f7c5",
+          "bodies": "069a02b5a93ee7dc0be9aaf66d17a4c9",
+          "metadata_records": 203664,
+          "body_records": 42395
+        },
+        "Mono.Cecil": {
+          "scheme": "cecil-model-v1-sha256",
+          "metadata": "4be9850cdd8030a9ba97ac0d57b49fd1157ea679b1a79ca6aaacc5039be57db6",
+          "bodies": "48f349ee6d62ceb2e47e8b28f3fd09ccc4f1e10ab8189841089b52f0e6675e8d",
+          "metadata_records": 203664,
+          "body_records": 42395
+        }
+      },
+      "writers": {
+        "cecli-rs": {
+          "implementation": "cecli-rs",
+          "mode": "validate",
+          "input_bytes": 6697768,
+          "output_bytes": 6888448,
+          "counts": {
+            "types": 2713,
+            "methods": 42395,
+            "fields": 12661,
+            "properties": 12470,
+            "events": 0,
+            "attributes": 29894,
+            "bodies": 41435,
+            "instructions": 865740,
+            "locals": 40873,
+            "handlers": 724
+          },
+          "semantics": {
+            "scheme": "rust-model-v1-fnv1a128",
+            "metadata": "4bbba3cc801c435197925d360c27f7c5",
+            "bodies": "069a02b5a93ee7dc0be9aaf66d17a4c9",
+            "metadata_records": 203664,
+            "body_records": 42395
+          }
+        },
+        "Mono.Cecil": {
+          "implementation": "Mono.Cecil",
+          "version": "0.11.6",
+          "mode": "validate",
+          "input_bytes": 6697768,
+          "output_bytes": 6633472,
+          "counts": {
+            "types": 2713,
+            "methods": 42395,
+            "fields": 12661,
+            "properties": 12470,
+            "events": 0,
+            "attributes": 29894,
+            "bodies": 41435,
+            "instructions": 865740,
+            "locals": 40873,
+            "handlers": 724
+          },
+          "semantics": {
+            "scheme": "cecil-model-v1-sha256",
+            "metadata": "4be9850cdd8030a9ba97ac0d57b49fd1157ea679b1a79ca6aaacc5039be57db6",
+            "bodies": "48f349ee6d62ceb2e47e8b28f3fd09ccc4f1e10ab8189841089b52f0e6675e8d",
+            "metadata_records": 203664,
+            "body_records": 42395
+          }
+        },
+        "dnlib": {
+          "implementation": "dnlib",
+          "version": "4.5.0",
+          "mode": "validate",
+          "input_bytes": 6697768,
+          "output_bytes": 6628352,
+          "counts": {
+            "types": 2713,
+            "methods": 42395,
+            "fields": 12661,
+            "properties": 12470,
+            "events": 0,
+            "attributes": 29894,
+            "bodies": 41435,
+            "instructions": 865740,
+            "locals": 40873,
+            "handlers": 724
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "String decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, resolved constructor signatures; no argument decoding in Load",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer; its native implementation may decode custom attributes",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        },
+        "AsmResolver": {
+          "implementation": "AsmResolver",
+          "version": "6.0.1",
+          "mode": "validate",
+          "input_bytes": 6697768,
+          "output_bytes": 6675968,
+          "counts": {
+            "types": 2713,
+            "methods": 42395,
+            "fields": 12661,
+            "properties": 12470,
+            "events": 0,
+            "attributes": 29894,
+            "bodies": 41435,
+            "instructions": 865740,
+            "locals": 40873,
+            "handlers": 724
+          },
+          "access_coverage": {
+            "metadata": "definitions/signatures/generics/constraints/interfaces/constants/marshal/layout/pinvoke/overrides/resources",
+            "utf8_names": "ToString decoded, including names/namespaces/cultures/nested resolution scopes",
+            "signature_traversal": "force lazy getters once per object identity per Load",
+            "il": "all instructions/resolved operand references/locals/handlers",
+            "custom_attributes": "all raw rows, copied blob payloads, constructor signatures and uninitialized serialized signature wrappers; no argument decoding",
+            "security": "raw permission-set blobs",
+            "writer": "default managed writer, preserving serialized attribute blobs",
+            "symbols": false,
+            "external_resolution_requested": false
+          }
+        }
+      },
+      "outputs": {
+        "cecli-rs": {
+          "bytes": 6888448,
+          "sha256": "dd690027d78e4df49f8ad8a5861c1fb782ee05134d4fa54b4dced5bbc8efe089",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Microsoft.CodeAnalysis.CSharp.dll.cecli-rs.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "4bbba3cc801c435197925d360c27f7c5",
+              "bodies": "069a02b5a93ee7dc0be9aaf66d17a4c9",
+              "metadata_records": 203664,
+              "body_records": 42395
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "4be9850cdd8030a9ba97ac0d57b49fd1157ea679b1a79ca6aaacc5039be57db6",
+              "bodies": "48f349ee6d62ceb2e47e8b28f3fd09ccc4f1e10ab8189841089b52f0e6675e8d",
+              "metadata_records": 203664,
+              "body_records": 42395
+            }
+          }
+        },
+        "Mono.Cecil": {
+          "bytes": 6633472,
+          "sha256": "4b4abdb2ccd765192411da7849d6e06fc8f0b737d737c25f17e2445d7d35b88d",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Microsoft.CodeAnalysis.CSharp.dll.Mono.Cecil.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "4bbba3cc801c435197925d360c27f7c5",
+              "bodies": "069a02b5a93ee7dc0be9aaf66d17a4c9",
+              "metadata_records": 203664,
+              "body_records": 42395
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "4be9850cdd8030a9ba97ac0d57b49fd1157ea679b1a79ca6aaacc5039be57db6",
+              "bodies": "48f349ee6d62ceb2e47e8b28f3fd09ccc4f1e10ab8189841089b52f0e6675e8d",
+              "metadata_records": 203664,
+              "body_records": 42395
+            }
+          }
+        },
+        "dnlib": {
+          "bytes": 6628352,
+          "sha256": "2b6d338235a0e4831275e31d9859e3f3437d96c1bf3f5d4fab1fbeef164ca7e7",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Microsoft.CodeAnalysis.CSharp.dll.dnlib.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "4bbba3cc801c435197925d360c27f7c5",
+              "bodies": "069a02b5a93ee7dc0be9aaf66d17a4c9",
+              "metadata_records": 203664,
+              "body_records": 42395
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "4be9850cdd8030a9ba97ac0d57b49fd1157ea679b1a79ca6aaacc5039be57db6",
+              "bodies": "48f349ee6d62ceb2e47e8b28f3fd09ccc4f1e10ab8189841089b52f0e6675e8d",
+              "metadata_records": 203664,
+              "body_records": 42395
+            }
+          }
+        },
+        "AsmResolver": {
+          "bytes": 6675968,
+          "sha256": "8e49da81e57cf3ec7cd1093574869f134b063fbadeb7c30ca5751804434a8d58",
+          "path": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\Microsoft.CodeAnalysis.CSharp.dll.AsmResolver.dll",
+          "readers": {
+            "cecli-rs": {
+              "scheme": "rust-model-v1-fnv1a128",
+              "metadata": "4bbba3cc801c435197925d360c27f7c5",
+              "bodies": "069a02b5a93ee7dc0be9aaf66d17a4c9",
+              "metadata_records": 203664,
+              "body_records": 42395
+            },
+            "Mono.Cecil": {
+              "scheme": "cecil-model-v1-sha256",
+              "metadata": "4be9850cdd8030a9ba97ac0d57b49fd1157ea679b1a79ca6aaacc5039be57db6",
+              "bodies": "48f349ee6d62ceb2e47e8b28f3fd09ccc4f1e10ab8189841089b52f0e6675e8d",
+              "metadata_records": 203664,
+              "body_records": 42395
+            }
+          }
+        }
+      },
+      "semantic_validation": "passed",
+      "errors": []
+    }
+  ],
+  "validation_errors": [],
+  "managed": {
+    "drivers": {
+      "dnlib": [
+        "dotnet",
+        "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\DnlibBench.dll"
+      ],
+      "AsmResolver": [
+        "dotnet",
+        "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\AsmResolverBench.dll"
+      ],
+      "Mono.Cecil": [
+        "dotnet",
+        "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\CecilBench.dll"
+      ]
+    },
+    "managed_builds": [
+      {
+        "implementation": "dnlib",
+        "binary": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\DnlibBench.dll",
+        "binary_sha256": "fe07c1642932430aba1ce5c161c8365c4c08aaedaebdbeec4df036dd4797cb2f",
+        "sources": [
+          {
+            "path": "scripts\\compare-managed\\BenchProtocol.cs",
+            "sha256": "d718743c1dadbbaec8e4ae9965ae26deadd01d125d45f93d6051e4755c3ac533"
+          },
+          {
+            "path": "scripts\\compare-managed\\DnlibBench.cs",
+            "sha256": "84125cd7535cbe109a73d58fe4cd4eabad8c2d0c8c86b04dde8bd77887f84c2f"
+          }
+        ],
+        "command": [
+          "dotnet",
+          "--roll-forward",
+          "Major",
+          "D:\\cecli-rs\\target\\compare-managed\\roslyn\\tasks\\netcore\\bincore\\csc.dll",
+          "-nologo",
+          "-noconfig",
+          "-nostdlib+",
+          "-target:exe",
+          "-optimize+",
+          "-out:D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\DnlibBench.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Private.CoreLib.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\netstandard.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Console.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Diagnostics.Process.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.Extensions.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Security.Cryptography.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Memory.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.Concurrent.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.Immutable.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Linq.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.IO.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Threading.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.InteropServices.dll",
+          "-r:D:\\cecli-rs\\target\\compare-managed\\packages\\dnlib.4.5.0\\lib\\net6.0\\dnlib.dll",
+          "D:\\cecli-rs\\scripts\\compare-managed\\BenchProtocol.cs",
+          "D:\\cecli-rs\\scripts\\compare-managed\\DnlibBench.cs"
+        ]
+      },
+      {
+        "implementation": "AsmResolver",
+        "binary": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\AsmResolverBench.dll",
+        "binary_sha256": "2d7ef13d20de6447587b361b73d042ef4b85f80069bff4a4cd14f3369627f343",
+        "sources": [
+          {
+            "path": "scripts\\compare-managed\\BenchProtocol.cs",
+            "sha256": "d718743c1dadbbaec8e4ae9965ae26deadd01d125d45f93d6051e4755c3ac533"
+          },
+          {
+            "path": "scripts\\compare-managed\\AsmResolverBench.cs",
+            "sha256": "5dde34d3e48a3047612f5510089c8491a5efe7660ca9981ac7a5ff25ff5a71f9"
+          }
+        ],
+        "command": [
+          "dotnet",
+          "--roll-forward",
+          "Major",
+          "D:\\cecli-rs\\target\\compare-managed\\roslyn\\tasks\\netcore\\bincore\\csc.dll",
+          "-nologo",
+          "-noconfig",
+          "-nostdlib+",
+          "-target:exe",
+          "-optimize+",
+          "-out:D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\AsmResolverBench.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Private.CoreLib.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\netstandard.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Console.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Diagnostics.Process.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.Extensions.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Security.Cryptography.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Memory.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.Concurrent.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.Immutable.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Linq.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.IO.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Threading.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.InteropServices.dll",
+          "-r:D:\\cecli-rs\\target\\compare-managed\\packages\\asmresolver.6.0.1\\lib\\net10.0\\AsmResolver.dll",
+          "-r:D:\\cecli-rs\\target\\compare-managed\\packages\\asmresolver.pe.file.6.0.1\\lib\\net10.0\\AsmResolver.PE.File.dll",
+          "-r:D:\\cecli-rs\\target\\compare-managed\\packages\\asmresolver.pe.6.0.1\\lib\\net10.0\\AsmResolver.PE.dll",
+          "-r:D:\\cecli-rs\\target\\compare-managed\\packages\\asmresolver.dotnet.6.0.1\\lib\\net10.0\\AsmResolver.DotNet.dll",
+          "D:\\cecli-rs\\scripts\\compare-managed\\BenchProtocol.cs",
+          "D:\\cecli-rs\\scripts\\compare-managed\\AsmResolverBench.cs"
+        ]
+      },
+      {
+        "implementation": "Mono.Cecil",
+        "binary": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\CecilBench.dll",
+        "binary_sha256": "aaf2333ed8257a2817ad5cb6e36e3949d9c6b9cfa7281d663cf8691eb1fdb52d",
+        "sources": [
+          {
+            "path": "scripts\\compare-cecil\\CecilBench.cs",
+            "sha256": "0ebdd8a85e99b0f0c25da6d9e73d06925c42594aa158a2ccd96f125058d680ee"
+          }
+        ],
+        "command": [
+          "dotnet",
+          "--roll-forward",
+          "Major",
+          "D:\\cecli-rs\\target\\compare-managed\\roslyn\\tasks\\netcore\\bincore\\csc.dll",
+          "-nologo",
+          "-noconfig",
+          "-nostdlib+",
+          "-target:exe",
+          "-optimize+",
+          "-out:D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738\\CecilBench.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Private.CoreLib.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\netstandard.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Console.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Diagnostics.Process.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.Extensions.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Security.Cryptography.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Memory.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.Concurrent.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.Immutable.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Linq.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.IO.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Threading.dll",
+          "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.InteropServices.dll",
+          "-r:D:\\cecli-rs\\target\\compare-managed\\cecil\\lib\\netstandard2.0\\Mono.Cecil.dll",
+          "D:\\cecli-rs\\scripts\\compare-cecil\\CecilBench.cs"
+        ]
+      }
+    ],
+    "dotnet": "10.0.13",
+    "runtime_config": {
+      "runtimeOptions": {
+        "tfm": "net10.0",
+        "framework": {
+          "name": "Microsoft.NETCore.App",
+          "version": "10.0.13"
+        },
+        "configProperties": {
+          "System.Runtime.TieredCompilation": false,
+          "System.GC.Server": false
+        }
+      }
+    },
+    "packages": {
+      "queried_at": "2026-10-21",
+      "stable_version_indexes": {
+        "dnlib": "https://api.nuget.org/v3-flatcontainer/dnlib/index.json",
+        "asmresolver.dotnet": "https://api.nuget.org/v3-flatcontainer/asmresolver.dotnet/index.json"
+      },
+      "packages": [
+        {
+          "id": "mono.cecil",
+          "version": "0.11.6",
+          "tfm": "netstandard2.0",
+          "directory": "cecil",
+          "cache_archive": "target/compare-cecil/mono.cecil.nupkg",
+          "sha256": "d2a23832aaa948ba9a01acc42b5726e34c5f995958f1b30d45c0e7c70b3a72d5"
+        },
+        {
+          "id": "microsoft.net.compilers.toolset",
+          "version": "4.14.0",
+          "directory": "roslyn",
+          "cache_archive": "target/compare-cecil/roslyn.nupkg",
+          "sha256": "941a9cf3ea618d88d01a3dd6b1a45a06bcf07716a9f81ce4031caa3edd24a845"
+        },
+        {
+          "id": "dnlib",
+          "version": "4.5.0",
+          "tfm": "net6.0",
+          "sha256": "63bc2f9579568204cc8b30fa9f6700a231bcf868a8032e09118887af3eafee58",
+          "source_commit": "c78d296c522aae0520df2afd825d48266321cf36"
+        },
+        {
+          "id": "asmresolver.dotnet",
+          "version": "6.0.1",
+          "tfm": "net10.0",
+          "sha256": "7b3f3cd184f559a8a3beea186150bd988833a7b855bb6e146cb7e2b58ad11382",
+          "source_commit": "5aa0629348c523458780846b54a51f23ab8afced"
+        },
+        {
+          "id": "asmresolver.pe",
+          "version": "6.0.1",
+          "tfm": "net10.0",
+          "sha256": "befb62586b5da12de1829eb7fdef41c804908df111e321bf596f3ad0bc765841"
+        },
+        {
+          "id": "asmresolver.pe.file",
+          "version": "6.0.1",
+          "tfm": "net10.0",
+          "sha256": "d927e079acc926b6fede9e2a9c4423d25d33d56135ad1a704eb7e157cb6e8d9f"
+        },
+        {
+          "id": "asmresolver",
+          "version": "6.0.1",
+          "tfm": "net10.0",
+          "sha256": "686a0d17c6c8d2e58dbedc577308f1fdbc9ecb27035eb3a1f3e5233a4d9952c9"
+        },
+        {
+          "id": "isexternalinit",
+          "version": "1.0.3",
+          "build_only": true,
+          "sha256": "51fc86ae3fa101fb2f4bf47bb65ba04d3a03fff6b1f45cb409a99e8a7467d405"
+        }
+      ]
+    },
+    "compiler_sha256": "a0a03d13496c6461cfd8d84b587b7e60e8ee226f5d17f3c66968cd775d4727d0",
+    "cecil_binary_sha256": "831dca77470d85cb6ffbea3072daa7a3df5b7c9fcfd9c3f43674a9be99d4bfcf",
+    "mono_cecil_package_sha256": "d2a23832aaa948ba9a01acc42b5726e34c5f995958f1b30d45c0e7c70b3a72d5",
+    "roslyn_package_sha256": "941a9cf3ea618d88d01a3dd6b1a45a06bcf07716a9f81ce4031caa3edd24a845"
+  },
+  "cpu": {
+    "Name": "Genuine Intel(R) 0000",
+    "NumberOfCores": 14,
+    "NumberOfLogicalProcessors": 20
+  },
+  "os": {
+    "Caption": "Microsoft Windows 11 专业版",
+    "Version": "10.0.26200"
+  },
+  "ram_bytes": 16939847680,
+  "build": {
+    "profile": "release",
+    "features": "fast-allocator",
+    "allocator": "mimalloc",
+    "fresh_rust_build": true,
+    "cargo_command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--profile",
+      "release",
+      "--target-dir",
+      "target/perf-cecil/phase1",
+      "-p",
+      "cecli",
+      "--example",
+      "compare_cecil",
+      "--features",
+      "fast-allocator"
+    ],
+    "cargo_version": "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26200 (Windows 11 Professional) [64-bit]\n",
+    "environment": {},
+    "cargo_configs": [],
+    "rust_binary": "D:\\cecli-rs\\target\\perf-cecil\\phase1\\release\\examples\\compare_cecil.exe",
+    "rust_binary_sha256": "369f2fb527d886700bc37d25b81163f7090b6624b553664ea0dad85f24b02ca4",
+    "artifact_dir": "D:\\cecli-rs\\target\\compare-managed\\runs\\20261022-132159-810738"
+  },
+  "source_snapshot": {
+    "manifest": "D:\\cecli-rs\\benchmarks\\20261022-132159-810738-managed-comparison.source.json",
+    "manifest_sha256": "d74c1c800aa92000988bba2e4ec2aa2d4cca870814569e74437b2dc0259dc19d",
+    "archive": "D:\\cecli-rs\\benchmarks\\20261022-132159-810738-managed-comparison.source.zip",
+    "archive_sha256": "b284ffd1e21ff670155d7e1908baf6bd848a6114d54eb80f06a85081b1d61d02"
+  }
+}

@@ -1,0 +1,20 @@
+[package]
+name = "cecil-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cecil"
+path = "src/main.rs"
+doc = false
+
+[features]
+default = ["fast-allocator"]
+fast-allocator = ["cecil/fast-allocator"]
+
+[dependencies]
+cecil.workspace = true
+cecil-core.workspace = true
+cecil-cil.workspace = true

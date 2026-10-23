@@ -1,0 +1,9 @@
+[package]
+name = "cecil-metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cecil-core.workspace = true
+cecil-pe.workspace = true

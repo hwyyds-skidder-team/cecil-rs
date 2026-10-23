@@ -1,0 +1,209 @@
+{
+    "rounds":  1,
+    "commit":  "d508c8cca9f3be36a9eefb165e9638ca9b1bee61",
+    "cpu":  {
+                "Name":  "Genuine Intel(R) 0000",
+                "NumberOfCores":  14,
+                "NumberOfLogicalProcessors":  20
+            },
+    "rust":  "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6",
+    "ram_bytes":  16939847680,
+    "samples_per_round":  7,
+    "roslyn":  "4.14.0",
+    "os":  {
+               "Caption":  "Microsoft Windows 11 专业版",
+               "Version":  "10.0.26200"
+           },
+    "mono_cecil":  "0.11.6",
+    "driver_sha256":  {
+                          "csharp_binary":  "3443af4df07b3221af9ec6ae1bb2bd647d903469a4cc06b171e6e985b1c1cd93",
+                          "rust_source":  "4caf99b6a085a0eda32ae2ae3ad589bb8709621c89c7beab2410af25566ffb10",
+                          "csharp_source":  "d0f40a3346b77b1d323ee7f8143e6feb84f27958ec218de1d04d3f38f6eb4a5d",
+                          "rust_binary":  "bca095883e3cdd8d3ebd8cc30da1a0e2b3b929377c4b90d76d2add837255f991"
+                      },
+    "inputs":  [
+                   {
+                       "path":  "D:\\cecli-rs\\fixtures\\hello.exe",
+                       "sha256":  "225832b65e14b18263587de23c13e86ed5a8ca9dc24b4fa6f9becfdc833dd518",
+                       "name":  "hello.exe",
+                       "bytes":  3584
+                   },
+                   {
+                       "path":  "D:\\cecli-rs\\fixtures\\System.Runtime.dll",
+                       "sha256":  "125cdf18f9d657c8345aa7ef36f81fa29670124f5eaf2cc1c48053190107aab2",
+                       "name":  "System.Runtime.dll (fixture)",
+                       "bytes":  22128
+                   },
+                   {
+                       "path":  "D:\\cecli-rs\\fixtures\\SQLite-net.dll",
+                       "sha256":  "ff561924f6fdbc9fc5b0f68e7caf55361fdf1003e43680423da9e3385f29b0ce",
+                       "name":  "SQLite-net.dll",
+                       "bytes":  71168
+                   },
+                   {
+                       "path":  "D:\\cecli-rs\\fixtures\\cecil.dll",
+                       "sha256":  "77ea4f1e8b6bb6af600a95992b26765d2d7bf9c1292683134563f457023c25fe",
+                       "name":  "cecil.dll (fixture)",
+                       "bytes":  344064
+                   },
+                   {
+                       "path":  "D:\\cecli-rs\\target\\compare-cecil\\Mono.Cecil.dll",
+                       "sha256":  "831dca77470d85cb6ffbea3072daa7a3df5b7c9fcfd9c3f43674a9be99d4bfcf",
+                       "name":  "Mono.Cecil.dll (0.11.6)",
+                       "bytes":  361472
+                   },
+                   {
+                       "path":  "D:\\cecli-rs\\target\\compare-cecil\\roslyn\\tasks\\netcore\\bincore\\Microsoft.CodeAnalysis.dll",
+                       "sha256":  "395736b2d0e02be77bedc3847b269da7a93bf8e49cd3431a4a8e68d2c52d5846",
+                       "name":  "Microsoft.CodeAnalysis.dll",
+                       "bytes":  3029800
+                   },
+                   {
+                       "path":  "D:\\cecli-rs\\target\\compare-cecil\\roslyn\\tasks\\netcore\\bincore\\Microsoft.CodeAnalysis.CSharp.dll",
+                       "sha256":  "53302acca07700e9bb10dcf21034435d6e0454c8eebf2481164ec13e520004c9",
+                       "name":  "Microsoft.CodeAnalysis.CSharp.dll",
+                       "bytes":  6697768
+                   }
+               ],
+    "mono_cecil_package_sha256":  "d2a23832aaa948ba9a01acc42b5726e34c5f995958f1b30d45c0e7c70b3a72d5",
+    "sample_ms":  60,
+    "recorded_at":  "2026-10-21T13:03:44.1885269+08:00",
+    "tiered_compilation":  false,
+    "warmup_ms":  400,
+    "dotnet":  "10.0.13",
+    "validation":  [
+                       {
+                           "cecil_output_bytes":  3584,
+                           "rust_output_bytes":  3584,
+                           "name":  "hello.exe",
+                           "counts":  {
+                                          "types":  2,
+                                          "methods":  2,
+                                          "fields":  0,
+                                          "properties":  0,
+                                          "events":  0,
+                                          "attributes":  2,
+                                          "bodies":  2,
+                                          "instructions":  8,
+                                          "locals":  0,
+                                          "handlers":  0
+                                      },
+                           "cross_read":  "passed"
+                       },
+                       {
+                           "cecil_output_bytes":  5632,
+                           "rust_output_bytes":  6144,
+                           "name":  "System.Runtime.dll (fixture)",
+                           "counts":  {
+                                          "types":  9,
+                                          "methods":  10,
+                                          "fields":  1,
+                                          "properties":  1,
+                                          "events":  0,
+                                          "attributes":  26,
+                                          "bodies":  9,
+                                          "instructions":  33,
+                                          "locals":  0,
+                                          "handlers":  0
+                                      },
+                           "cross_read":  "passed"
+                       },
+                       {
+                           "cecil_output_bytes":  71168,
+                           "rust_output_bytes":  73216,
+                           "name":  "SQLite-net.dll",
+                           "counts":  {
+                                          "types":  81,
+                                          "methods":  492,
+                                          "fields":  318,
+                                          "properties":  69,
+                                          "events":  1,
+                                          "attributes":  268,
+                                          "bodies":  492,
+                                          "instructions":  7753,
+                                          "locals":  341,
+                                          "handlers":  62
+                                      },
+                           "cross_read":  "passed"
+                       },
+                       {
+                           "cecil_output_bytes":  343552,
+                           "rust_output_bytes":  354304,
+                           "name":  "cecil.dll (fixture)",
+                           "counts":  {
+                                          "types":  298,
+                                          "methods":  2783,
+                                          "fields":  1745,
+                                          "properties":  766,
+                                          "events":  1,
+                                          "attributes":  152,
+                                          "bodies":  2686,
+                                          "instructions":  62880,
+                                          "locals":  4787,
+                                          "handlers":  50
+                                      },
+                           "cross_read":  "passed"
+                       },
+                       {
+                           "cecil_output_bytes":  359936,
+                           "rust_output_bytes":  374272,
+                           "name":  "Mono.Cecil.dll (0.11.6)",
+                           "counts":  {
+                                          "types":  351,
+                                          "methods":  3152,
+                                          "fields":  1952,
+                                          "properties":  834,
+                                          "events":  1,
+                                          "attributes":  182,
+                                          "bodies":  3046,
+                                          "instructions":  55872,
+                                          "locals":  2089,
+                                          "handlers":  120
+                                      },
+                           "cross_read":  "passed"
+                       },
+                       {
+                           "cecil_output_bytes":  2999808,
+                           "rust_output_bytes":  3105792,
+                           "name":  "Microsoft.CodeAnalysis.dll",
+                           "counts":  {
+                                          "types":  2338,
+                                          "methods":  19417,
+                                          "fields":  9054,
+                                          "properties":  5413,
+                                          "events":  4,
+                                          "attributes":  21289,
+                                          "bodies":  17192,
+                                          "instructions":  301569,
+                                          "locals":  13985,
+                                          "handlers":  1127
+                                      },
+                           "cross_read":  "passed"
+                       },
+                       {
+                           "cecil_output_bytes":  6633472,
+                           "rust_output_bytes":  6888448,
+                           "name":  "Microsoft.CodeAnalysis.CSharp.dll",
+                           "counts":  {
+                                          "types":  2713,
+                                          "methods":  42395,
+                                          "fields":  12661,
+                                          "properties":  12470,
+                                          "events":  0,
+                                          "attributes":  29894,
+                                          "bodies":  41435,
+                                          "instructions":  865740,
+                                          "locals":  40873,
+                                          "handlers":  724
+                                      },
+                           "cross_read":  "passed"
+                       }
+                   ],
+    "roslyn_package_sha256":  "941a9cf3ea618d88d01a3dd6b1a45a06bcf07716a9f81ce4031caa3edd24a845",
+    "server_gc":  false,
+    "modes":  [
+                  "read",
+                  "write",
+                  "roundtrip"
+              ]
+}

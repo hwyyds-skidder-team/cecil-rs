@@ -1,0 +1,427 @@
+//! The parsed PE/CLI image model.
+//!
+//! Port of `Mono.Cecil.PE/Image.cs` plus the header-parsing parts of
+//! `ImageReader.cs` that feed it. An [`Image`] owns a copy of the source bytes
+//! so RVA translation can return slices.
+
+use std::borrow::Cow;
+
+use crate::section::{DataDirectory, Section};
+use cecil_core::{Error, Result, Token};
+
+/// Target machine architecture stored in the PE file header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetArchitecture(pub u16);
+
+impl TargetArchitecture {
+    pub const I386: TargetArchitecture = TargetArchitecture(0x014C);
+    pub const ARM: TargetArchitecture = TargetArchitecture(0x01C4);
+    pub const IA64: TargetArchitecture = TargetArchitecture(0x0200);
+    pub const AMD64: TargetArchitecture = TargetArchitecture(0x8664);
+    pub const ARM64: TargetArchitecture = TargetArchitecture(0xAA64);
+
+    /// Raw machine value stored in the PE file header.
+    pub fn machine(self) -> u16 {
+        self.0
+    }
+    /// True for 64-bit image formats (PE32+ optional header).
+    pub fn is_pe64(&self) -> bool {
+        *self == Self::AMD64 || *self == Self::IA64 || *self == Self::ARM64
+    }
+}
+
+/// What kind of module the image represents (Cecil's `ModuleKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleKind {
+    Console,
+    Windows,
+    Dll,
+    NetModule,
+}
+
+/// The CLI header (ECMA-335 II §25.3.3), a.k.a. the COM+ runtime header.
+#[derive(Debug, Clone)]
+pub struct CliHeader {
+    /// Size of the header in bytes (0x48).
+    pub cb: u32,
+    pub runtime_major: u16,
+    pub runtime_minor: u16,
+    /// RVA and size of the metadata root ("BSJB").
+    pub metadata_rva: u64,
+    pub metadata_size: u64,
+    /// CLI module flags (ILONLY, 32BITREQUIRED, STRONGNAMESIGNED, ...).
+    pub flags: u32,
+    /// Managed entry-point token; NIL when the native-entry-point flag is set.
+    pub entry_point_token: Token,
+    /// Native entry-point RVA when COMIMAGE_FLAGS_NATIVE_ENTRYPOINT is set.
+    pub native_entry_point_rva: Option<u32>,
+    /// Managed resources directory.
+    pub resources_rva: u64,
+    pub resources_size: u64,
+    /// Strong-name signature directory.
+    pub strong_name_rva: u64,
+    pub strong_name_size: u64,
+    pub code_manager_table_rva: u64,
+    pub code_manager_table_size: u64,
+    pub vtable_fixups_rva: u64,
+    pub vtable_fixups_size: u64,
+    pub export_address_table_jumps_rva: u64,
+    pub export_address_table_jumps_size: u64,
+    pub managed_native_header_rva: u64,
+    pub managed_native_header_size: u64,
+}
+
+impl Default for CliHeader {
+    fn default() -> Self {
+        CliHeader {
+            entry_point_token: Token::NIL,
+            native_entry_point_rva: None,
+            cb: 0,
+            runtime_major: 0,
+            runtime_minor: 0,
+            metadata_rva: 0,
+            metadata_size: 0,
+            flags: 0,
+            resources_rva: 0,
+            resources_size: 0,
+            strong_name_rva: 0,
+            strong_name_size: 0,
+            code_manager_table_rva: 0,
+            code_manager_table_size: 0,
+            vtable_fixups_rva: 0,
+            vtable_fixups_size: 0,
+            export_address_table_jumps_rva: 0,
+            export_address_table_jumps_size: 0,
+            managed_native_header_rva: 0,
+            managed_native_header_size: 0,
+        }
+    }
+}
+
+/// One stream entry of the metadata root's stream directory.
+///
+/// `offset` is relative to the start of the metadata root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataStream {
+    pub name: String,
+    pub offset: u64,
+    pub size: u64,
+}
+
+/// One IMAGE_DEBUG_DIRECTORY record (ECMA-335 II §C.4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImageDebugDirectory {
+    pub characteristics: i32,
+    pub time_date_stamp: i32,
+    pub major_version: i16,
+    pub minor_version: i16,
+    /// `IMAGE_DEBUG_TYPE` discriminator (CodeView = 2, PdbChecksum = 19, ...).
+    pub kind: i32,
+    pub size_of_data: i32,
+    pub address_of_raw_data: i32,
+    pub pointer_to_raw_data: i32,
+}
+
+impl ImageDebugDirectory {
+    /// Size of one on-disk debug-directory record.
+    pub const SIZE: usize = 28;
+}
+
+/// A debug directory record together with its payload bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageDebugEntry {
+    pub directory: ImageDebugDirectory,
+    pub data: Vec<u8>,
+}
+
+/// A parsed PE / CLI image.
+#[derive(Debug, Clone)]
+pub struct Image {
+    /// Full original file contents; RVA translation slices into this.
+    raw: Vec<u8>,
+    /// File offset of the "PE\0\0" signature.
+    pe_offset: usize,
+
+    pub kind: ModuleKind,
+    pub architecture: TargetArchitecture,
+    pub characteristics: u16,
+    pub dll_characteristics: u16,
+    pub linker_version: u16,
+    pub subsystem_major: u16,
+    pub subsystem_minor: u16,
+
+    pub timestamp: u32,
+    /// Runtime version string from the metadata root (e.g. "v4.0.30319").
+    pub runtime_version: String,
+
+    pub sections: Vec<Section>,
+    /// Index into [`Self::sections`] of the section holding the metadata root.
+    pub metadata_section: usize,
+
+    pub cli_header: CliHeader,
+    /// The COM+ data directory (index 14) as found in the optional header.
+    pub cli_directory: DataDirectory,
+    /// All 16 data directories from the optional header.
+    pub data_directories: [DataDirectory; crate::DATA_DIRECTORIES],
+
+    /// Stream directory of the metadata root; heaps/tables are parsed by the
+    /// `cecil-metadata` crate.
+    pub streams: Vec<MetadataStream>,
+    /// Debug directory entries (empty when the Debug data directory is zero).
+    pub debug_entries: Vec<ImageDebugEntry>,
+}
+
+impl Image {
+    /// Creates an unbacked image identity for [`crate::ImageWriter::rebuild`].
+    ///
+    /// Set its header fields before rebuilding. This image has no original
+    /// file, sections or metadata, so it is not a pass-through input.
+    pub fn for_rebuild(kind: ModuleKind, architecture: TargetArchitecture) -> Self {
+        Image {
+            raw: Vec::new(),
+            pe_offset: 0,
+            kind,
+            architecture,
+            characteristics: 0,
+            dll_characteristics: 0,
+            linker_version: 0,
+            subsystem_major: 0,
+            subsystem_minor: 0,
+            timestamp: 0,
+            runtime_version: String::new(),
+            sections: Vec::new(),
+            metadata_section: 0,
+            cli_header: CliHeader::default(),
+            cli_directory: DataDirectory::default(),
+            data_directories: [DataDirectory::default(); crate::DATA_DIRECTORIES],
+            streams: Vec::new(),
+            debug_entries: Vec::new(),
+        }
+    }
+
+    /// Parses a complete PE / CLI image from its raw bytes.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_parts(
+        raw: Vec<u8>,
+        pe_offset: usize,
+        kind: ModuleKind,
+        architecture: TargetArchitecture,
+        characteristics: u16,
+        dll_characteristics: u16,
+        linker_version: u16,
+        subsystem_major: u16,
+        subsystem_minor: u16,
+        timestamp: u32,
+        runtime_version: String,
+        sections: Vec<Section>,
+        metadata_section: usize,
+        cli_header: CliHeader,
+        cli_directory: DataDirectory,
+        data_directories: [DataDirectory; crate::DATA_DIRECTORIES],
+        streams: Vec<MetadataStream>,
+        debug_entries: Vec<ImageDebugEntry>,
+    ) -> Image {
+        Image {
+            raw,
+            pe_offset,
+            kind,
+            architecture,
+            characteristics,
+            dll_characteristics,
+            linker_version,
+            subsystem_major,
+            subsystem_minor,
+            timestamp,
+            runtime_version,
+            sections,
+            metadata_section,
+            cli_header,
+            cli_directory,
+            data_directories,
+            streams,
+            debug_entries,
+        }
+    }
+
+    /// Parses a complete PE / CLI image from its raw bytes.
+    pub fn parse(data: &[u8]) -> Result<Image> {
+        crate::reader::read_image(data.to_vec())
+    }
+
+    /// Parses a complete PE / CLI image, taking ownership of the input
+    /// buffer. This avoids copying a file that is already owned by the
+    /// caller (for example, bytes read from disk).
+    pub fn parse_owned(data: Vec<u8>) -> Result<Image> {
+        crate::reader::read_image(data)
+    }
+
+    /// The full original file bytes this image was parsed from.
+    pub fn raw(&self) -> &[u8] {
+        &self.raw
+    }
+
+    /// File offset of the PE signature.
+    pub(crate) fn pe_offset(&self) -> usize {
+        self.pe_offset
+    }
+
+    /// The parsed CLI header.
+    pub fn cli_header(&self) -> &CliHeader {
+        &self.cli_header
+    }
+
+    /// The entry-point token (MethodDef table), or NIL when absent.
+    pub fn entry_point_token(&self) -> Token {
+        self.cli_header.entry_point_token
+    }
+
+    /// Native CLI entry point, distinct from a managed metadata token.
+    pub fn native_entry_point_rva(&self) -> Option<u32> {
+        self.cli_header.native_entry_point_rva
+    }
+
+    /// Whether this image contains CLI metadata without the IL-only flag.
+    pub fn is_mixed_mode(&self) -> bool {
+        self.cli_header.flags & 1 == 0
+    }
+
+    /// Whether a canonical managed rebuild would discard native CLI data.
+    /// Auxiliary native directories require preservation even when a producer
+    /// left the IL-only flag set.
+    pub fn has_native_payload(&self) -> bool {
+        let cli = &self.cli_header;
+        self.is_mixed_mode()
+            || cli.native_entry_point_rva.is_some()
+            || cli.code_manager_table_rva != 0
+            || cli.code_manager_table_size != 0
+            || cli.vtable_fixups_rva != 0
+            || cli.vtable_fixups_size != 0
+            || cli.export_address_table_jumps_rva != 0
+            || cli.export_address_table_jumps_size != 0
+            || cli.managed_native_header_rva != 0
+            || cli.managed_native_header_size != 0
+    }
+
+    /// `(rva, size)` of the CLI metadata root.
+    pub fn metadata_rva(&self) -> Result<(u64, usize)> {
+        if self.cli_header.metadata_rva == 0 {
+            return Err(Error::bad_image("image has no metadata root"));
+        }
+        Ok((self.cli_header.metadata_rva, self.cli_header.metadata_size as usize))
+    }
+
+    /// The section containing `rva`, if any.
+    ///
+    /// Membership follows the PE loader's mapping: `rva` belongs to a
+    /// section when it lies in `[virtual_address, virtual_address +
+    /// max(virtual_size, size_of_raw_data))`. Bytes between the file-backed
+    /// raw data and the larger virtual size are load-time zero fill (BSS),
+    /// which mixed-mode C++/CLI images routinely reference.
+    pub fn section_at_virtual_address(&self, rva: u64) -> Option<&Section> {
+        let rva = u32::try_from(rva).ok()?;
+        // Metadata and method bodies are normally colocated in `.text`. The
+        // parsed metadata section is a stable, validated index, so checking it
+        // first avoids scanning every PE section for the hot RVA path.
+        if let Some(section) = self.sections.get(self.metadata_section) {
+            let mapped_end = section.virtual_address as u64
+                + section.virtual_size.max(section.size_of_raw_data) as u64;
+            if rva >= section.virtual_address && (rva as u64) < mapped_end {
+                return Some(section);
+            }
+        }
+        self.sections.iter().find(|s| {
+            let mapped_end =
+                s.virtual_address as u64 + s.virtual_size.max(s.size_of_raw_data) as u64;
+            rva >= s.virtual_address && (rva as u64) < mapped_end
+        })
+    }
+
+    /// Looks a section up by (trimmed) name.
+    pub fn section(&self, name: &str) -> Option<&Section> {
+        self.sections.iter().find(|s| s.name == name)
+    }
+
+    /// Translates an RVA into a file offset (`PointerToRawData` based).
+    ///
+    /// Fails only when the RVA is not mapped into any section; offsets into
+    /// the zero-filled tail of a section are returned unchanged so callers
+    /// can detect them against the section's raw extent.
+    pub fn rva_offset(&self, rva: u64) -> Result<usize> {
+        let section = self
+            .section_at_virtual_address(rva)
+            .ok_or_else(|| Error::argument(format!("rva {rva:#x} is not inside any section")))?;
+        usize::try_from(rva - section.virtual_address as u64 + section.pointer_to_raw_data as u64)
+            .map_err(|_| Error::bad_image("RVA file offset exceeds address space"))
+    }
+
+    /// Reads exactly `size` original file-backed bytes. Unlike [`Self::rva`],
+    /// directories and method headers must never consume virtual zero fill.
+    pub fn rva_bytes(&self, rva: u64, size: usize) -> Result<&[u8]> {
+        let section = self
+            .section_at_virtual_address(rva)
+            .ok_or_else(|| Error::bad_image(format!("unmapped RVA {rva:#x}")))?;
+        let delta = rva - section.virtual_address as u64;
+        if delta.checked_add(size as u64).is_none_or(|end| end > section.size_of_raw_data as u64) {
+            return Err(Error::bad_image("RVA range exceeds file-backed section"));
+        }
+        let at = self.rva_offset(rva)?;
+        let end = at.checked_add(size).ok_or_else(|| Error::bad_image("RVA range overflows"))?;
+        self.raw.get(at..end).ok_or_else(|| Error::bad_image("RVA range exceeds file"))
+    }
+
+    /// Translates an RVA to the bytes backing it, running to the mapped end
+    /// of the section.
+    ///
+    /// File-backed bytes are borrowed from the image; any tail beyond
+    /// `pointer_to_raw_data + size_of_raw_data` is load-time zero fill and
+    /// materializes as zeros in the returned buffer.
+    pub fn rva(&self, rva: u64) -> Result<Cow<'_, [u8]>> {
+        let section = self
+            .section_at_virtual_address(rva)
+            .ok_or_else(|| Error::argument(format!("rva {rva:#x} is not inside any section")))?;
+        let off = rva - section.virtual_address as u64;
+        let raw_size = section.size_of_raw_data as u64;
+        let mapped_size = (section.virtual_size as u64).max(raw_size);
+        if off >= mapped_size {
+            return Err(Error::bad_image(format!("rva {rva:#x} maps past the end of its section")));
+        }
+        // A hostile section can declare a virtual size far beyond anything
+        // the file could back; the zero-filled tail we synthesize is capped
+        // at the whole-file length (a virtual tail larger than the entire
+        // image is malformed). Callers slice the length they need.
+        let len = (mapped_size - off).min(self.raw.len() as u64) as usize;
+        let start = section.pointer_to_raw_data as u64 + off;
+        if off < raw_size && start >= self.raw.len() as u64 {
+            return Err(Error::bad_image("section raw bytes extend past the file"));
+        }
+        let raw_start = start.min(self.raw.len() as u64) as usize;
+        let raw_end =
+            ((section.pointer_to_raw_data as u64 + raw_size) as usize).min(self.raw.len());
+        if raw_start >= raw_end {
+            // Entirely inside the zero-filled tail.
+            return Ok(Cow::Owned(vec![0u8; len]));
+        }
+        if len == raw_end - raw_start {
+            return Ok(Cow::Borrowed(&self.raw[raw_start..raw_end]));
+        }
+        let copy_end = raw_end.min(raw_start.saturating_add(len));
+        let mut bytes = self.raw[raw_start..copy_end].to_vec();
+        bytes.resize(len, 0);
+        Ok(Cow::Owned(bytes))
+    }
+}
+
+/// Derives the module kind from image characteristics and the subsystem field.
+///
+/// Port of `ImageReader.GetModuleKind`.
+pub fn module_kind(characteristics: u16, subsystem: u16) -> ModuleKind {
+    if characteristics & 0x2000 != 0 {
+        // ImageCharacteristics::Dll
+        return ModuleKind::Dll;
+    }
+    if subsystem == 0x2 || subsystem == 0x9 {
+        // WindowsGui || WindowsCeGui
+        return ModuleKind::Windows;
+    }
+    ModuleKind::Console
+}

@@ -1,0 +1,79 @@
+{
+  "suite": "cecil-7x3-v1",
+  "required_cells": 21,
+  "measured_cells": 9,
+  "full_matrix": false,
+  "at_least_three_rounds": false,
+  "median_wins": 1,
+  "all_round_wins": 1,
+  "semantic_validation": true,
+  "source_provenance": true,
+  "passed": false,
+  "failed_cells": [
+    {
+      "input": "hello.exe",
+      "mode": "read",
+      "median_ratio": 0.5202324279955226,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.5202324279955226
+    },
+    {
+      "input": "hello.exe",
+      "mode": "write",
+      "median_ratio": 0.8876444887634682,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.8876444887634682
+    },
+    {
+      "input": "hello.exe",
+      "mode": "roundtrip",
+      "median_ratio": 0.7278358012638636,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.7278358012638636
+    },
+    {
+      "input": "System.Runtime.dll (fixture)",
+      "mode": "read",
+      "median_ratio": 0.40452017697912257,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.40452017697912257
+    },
+    {
+      "input": "System.Runtime.dll (fixture)",
+      "mode": "write",
+      "median_ratio": 0.6255310257990463,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.6255310257990463
+    },
+    {
+      "input": "System.Runtime.dll (fixture)",
+      "mode": "roundtrip",
+      "median_ratio": 0.478649426168617,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.478649426168617
+    },
+    {
+      "input": "SQLite-net.dll",
+      "mode": "read",
+      "median_ratio": 0.5830781528301869,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.5830781528301869
+    },
+    {
+      "input": "SQLite-net.dll",
+      "mode": "roundtrip",
+      "median_ratio": 0.9315763463452664,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.9315763463452664
+    }
+  ],
+  "rule": "All fixed 21 cells must have Cecil/Rust > 1 for the pooled median and every paired round median, with >= 3 rounds, semantic cross-reading and archived source provenance."
+}

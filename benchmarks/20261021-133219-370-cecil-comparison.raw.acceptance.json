@@ -1,0 +1,14 @@
+{
+  "suite": "cecil-7x3-v1",
+  "required_cells": 21,
+  "measured_cells": 9,
+  "full_matrix": false,
+  "at_least_three_rounds": false,
+  "median_wins": 9,
+  "all_round_wins": 9,
+  "semantic_validation": true,
+  "source_provenance": true,
+  "passed": false,
+  "failed_cells": [],
+  "rule": "All fixed 21 cells must have Cecil/Rust > 1 for the pooled median and every paired round median, with >= 3 rounds, semantic cross-reading and archived source provenance."
+}

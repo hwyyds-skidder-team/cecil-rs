@@ -1,0 +1,17 @@
+{
+  "queried_at": "2026-10-21",
+  "stable_version_indexes": {
+    "dnlib": "https://api.nuget.org/v3-flatcontainer/dnlib/index.json",
+    "asmresolver.dotnet": "https://api.nuget.org/v3-flatcontainer/asmresolver.dotnet/index.json"
+  },
+  "packages": [
+    {"id": "mono.cecil", "version": "0.11.6", "tfm": "netstandard2.0", "directory": "cecil", "cache_archive": "target/compare-cecil/mono.cecil.nupkg", "sha256": "d2a23832aaa948ba9a01acc42b5726e34c5f995958f1b30d45c0e7c70b3a72d5"},
+    {"id": "microsoft.net.compilers.toolset", "version": "4.14.0", "directory": "roslyn", "cache_archive": "target/compare-cecil/roslyn.nupkg", "sha256": "941a9cf3ea618d88d01a3dd6b1a45a06bcf07716a9f81ce4031caa3edd24a845"},
+    {"id": "dnlib", "version": "4.5.0", "tfm": "net6.0", "sha256": "63bc2f9579568204cc8b30fa9f6700a231bcf868a8032e09118887af3eafee58", "source_commit": "c78d296c522aae0520df2afd825d48266321cf36"},
+    {"id": "asmresolver.dotnet", "version": "6.0.1", "tfm": "net10.0", "sha256": "7b3f3cd184f559a8a3beea186150bd988833a7b855bb6e146cb7e2b58ad11382", "source_commit": "5aa0629348c523458780846b54a51f23ab8afced"},
+    {"id": "asmresolver.pe", "version": "6.0.1", "tfm": "net10.0", "sha256": "befb62586b5da12de1829eb7fdef41c804908df111e321bf596f3ad0bc765841"},
+    {"id": "asmresolver.pe.file", "version": "6.0.1", "tfm": "net10.0", "sha256": "d927e079acc926b6fede9e2a9c4423d25d33d56135ad1a704eb7e157cb6e8d9f"},
+    {"id": "asmresolver", "version": "6.0.1", "tfm": "net10.0", "sha256": "686a0d17c6c8d2e58dbedc577308f1fdbc9ecb27035eb3a1f3e5233a4d9952c9"},
+    {"id": "isexternalinit", "version": "1.0.3", "build_only": true, "sha256": "51fc86ae3fa101fb2f4bf47bb65ba04d3a03fff6b1f45cb409a99e8a7467d405"}
+  ]
+}

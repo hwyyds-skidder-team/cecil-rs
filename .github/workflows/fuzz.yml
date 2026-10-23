@@ -1,0 +1,84 @@
+name: Fuzz
+
+on:
+  schedule:
+    # 03:17 UTC nightly — off the whole-hour mark to be kind to the fleet.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Fuzzing time per target (minutes)"
+        required: false
+        default: "10"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - read_assembly
+          - roundtrip
+          - parse_metadata
+          - parse_portable_pdb
+          - parse_native_pdb
+          - parse_mdb
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            fuzz
+      - run: cargo install cargo-fuzz --locked
+
+      # Seed each corpus from the committed fixtures: PE-family targets get
+      # exe/dll/netmodule/winmd, the PDB target gets .pdb, MDB gets .mdb.
+      # Corpora live outside git (see .gitignore); libFuzzer's first corpus
+      # dir is writable, the fixtures dir acts as a read-only seed.
+      - name: Seed corpus
+        run: |
+          mkdir -p fuzz/corpus/${{ matrix.target }}
+          case "${{ matrix.target }}" in
+            read_assembly|roundtrip)
+              cp fixtures/*.exe fixtures/*.dll fixtures/*.netmodule fixtures/*.winmd \
+                 fuzz/corpus/${{ matrix.target }}/ 2>/dev/null || true ;;
+            parse_metadata)
+              # Metadata roots live inside PE images; feed whole images plus
+              # PDBs (they are metadata roots too).
+              cp fixtures/*.exe fixtures/*.dll fixtures/*.pdb \
+                 fuzz/corpus/${{ matrix.target }}/ 2>/dev/null || true ;;
+            parse_portable_pdb)
+              cp fixtures/*.pdb fuzz/corpus/${{ matrix.target }}/ 2>/dev/null || true ;;
+            parse_native_pdb)
+              cp fixtures/*.pdb fuzz/corpus/${{ matrix.target }}/ 2>/dev/null || true ;;
+            parse_mdb)
+              cp fixtures/*.mdb fuzz/corpus/${{ matrix.target }}/ 2>/dev/null || true ;;
+          esac
+          echo "seed files: $(ls fuzz/corpus/${{ matrix.target }} | wc -l)"
+
+      - name: Fuzz
+        working-directory: fuzz
+        run: |
+          cargo fuzz run ${{ matrix.target }} \
+            -- -max_total_time=$((${{ github.event.inputs.minutes || '10' }} * 60)) \
+                 -rss_limit_mb=2560 \
+                 -timeout=25
+
+      - name: Upload crashes and corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: |
+            fuzz/artifacts
+            fuzz/corpus/${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 14

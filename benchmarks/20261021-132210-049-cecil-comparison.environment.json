@@ -1,0 +1,195 @@
+{
+    "os":  {
+               "Caption":  "Microsoft Windows 11 专业版",
+               "Version":  "10.0.26200"
+           },
+    "source_snapshot":  {
+                            "archive_sha256":  "028d676b02752caff66499f26f42eecd9774337f6644e9056a7e309e967a4aa2",
+                            "manifest":  "D:\\cecli-rs\\benchmarks\\20261021-132210-049-cecil-comparison.source.json",
+                            "archive":  "D:\\cecli-rs\\benchmarks\\20261021-132210-049-cecil-comparison.source.zip",
+                            "git_status":  [
+                                               " M crates/cecli-core/src/io.rs",
+                                               " M crates/cecli-metadata/src/builder.rs",
+                                               " M crates/cecli-metadata/src/heaps.rs",
+                                               " M crates/cecli-metadata/src/reader.rs",
+                                               " M crates/cecli-metadata/src/root.rs",
+                                               " M crates/cecli-metadata/src/tables.rs",
+                                               " M crates/cecli-pe/src/image.rs",
+                                               " M crates/cecli/src/assembly.rs",
+                                               " M crates/cecli/src/model/signature.rs",
+                                               " M crates/cecli/src/read/context.rs",
+                                               " M crates/cecli/src/read/instructions.rs",
+                                               " M crates/cecli/src/read/module_reader.rs",
+                                               " M crates/cecli/src/write/emit_il.rs",
+                                               " M crates/cecli/src/write/emit_metadata.rs",
+                                               " M crates/cecli/src/write/token_map.rs",
+                                               "?? .pi/agent/settings.json",
+                                               "?? MSVisualC_607905.zip",
+                                               "?? benchmarks/20261020-130510-cecil-comparison.environment.json",
+                                               "?? benchmarks/20261020-131630-cecil-comparison.environment.json",
+                                               "?? benchmarks/20261020-131630-cecil-comparison.raw.csv",
+                                               "?? benchmarks/20261020-131630-cecil-comparison.raw.jsonl",
+                                               "?? benchmarks/20261020-131630-cecil-comparison.raw.md",
+                                               "?? benchmarks/20261020-132609-cecil-comparison.environment.json",
+                                               "?? benchmarks/20261020-132609-cecil-comparison.raw.csv",
+                                               "?? benchmarks/20261020-132609-cecil-comparison.raw.jsonl",
+                                               "?? benchmarks/20261020-132609-cecil-comparison.raw.md",
+                                               "?? benchmarks/20261021-130344-cecil-comparison.environment.json",
+                                               "?? benchmarks/20261021-130344-cecil-comparison.raw.csv",
+                                               "?? benchmarks/20261021-130344-cecil-comparison.raw.jsonl",
+                                               "?? benchmarks/20261021-130344-cecil-comparison.raw.md",
+                                               "?? benchmarks/20261021-132210-049-cecil-comparison.source.json",
+                                               "?? benchmarks/20261021-132210-049-cecil-comparison.source.zip",
+                                               "?? crates/cecli/examples/compare_cecil.rs",
+                                               "?? crates/cecli/examples/write_profile.rs",
+                                               "?? \"fuzz-roundtrip (1).zip\"",
+                                               "?? \"fuzz-roundtrip (2).zip\"",
+                                               "?? fuzz-roundtrip.zip",
+                                               "?? plan/20260912-222446-fix-fuzz-roundtrip-Plan.md",
+                                               "?? plan/20260918-225854-harden-metadata-roundtrip-Plan.md",
+                                               "?? plan/20261002-212609-fix-fuzz-roundtrip-2-Plan.md",
+                                               "?? plan/20261017-131010-fix-two-fuzz-roundtrip-archives-Plan.md",
+                                               "?? plan/20261020-125457-compare-cecil-performance-Plan.md",
+                                               "?? plan/20261021-130152-optimize-beyond-cecil-Plan.md",
+                                               "?? scripts/compare-cecil/CecilBench.cs",
+                                               "?? scripts/compare-cecil/README.md",
+                                               "?? scripts/compare-cecil/__pycache__/report.cpython-313.pyc",
+                                               "?? scripts/compare-cecil/experiment_rva.py",
+                                               "?? scripts/compare-cecil/report.py",
+                                               "?? scripts/compare-cecil/run.ps1"
+                                           ],
+                            "dirty":  true,
+                            "manifest_sha256":  "9a9d658efa88c093d96c6ac8a7145012aa337df011e149a920294d8bcdcd2e3f"
+                        },
+    "suite":  "cecil-7x3-v1",
+    "required_cells":  21,
+    "inputs":  [
+                   {
+                       "path":  "D:\\cecli-rs\\fixtures\\hello.exe",
+                       "sha256":  "225832b65e14b18263587de23c13e86ed5a8ca9dc24b4fa6f9becfdc833dd518",
+                       "name":  "hello.exe",
+                       "bytes":  3584
+                   }
+               ],
+    "driver_sha256":  {
+                          "csharp_binary":  "07d0989a433d2544325a98ae43b40bd1ec25507ea42ee2f9cd54477d073a402b",
+                          "rust_source":  "7c1e3971ad1a0d80717b737e23f4a21c413cb081d319739893eab014f43fd373",
+                          "csharp_source":  "0ebdd8a85e99b0f0c25da6d9e73d06925c42594aa158a2ccd96f125058d680ee",
+                          "rust_binary":  "2cf71a966efa37189a0181c098453f89a35c1d2e9d165acd3f9cc3a5cd7358b8"
+                      },
+    "commit":  "d508c8cca9f3be36a9eefb165e9638ca9b1bee61",
+    "mono_cecil_package_sha256":  "d2a23832aaa948ba9a01acc42b5726e34c5f995958f1b30d45c0e7c70b3a72d5",
+    "roslyn_package_sha256":  "941a9cf3ea618d88d01a3dd6b1a45a06bcf07716a9f81ce4031caa3edd24a845",
+    "mono_cecil":  "0.11.6",
+    "ram_bytes":  16939847680,
+    "rounds":  3,
+    "tiered_compilation":  false,
+    "sample_ms":  120,
+    "rust":  "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6",
+    "validation":  [
+                       {
+                           "rust_output_bytes":  3584,
+                           "cecil_output_bytes":  3584,
+                           "semantic_validation":  "passed",
+                           "name":  "hello.exe",
+                           "counts":  {
+                                          "types":  2,
+                                          "methods":  2,
+                                          "fields":  0,
+                                          "properties":  0,
+                                          "events":  0,
+                                          "attributes":  2,
+                                          "bodies":  2,
+                                          "instructions":  8,
+                                          "locals":  0,
+                                          "handlers":  0
+                                      },
+                           "rust_semantics":  {
+                                                  "scheme":  "rust-model-v1-fnv1a128",
+                                                  "metadata":  "7ef25bbebc2cc2efd95ffc15726f7b79",
+                                                  "bodies":  "b55de6fc69415943d1abc9c24dd5d47f",
+                                                  "metadata_records":  12,
+                                                  "body_records":  2
+                                              },
+                           "cross_read":  "passed",
+                           "cecil_semantics":  {
+                                                   "scheme":  "cecil-model-v1-sha256",
+                                                   "metadata":  "429e4acce3209705feab941808d780fb8e075f9a89e655a9c9d2d5667a37d3b1",
+                                                   "bodies":  "be99c78e44485deac1b4ae3eed4d6c1ed3fe568b727389f52dbd61078e4ccd1b",
+                                                   "metadata_records":  12,
+                                                   "body_records":  2
+                                               }
+                       }
+                   ],
+    "recorded_at":  "2026-10-21T13:22:13.5182552+08:00",
+    "modes":  [
+                  "read",
+                  "write",
+                  "roundtrip"
+              ],
+    "warmup_ms":  800,
+    "server_gc":  false,
+    "build":  {
+                  "profile":  "dev",
+                  "runtime_config":  {
+                                         "runtimeOptions":  {
+                                                                "configProperties":  {
+                                                                                         "System.GC.Server":  false,
+                                                                                         "System.Runtime.TieredCompilation":  false
+                                                                                     },
+                                                                "tfm":  "net10.0",
+                                                                "framework":  {
+                                                                                  "version":  "10.0.13",
+                                                                                  "name":  "Microsoft.NETCore.App"
+                                                                              }
+                                                            }
+                                     },
+                  "environment":  {
+
+                                  },
+                  "artifact_dir":  "D:\\cecli-rs\\target\\compare-cecil\\runs\\20261021-132210-049",
+                  "cargo":  "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26200 (Windows 11 Professional) [64-bit]",
+                  "target_dir":  "D:\\cecli-rs\\target\\validation-cecil-harness",
+                  "csharp_arguments":  [
+                                           "-nologo",
+                                           "-noconfig",
+                                           "-nostdlib+",
+                                           "-target:exe",
+                                           "-optimize+",
+                                           "-out:D:\\cecli-rs\\target\\compare-cecil\\runs\\20261021-132210-049\\CecilBench.dll",
+                                           "-r:D:\\cecli-rs\\target\\compare-cecil\\Mono.Cecil.dll",
+                                           "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Private.CoreLib.dll",
+                                           "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.dll",
+                                           "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\netstandard.dll",
+                                           "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Console.dll",
+                                           "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Collections.dll",
+                                           "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Diagnostics.Process.dll",
+                                           "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Runtime.Extensions.dll",
+                                           "-r:C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\10.0.13\\System.Security.Cryptography.dll",
+                                           "D:\\cecli-rs\\scripts\\compare-cecil\\CecilBench.cs"
+                                       ],
+                  "cargo_configs":  [
+
+                                    ],
+                  "cargo_arguments":  [
+                                          "build",
+                                          "--locked",
+                                          "--profile",
+                                          "dev",
+                                          "--target-dir",
+                                          "D:\\cecli-rs\\target\\validation-cecil-harness",
+                                          "-p",
+                                          "cecli",
+                                          "--example",
+                                          "compare_cecil"
+                                      ]
+              },
+    "samples_per_round":  11,
+    "cpu":  {
+                "Name":  "Genuine Intel(R) 0000",
+                "NumberOfCores":  14,
+                "NumberOfLogicalProcessors":  20
+            },
+    "roslyn":  "4.14.0",
+    "dotnet":  "10.0.13"
+}

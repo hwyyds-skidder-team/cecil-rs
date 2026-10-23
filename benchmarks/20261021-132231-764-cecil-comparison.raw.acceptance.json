@@ -1,0 +1,95 @@
+{
+  "suite": "cecil-7x3-v1",
+  "required_cells": 21,
+  "measured_cells": 21,
+  "full_matrix": true,
+  "at_least_three_rounds": false,
+  "median_wins": 11,
+  "all_round_wins": 11,
+  "semantic_validation": true,
+  "source_provenance": true,
+  "passed": false,
+  "failed_cells": [
+    {
+      "input": "hello.exe",
+      "mode": "read",
+      "median_ratio": 0.6025131759826177,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.6025131759826177
+    },
+    {
+      "input": "hello.exe",
+      "mode": "write",
+      "median_ratio": 0.6896507507805144,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.6896507507805144
+    },
+    {
+      "input": "hello.exe",
+      "mode": "roundtrip",
+      "median_ratio": 0.6305765410439429,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.6305765410439429
+    },
+    {
+      "input": "System.Runtime.dll (fixture)",
+      "mode": "read",
+      "median_ratio": 0.44933915303808586,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.44933915303808586
+    },
+    {
+      "input": "System.Runtime.dll (fixture)",
+      "mode": "write",
+      "median_ratio": 0.660980621874404,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.660980621874404
+    },
+    {
+      "input": "System.Runtime.dll (fixture)",
+      "mode": "roundtrip",
+      "median_ratio": 0.5958508324163573,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.5958508324163573
+    },
+    {
+      "input": "SQLite-net.dll",
+      "mode": "read",
+      "median_ratio": 0.5477499129078132,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.5477499129078132
+    },
+    {
+      "input": "SQLite-net.dll",
+      "mode": "roundtrip",
+      "median_ratio": 0.4287346857817631,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.4287346857817631
+    },
+    {
+      "input": "cecil.dll (fixture)",
+      "mode": "read",
+      "median_ratio": 0.8072536377819827,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.8072536377819827
+    },
+    {
+      "input": "Mono.Cecil.dll (0.11.6)",
+      "mode": "read",
+      "median_ratio": 0.8284601959806597,
+      "rounds_won": 0,
+      "rounds_total": 1,
+      "worst_round_ratio": 0.8284601959806597
+    }
+  ],
+  "rule": "All fixed 21 cells must have Cecil/Rust > 1 for the pooled median and every paired round median, with >= 3 rounds, semantic cross-reading and archived source provenance."
+}

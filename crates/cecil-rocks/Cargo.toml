@@ -1,0 +1,10 @@
+[package]
+name = "cecil-rocks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cecil.workspace = true
+cecil-core.workspace = true
+cecil-cil.workspace = true

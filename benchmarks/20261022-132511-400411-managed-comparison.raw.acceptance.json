@@ -1,0 +1,14 @@
+{
+  "suite": "managed-7x3x3-v1",
+  "required_comparisons": 63,
+  "measured_comparisons": 63,
+  "passed": false,
+  "full_matrix": true,
+  "semantic_validation": true,
+  "source_provenance": true,
+  "at_least_three_rounds": false,
+  "median_wins": 63,
+  "all_round_wins": 63,
+  "failed_comparisons": [],
+  "rule": "All fixed 63 comparisons require competitor/Rust > 1 in the pooled median and EVERY paired round median, >= 3 rounds, both independent semantic readers for all four outputs, and stable archived source/fresh build provenance."
+}
