@@ -22,6 +22,8 @@
 //! * `renumber` can only translate targets when the instruction sequence
 //!   itself is unchanged (macro passes, operand rewrites); structural edits go
 //!   through [`BodyEditor`], which maintains targets incrementally.
+//!   [`BodyLayout`] provides checked relocation from a layout captured before
+//!   resizing, including the original code-end anchor.
 //! * `ILProcessor.Clear` only clears the instruction list; exception handler
 //!   clauses (which reference IL offsets) are preserved, matching Cecil.
 
@@ -33,7 +35,7 @@ use cecil_cil::{Code, OpCode, OperandType};
 use cecil_core::Token;
 
 use crate::model::types::{
-    FieldId, FieldRef, MethodId, MethodRef, RInstruction, ROperand, ResolvedBody,
+    ExceptionKind, FieldId, FieldRef, MethodId, MethodRef, RInstruction, ROperand, ResolvedBody,
 };
 use crate::Module;
 use cecil_core::{Error, Result};
@@ -110,7 +112,7 @@ fn shift_eh_insert(body: &mut ResolvedBody, pos: i32, delta: i32) {
         if clause.handler_offset >= pos {
             clause.handler_offset += delta;
         }
-        if clause.filter_offset > 0 && clause.filter_offset >= pos {
+        if clause.kind == ExceptionKind::Filter && clause.filter_offset >= pos {
             clause.filter_offset += delta;
         }
         if clause.try_offset < pos && pos < clause.try_offset + clause.try_length {
@@ -136,7 +138,7 @@ fn shift_eh_replace(body: &mut ResolvedBody, offset: i32, delta: i32) {
         if clause.handler_offset > offset {
             clause.handler_offset += delta;
         }
-        if clause.filter_offset > 0 && clause.filter_offset > offset {
+        if clause.kind == ExceptionKind::Filter && clause.filter_offset > offset {
             clause.filter_offset += delta;
         }
         if clause.try_offset <= offset && offset < clause.try_offset + clause.try_length {
@@ -192,90 +194,182 @@ fn shift_eh_remove(body: &mut ResolvedBody, pos: i32, removed: i32) {
         clause.handler_offset = new_start;
         clause.handler_length = (new_end - new_start).max(0);
 
-        if clause.filter_offset >= span_end {
-            clause.filter_offset -= removed;
-        } else if clause.filter_offset >= pos {
-            clause.filter_offset = pos;
+        if clause.kind == ExceptionKind::Filter {
+            if clause.filter_offset >= span_end {
+                clause.filter_offset -= removed;
+            } else if clause.filter_offset >= pos {
+                clause.filter_offset = pos;
+            }
         }
     }
 }
 
-/// Recomputes instruction offsets from the current instruction order and
-/// sizes, fixing absolute branch/switch targets along the way.
+/// A checked snapshot of instruction starts and the original code-end anchor.
 ///
-/// Before rewriting the offsets, the previous layout is snapshotted. When the
-/// instruction sequence is unchanged (the common case after operand/macro
-/// rewrites), every old boundary is positionally paired with its instruction
-/// and each branch/switch target recorded against the previous layout is
-/// remapped to the new offset of the instruction it landed on; a target at
-/// the previous end-of-body position follows the end of the body. When the
-/// sequence changed (structural edits), only the end-of-body anchor is
-/// translated - use [`BodyEditor`] for structural edits, which keeps targets
-/// consistent incrementally. The pass is idempotent on an already-consistent
-/// body.
-pub fn renumber(body: &mut ResolvedBody) {
-    let old_offsets: Vec<i32> = body.instructions.iter().map(|i| i.offset).collect();
-    let old_end =
-        body.instructions.last().map_or(0, |last| last.offset + encoded_size(last) as i32);
+/// Capture this before changing opcodes or operands, then call [`Self::remap`]
+/// afterwards. Instruction count, order and their old offset identities must
+/// remain unchanged. Structural edits belong in [`BodyEditor`].
+#[derive(Debug, Clone)]
+pub struct BodyLayout {
+    offsets: Vec<i32>,
+    indices: HashMap<i32, usize>,
+}
 
-    let mut offset = 0i32;
-    for instr in &mut body.instructions {
-        instr.offset = offset;
-        offset += encoded_size(instr) as i32;
+impl BodyLayout {
+    fn snapshot(body: &ResolvedBody) -> Self {
+        let mut offsets: Vec<_> = body.instructions.iter().map(|i| i.offset).collect();
+        offsets.push(body.instructions.last().map_or(0, |i| i.offset + encoded_size(i) as i32));
+        let indices = offsets.iter().enumerate().map(|(i, &offset)| (offset, i)).collect();
+        Self { offsets, indices }
     }
-    let new_end = offset;
 
-    let mut map: HashMap<i32, i32> = HashMap::with_capacity(old_offsets.len() + 1);
-    if old_offsets.len() == body.instructions.len() {
-        for (old, instr) in old_offsets.iter().zip(body.instructions.iter()) {
-            map.entry(*old).or_insert(instr.offset);
+    /// Validates a contiguous source layout and all branch/EH boundaries.
+    pub fn capture(body: &ResolvedBody) -> Result<Self> {
+        let offsets = Self::new_offsets(body)?;
+        if body.instructions.iter().zip(&offsets).any(|(i, &offset)| i.offset != offset) {
+            return Err(Error::argument("body layout has non-contiguous instruction offsets"));
         }
+        let indices = offsets.iter().enumerate().map(|(i, &offset)| (offset, i)).collect();
+        let layout = Self { offsets, indices };
+        layout.validate_targets(body)?;
+        Ok(layout)
     }
-    map.insert(old_end, new_end);
 
-    for instr in &mut body.instructions {
-        match &mut instr.operand {
-            ROperand::Branch(target) => {
-                if let Some(new) = map.get(target) {
-                    *target = *new;
-                }
+    fn new_offsets(body: &ResolvedBody) -> Result<Vec<i32>> {
+        let mut offsets = Vec::with_capacity(body.instructions.len() + 1);
+        let mut end = 0i32;
+        for instruction in &body.instructions {
+            offsets.push(end);
+            let size = match &instruction.operand {
+                ROperand::Switch(targets) => targets
+                    .len()
+                    .checked_add(1)
+                    .and_then(|n| n.checked_mul(4))
+                    .and_then(|n| n.checked_add(instruction.opcode.size as usize)),
+                _ => Some(cecil_cil::instruction_size(instruction.opcode)),
             }
-            ROperand::Switch(targets) => {
-                for target in targets.iter_mut() {
-                    if let Some(new) = map.get(target) {
-                        *target = *new;
+            .and_then(|size| i32::try_from(size).ok())
+            .ok_or_else(|| Error::argument("instruction exceeds the IL offset limit"))?;
+            end = end
+                .checked_add(size)
+                .ok_or_else(|| Error::argument("body exceeds the IL offset limit"))?;
+        }
+        offsets.push(end);
+        Ok(offsets)
+    }
+
+    fn validate_targets(&self, body: &ResolvedBody) -> Result<()> {
+        let is_start =
+            |offset: i32| self.indices.get(&offset).is_some_and(|&i| i < body.instructions.len());
+        for instruction in &body.instructions {
+            let valid = match &instruction.operand {
+                ROperand::Branch(target) => is_start(*target),
+                ROperand::Switch(targets) => targets.iter().all(|&target| is_start(target)),
+                _ => true,
+            };
+            if !valid {
+                return Err(Error::argument("branch target is not an instruction start"));
+            }
+        }
+        for clause in &body.exception_handlers {
+            let valid_region = |start: i32, length: i32| {
+                is_start(start)
+                    && length > 0
+                    && start.checked_add(length).is_some_and(|end| self.indices.contains_key(&end))
+            };
+            if !valid_region(clause.try_offset, clause.try_length)
+                || !valid_region(clause.handler_offset, clause.handler_length)
+                || (clause.kind == ExceptionKind::Filter
+                    && (!is_start(clause.filter_offset)
+                        || clause.filter_offset >= clause.handler_offset))
+            {
+                return Err(Error::argument(
+                    "exception boundary is not a valid instruction boundary",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Relocates to the current encoded sizes. Any invalid identity, boundary
+    /// or size leaves the body untouched, including its instruction offsets.
+    pub fn remap(&self, body: &mut ResolvedBody) -> Result<()> {
+        if self.offsets.len() != body.instructions.len() + 1
+            || body.instructions.iter().zip(&self.offsets).any(|(i, &offset)| i.offset != offset)
+        {
+            return Err(Error::argument(
+                "body layout cannot relocate structural instruction edits",
+            ));
+        }
+        self.validate_targets(body)?;
+        let offsets = Self::new_offsets(body)?;
+        self.restore(body, &offsets);
+        Ok(())
+    }
+
+    fn restore(&self, body: &mut ResolvedBody, offsets: &[i32]) {
+        let relocate = |old: i32| self.indices.get(&old).map(|&i| offsets[i]);
+        for (instruction, &offset) in body.instructions.iter_mut().zip(offsets) {
+            instruction.offset = offset;
+            match &mut instruction.operand {
+                ROperand::Branch(target) => {
+                    if let Some(new) = relocate(*target) {
+                        *target = new;
                     }
                 }
+                ROperand::Switch(targets) => {
+                    for target in targets {
+                        if let Some(new) = relocate(*target) {
+                            *target = new;
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
+        }
+        for clause in &mut body.exception_handlers {
+            let region = |start: i32, len: i32| {
+                let new_start = relocate(start)?;
+                Some((new_start, relocate(start.checked_add(len)?)? - new_start))
+            };
+            if let Some((start, length)) = region(clause.try_offset, clause.try_length) {
+                clause.try_offset = start;
+                clause.try_length = length;
+            }
+            if let Some((start, length)) = region(clause.handler_offset, clause.handler_length) {
+                clause.handler_offset = start;
+                clause.handler_length = length;
+            }
+            if clause.kind == ExceptionKind::Filter {
+                if let Some(new) = relocate(clause.filter_offset) {
+                    clause.filter_offset = new;
+                }
+            }
         }
     }
+}
 
-    // Exception-clause boundaries are byte offsets into the same layout;
-    // remap region starts/ends through the same old->new map (a region end
-    // is either an instruction start or the end-of-body anchor, both of
-    // which the map carries).
-    let map_region = |start: i32, len: i32| -> Option<(i32, i32)> {
-        let new_start = *map.get(&start)?;
-        let end = start.checked_add(len)?;
-        let new_end = *map.get(&end)?;
-        Some((new_start, new_end - new_start))
-    };
-    for clause in &mut body.exception_handlers {
-        if let Some((start, len)) = map_region(clause.try_offset, clause.try_length) {
-            clause.try_offset = start;
-            clause.try_length = len;
-        }
-        if let Some((start, len)) = map_region(clause.handler_offset, clause.handler_length) {
-            clause.handler_offset = start;
-            clause.handler_length = len;
-        }
-        if clause.filter_offset > 0 {
-            if let Some(new) = map.get(&clause.filter_offset) {
-                clause.filter_offset = *new;
-            }
-        }
+/// Recomputes offsets and translates targets identified by distinct, ordered
+/// old instruction offsets. A freshly authored body with duplicate/unassigned
+/// offsets is numbered without translating its already-authored operands.
+///
+/// This function cannot infer an old code size after the final opcode changed,
+/// or instruction identities after arbitrary structural edits. Use a captured
+/// [`BodyLayout`] for checked size changes and [`BodyEditor`] for structural
+/// edits. Dangling targets are left untouched. Already-consistent bodies are
+/// unchanged.
+pub fn renumber(body: &mut ResolvedBody) {
+    if body.instructions.first().is_some_and(|i| i.offset < 0)
+        || body.instructions.windows(2).any(|pair| pair[0].offset >= pair[1].offset)
+    {
+        recompute_offsets(body);
+        return;
     }
+    let layout = BodyLayout::snapshot(body);
+    recompute_offsets(body);
+    let mut offsets: Vec<_> = body.instructions.iter().map(|i| i.offset).collect();
+    offsets.push(body.instructions.last().map_or(0, |i| i.offset + encoded_size(i) as i32));
+    layout.restore(body, &offsets);
 }
 
 // ---------------------------------------------------------------------------
@@ -396,11 +490,12 @@ impl<'a> BodyEditor<'a> {
 
     /// Replaces the instruction at `index`, shifting every other branch/switch
     /// target by the encoded-size difference.
-    pub fn replace(&mut self, index: usize, instr: RInstruction) {
+    pub fn replace(&mut self, index: usize, mut instr: RInstruction) {
         let old_size = encoded_size(&self.body.instructions[index]) as i32;
         let new_size = encoded_size(&instr) as i32;
         let pos = self.body.instructions[index].offset;
         let pos_after = pos + old_size;
+        instr.offset = pos;
         self.body.instructions[index] = instr;
         if new_size != old_size {
             shift_targets(self.body, pos_after, new_size - old_size, Some(index));
@@ -570,8 +665,11 @@ fn simplify_instructions(body: &mut ResolvedBody) {
 /// `stloc.s`) and the short branch/`leave` forms grow into their long
 /// counterparts.
 pub fn simplify_macros(body: &mut ResolvedBody) {
-    simplify_instructions(body);
     renumber(body);
+    let layout = BodyLayout::snapshot(body);
+    simplify_instructions(body);
+    let offsets = BodyLayout::new_offsets(body).expect("expanded body fits IL offsets");
+    layout.restore(body, &offsets);
 }
 
 // ---------------------------------------------------------------------------
@@ -672,60 +770,70 @@ fn short_branch(code: Code) -> Option<OpCode> {
     })
 }
 
-/// Port of `MethodBodyRocks.OptimizeBranches`: walks inline branch targets in
-/// order, switching each to its short form while the displacement fits a
-/// signed byte, recomputing offsets (and remapping absolute targets) after
-/// every successful shrink.
-fn optimize_branches(body: &mut ResolvedBody) {
-    renumber(body);
+/// Fenwick prefix sums track instruction sizes after each branch shrink.
+/// Layout queries and updates cost O(log n); construction costs O(n).
+struct InstructionSizes {
+    sums: Vec<i64>,
+}
 
-    let mut index = 0;
-    while index < body.instructions.len() {
-        let (opcode, target, offset) = {
-            let instr = &body.instructions[index];
-            let target = match instr.operand {
-                ROperand::Branch(target) => target,
-                _ => {
-                    index += 1;
-                    continue;
-                }
-            };
-            (instr.opcode, target, instr.offset)
-        };
-        if opcode.operand_type != OperandType::InlineBrTarget {
-            index += 1;
-            continue;
-        }
-        let short = match short_branch(opcode.code) {
-            Some(short) => short,
-            None => {
-                index += 1;
-                continue;
+impl InstructionSizes {
+    fn new(body: &ResolvedBody) -> Self {
+        let mut sums = Vec::with_capacity(body.instructions.len() + 1);
+        sums.push(0);
+        sums.extend(body.instructions.iter().map(|i| encoded_size(i) as i64));
+        for i in 1..sums.len() {
+            let parent = i + (i & i.wrapping_neg());
+            if parent < sums.len() {
+                sums[parent] += sums[i];
             }
-        };
+        }
+        Self { sums }
+    }
 
-        // Test the displacement of the candidate short form. A backward
-        // target does not move when the branch shrinks, so its short
-        // displacement is three bytes less negative than the long one.
-        let old_end = offset + opcode.size as i32 + 4;
-        let new_target = if target >= old_end { target - 3 } else { target };
-        let displacement = new_target - (offset + short.size as i32 + 1);
-        if !(-128..=127).contains(&displacement) {
-            index += 1;
+    fn offset(&self, mut index: usize) -> i64 {
+        let mut offset = 0;
+        while index > 0 {
+            offset += self.sums[index];
+            index &= index - 1;
+        }
+        offset
+    }
+
+    fn shrink(&mut self, index: usize) {
+        let mut i = index + 1;
+        while i < self.sums.len() {
+            self.sums[i] -= 3;
+            i += i & i.wrapping_neg();
+        }
+    }
+}
+
+/// Preserve Cecil's ordered branch-shortening pass without walking the entire
+/// body after each shrink. Targets remain in the original layout until the
+/// caller restores every branch, switch and EH anchor together.
+fn optimize_branches(body: &mut ResolvedBody, layout: &BodyLayout) {
+    let mut sizes = InstructionSizes::new(body);
+    for (index, instruction) in body.instructions.iter_mut().enumerate() {
+        if instruction.opcode.operand_type != OperandType::InlineBrTarget {
             continue;
         }
-
-        // Shrinking saves exactly 3 bytes. `renumber` remaps absolute targets
-        // through their old instruction boundaries; shifting them here first
-        // would make that mapping run twice and can redirect a forward edge
-        // to the wrong block (including the method entry).
-        let pos_after = old_end;
-        body.instructions[index].opcode = short;
-        // The final three operand bytes disappear. Translate both ends of
-        // each EH region (including the code-size anchor) and filter starts.
-        shift_eh_remove(body, pos_after - 3, 3);
-        renumber(body);
-        index += 1;
+        let ROperand::Branch(target) = instruction.operand else {
+            continue;
+        };
+        let Some(short) = short_branch(instruction.opcode.code) else {
+            continue;
+        };
+        let Some(&target_index) = layout.indices.get(&target) else {
+            continue;
+        };
+        // A forward target follows this branch's disappearing three bytes;
+        // backward and self targets stay in place.
+        let new_target = sizes.offset(target_index) - if target_index > index { 3 } else { 0 };
+        let displacement = new_target - (sizes.offset(index) + short.size as i64 + 1);
+        if (-128..=127).contains(&displacement) {
+            instruction.opcode = short;
+            sizes.shrink(index);
+        }
     }
 }
 
@@ -738,8 +846,12 @@ fn optimize_branches(body: &mut ResolvedBody) {
 /// `ldc.i4.m1`/`ldc.i4.0`..`ldc.i4.8`, then `ldc.i4.s` for `-128..=127`;
 /// finally the branch-shortening pass runs.
 pub fn optimize_macros(body: &mut ResolvedBody) {
+    renumber(body);
+    let layout = BodyLayout::snapshot(body);
     optimize_instructions(body);
-    optimize_branches(body);
+    optimize_branches(body, &layout);
+    let offsets = BodyLayout::new_offsets(body).expect("optimized body fits IL offsets");
+    layout.restore(body, &offsets);
 }
 
 /// Port of `MethodBodyRocks.Optimize`: narrows representable `ldc.i8`
@@ -769,20 +881,20 @@ fn optimize_longs(body: &mut ResolvedBody) {
             continue;
         }
 
-        let old_end =
-            body.instructions[index].offset + encoded_size(&body.instructions[index]) as i32;
+        let old_offset = body.instructions[index].offset;
+        let old_end = old_offset + encoded_size(&body.instructions[index]) as i32;
         let instr = &mut body.instructions[index];
         instr.opcode = op::LDC_I4;
         instr.operand = ROperand::Int32(value as i32);
-        // The narrowed load is 4 bytes shorter; everything after it slides.
-        shift_targets(body, old_end, -4, Some(index));
-        // Insert conv.i8 right behind the load (one byte back).
-        let pos = old_end - 4;
+        // Treat the load plus conv.i8 as one replacement of the original
+        // nine-byte span. Its net shrink is three bytes, and the conversion
+        // must remain inside any exception region owning the original load.
+        shift_targets(body, old_end, -3, Some(index));
+        shift_eh_replace(body, old_offset, -3);
         body.instructions.insert(
             index + 1,
             RInstruction { offset: 0, opcode: op::CONV_I8, operand: ROperand::None },
         );
-        shift_targets(body, pos, 1, Some(index + 1));
         recompute_offsets(body);
         index += 2;
     }
@@ -857,6 +969,94 @@ mod tests {
     }
 
     #[test]
+    fn renumber_unassigned_offsets_keeps_authored_branch_targets() {
+        let mut b = make_body(vec![
+            instr(0, op::NOP, ROperand::None),
+            instr(0, op::BR, ROperand::Branch(1)),
+            instr(0, op::RET, ROperand::None),
+        ]);
+
+        renumber(&mut b);
+
+        assert_eq!(b.instructions[1].offset, 1);
+        assert_eq!(b.instructions[1].operand, ROperand::Branch(1));
+        assert_eq!(b.instructions[2].offset, 6);
+    }
+
+    #[test]
+    fn captured_layout_rejects_structural_edits_without_mutation() {
+        let original = make_body(vec![
+            instr(0, op::NOP, ROperand::None),
+            instr(1, op::BR, ROperand::Branch(6)),
+            instr(6, op::RET, ROperand::None),
+        ]);
+        let layout = BodyLayout::capture(&original).unwrap();
+        let mut inserted = original.clone();
+        inserted.instructions.insert(1, nop());
+        let mut reordered = original.clone();
+        reordered.instructions.swap(0, 1);
+        let mut bad_target = original.clone();
+        bad_target.instructions[1].operand = ROperand::Branch(2);
+        for mut b in [inserted, reordered, bad_target] {
+            let before = b.clone();
+            assert!(layout.remap(&mut b).is_err());
+            assert_eq!(b, before);
+        }
+    }
+
+    #[test]
+    fn captured_layout_preserves_the_end_before_final_opcode_changes() {
+        use crate::model::types::{ExceptionHandlerIL, ExceptionKind};
+
+        let mut b = make_body(vec![
+            instr(0, op::RET, ROperand::None),
+            instr(1, op::LEAVE_S, ROperand::Branch(0)),
+            instr(3, op::LEAVE_S, ROperand::Branch(0)),
+        ]);
+        b.exception_handlers.push(ExceptionHandlerIL {
+            kind: ExceptionKind::Finally,
+            try_offset: 1,
+            try_length: 2,
+            handler_offset: 3,
+            handler_length: 2,
+            filter_offset: 0,
+            catch_type: None,
+        });
+        let layout = BodyLayout::capture(&b).unwrap();
+        b.instructions[2].opcode = op::LEAVE;
+
+        layout.remap(&mut b).unwrap();
+
+        assert_eq!(b.instructions[2].offset, 3);
+        assert_eq!(b.exception_handlers[0].handler_length, 5);
+        let before = b.clone();
+        assert!(layout.remap(&mut b).is_err());
+        assert_eq!(b, before);
+    }
+
+    #[test]
+    fn capture_rejects_duplicate_offsets_and_invalid_exception_boundaries() {
+        use crate::model::types::{ExceptionHandlerIL, ExceptionKind};
+
+        let duplicate = make_body(vec![nop(), nop()]);
+        assert!(BodyLayout::capture(&duplicate).is_err());
+        let mut b = make_body(vec![
+            instr(0, op::BR, ROperand::Branch(5)),
+            instr(5, op::RET, ROperand::None),
+        ]);
+        b.exception_handlers.push(ExceptionHandlerIL {
+            kind: ExceptionKind::Finally,
+            try_offset: 1,
+            try_length: 4,
+            handler_offset: 5,
+            handler_length: 1,
+            filter_offset: 0,
+            catch_type: None,
+        });
+        assert!(BodyLayout::capture(&b).is_err());
+    }
+
+    #[test]
     fn edit_then_renumber_keeps_branch_targets_valid() {
         // 0: nop; 1: br -> 7 (ret); 6: nop; 7: ret
         let mut b = make_body(vec![
@@ -917,6 +1117,33 @@ mod tests {
         }
         assert_eq!(b.instructions.len(), 2);
         assert_eq!(b.instructions[1].offset, 1);
+    }
+
+    #[test]
+    fn equal_size_replacement_preserves_offsets_for_later_edits() {
+        let mut b = make_body(vec![
+            instr(0, op::BR, ROperand::Branch(0)),
+            instr(5, op::NOP, ROperand::None),
+            instr(6, op::NOP, ROperand::None),
+            instr(7, op::RET, ROperand::None),
+        ]);
+        BodyEditor::new(&mut b).replace(2, BodyEditor::create(op::NOP));
+        assert_eq!(b.instructions.iter().map(|i| i.offset).collect::<Vec<_>>(), [0, 5, 6, 7]);
+        BodyLayout::capture(&b).unwrap();
+
+        BodyEditor::new(&mut b).insert_before(2, &BodyEditor::create(op::NOP));
+        assert_eq!(b.instructions[0].operand, ROperand::Branch(0));
+        assert_eq!(b.instructions[3].offset, 7);
+        BodyLayout::capture(&b).unwrap();
+        BodyEditor::new(&mut b).remove(2);
+        assert_eq!(b.instructions[0].operand, ROperand::Branch(0));
+        assert_eq!(b.instructions[2].offset, 6);
+        BodyLayout::capture(&b).unwrap();
+
+        // A newly authored branch keeps its target while inheriting the old offset.
+        BodyEditor::new(&mut b).replace(0, BodyEditor::create_branch(7));
+        assert_eq!(b.instructions[0].operand, ROperand::Branch(7));
+        BodyLayout::capture(&b).unwrap();
     }
 
     #[test]
@@ -1003,6 +1230,27 @@ mod tests {
     }
 
     #[test]
+    fn large_branch_body_preserves_every_target_and_roundtrips_macros() {
+        const BRANCHES: i32 = 50_000;
+        let mut instructions: Vec<_> =
+            (0..BRANCHES).map(|i| instr(i * 5, op::BR, ROperand::Branch((i + 1) * 5))).collect();
+        instructions.push(instr(BRANCHES * 5, op::RET, ROperand::None));
+        let original = make_body(instructions);
+        let mut b = original.clone();
+
+        optimize_macros(&mut b);
+
+        for (i, instruction) in b.instructions[..BRANCHES as usize].iter().enumerate() {
+            assert_eq!(instruction.opcode, op::BR_S);
+            assert_eq!(instruction.offset, i as i32 * 2);
+            assert_eq!(instruction.operand, ROperand::Branch((i as i32 + 1) * 2));
+        }
+        assert_eq!(b.instructions.last().unwrap().offset, BRANCHES * 2);
+        simplify_macros(&mut b);
+        assert_eq!(b, original);
+    }
+
+    #[test]
     fn optimize_shortens_backward_branch_at_short_boundary() {
         // A long branch at offset 125 has long displacement -130, but its
         // short form reaches offset 0 with displacement -127.
@@ -1059,6 +1307,110 @@ mod tests {
         simplify_macros(&mut b);
         assert_eq!(b.instructions, original.instructions);
         assert_eq!(b.exception_handlers, original.exception_handlers);
+    }
+
+    #[test]
+    fn shortening_inside_finally_does_not_relocate_its_end_twice() {
+        use crate::model::types::{ExceptionHandlerIL, ExceptionKind};
+
+        let mut b = make_body(vec![
+            instr(0, op::LEAVE, ROperand::Branch(15)),
+            instr(5, op::BR, ROperand::Branch(13)),
+            instr(10, op::NOP, ROperand::None),
+            instr(11, op::NOP, ROperand::None),
+            instr(12, op::NOP, ROperand::None),
+            instr(13, op::NOP, ROperand::None),
+            instr(14, op::ENDFINALLY, ROperand::None),
+            instr(15, op::RET, ROperand::None),
+        ]);
+        b.exception_handlers.push(ExceptionHandlerIL {
+            kind: ExceptionKind::Finally,
+            try_offset: 0,
+            try_length: 5,
+            handler_offset: 5,
+            handler_length: 10,
+            filter_offset: 0,
+            catch_type: None,
+        });
+
+        optimize_macros(&mut b);
+
+        let h = &b.exception_handlers[0];
+        assert_eq!((h.try_offset, h.try_length), (0, 2));
+        assert_eq!((h.handler_offset, h.handler_length), (2, 7));
+        assert_eq!(b.instructions[6].offset, 8);
+        assert_eq!(b.instructions[6].opcode, op::ENDFINALLY);
+        crate::flow::Cfg::build(&b).unwrap();
+    }
+
+    #[test]
+    fn widening_final_instruction_preserves_filter_and_code_end() {
+        use crate::model::types::{ExceptionHandlerIL, ExceptionKind};
+
+        let mut b = make_body(vec![
+            instr(0, op::RET, ROperand::None),
+            instr(1, op::LDC_I4_0, ROperand::None),
+            instr(2, op::POP, ROperand::None),
+            instr(3, op::LEAVE_S, ROperand::Branch(0)),
+            instr(5, op::POP, ROperand::None),
+            instr(6, op::LDC_I4_1, ROperand::None),
+            instr(7, op::ENDFILTER, ROperand::None),
+            instr(9, op::POP, ROperand::None),
+            instr(10, op::LEAVE_S, ROperand::Branch(0)),
+        ]);
+        b.exception_handlers.push(ExceptionHandlerIL {
+            kind: ExceptionKind::Filter,
+            try_offset: 1,
+            try_length: 4,
+            handler_offset: 9,
+            handler_length: 3,
+            filter_offset: 5,
+            catch_type: None,
+        });
+        let original = b.clone();
+
+        simplify_macros(&mut b);
+
+        let h = &b.exception_handlers[0];
+        assert_eq!((h.try_offset, h.try_length), (1, 11));
+        assert_eq!(h.filter_offset, 12);
+        assert_eq!((h.handler_offset, h.handler_length), (20, 6));
+        crate::flow::Cfg::build(&b).unwrap();
+        optimize_macros(&mut b);
+        assert_eq!(b, original);
+    }
+
+    #[test]
+    fn narrowing_longs_preserves_exception_region_ownership() {
+        use crate::model::types::{ExceptionHandlerIL, ExceptionKind};
+
+        let mut b = make_body(vec![
+            instr(0, op::LDC_I8, ROperand::Int64(42)),
+            instr(9, op::POP, ROperand::None),
+            instr(10, op::LEAVE, ROperand::Branch(17)),
+            instr(15, op::NOP, ROperand::None),
+            instr(16, op::ENDFINALLY, ROperand::None),
+            instr(17, op::RET, ROperand::None),
+        ]);
+        b.exception_handlers.push(ExceptionHandlerIL {
+            kind: ExceptionKind::Finally,
+            try_offset: 0,
+            try_length: 15,
+            handler_offset: 15,
+            handler_length: 2,
+            filter_offset: 0,
+            catch_type: None,
+        });
+
+        optimize(&mut b);
+
+        let h = &b.exception_handlers[0];
+        let finally = b.instructions.iter().find(|i| i.opcode == op::ENDFINALLY).unwrap();
+        let ret = b.instructions.last().unwrap();
+        assert_eq!(h.try_offset + h.try_length, h.handler_offset);
+        assert_eq!(h.handler_offset + h.handler_length, ret.offset);
+        assert!(finally.offset >= h.handler_offset && finally.offset < ret.offset);
+        crate::flow::Cfg::build(&b).unwrap();
     }
 
     #[test]

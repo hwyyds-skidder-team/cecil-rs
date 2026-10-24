@@ -5,7 +5,8 @@
 //! tiny or fat header (ECMA-335 II §25.4.2), the instruction stream with
 //! branch fixups, and the trailing exception-handling sections (§25.4.6).
 //! Metadata operands (types, methods, fields, strings, local signatures)
-//! are registered through the caller's [`TokenMap`]; raw tokens pass through.
+//! are registered through the caller's [`TokenMap`]; raw definition tokens
+//! use the same canonical RID mapping.
 //!
 //! Like Cecil, instruction offsets are recomputed sequentially before
 //! encoding (two passes: layout, then emission), so stale input offsets are
@@ -260,7 +261,7 @@ fn write_operand(
             | OperandType::InlineMethod
             | OperandType::InlineField,
         ) => {
-            out.u32(token.0);
+            out.u32(tmap.definition_token(*token)?.0);
         }
         (operand, operand_type) => {
             return Err(Error::invalid_op(format!(

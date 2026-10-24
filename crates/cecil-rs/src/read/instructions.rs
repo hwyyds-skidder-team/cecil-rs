@@ -75,9 +75,35 @@ pub fn resolve_bodies_opts(
         return Ok(());
     }
 
-    let mut bodies_by_rva = BodyOwners::with_capacity(module.methods.len());
+    resolve_bodies_impl(module, ctx, md, image, false)
+}
+
+/// Loads only original, still-deferred bodies. Authored bodies and appended
+/// methods are kept, and an edited body is never used as the shared-RVA source.
+pub(crate) fn resolve_deferred_bodies(
+    module: &mut Module,
+    ctx: &mut ReadContext,
+    md: &MetadataReader<'_>,
+    image: &Image,
+) -> Result<()> {
+    resolve_bodies_impl(module, ctx, md, image, true)
+}
+
+fn resolve_bodies_impl(
+    module: &mut Module,
+    ctx: &mut ReadContext,
+    md: &MetadataReader<'_>,
+    image: &Image,
+    preserve_existing: bool,
+) -> Result<()> {
+    let method_count = if preserve_existing { ctx.method_defs.len() } else { module.methods.len() };
+
+    let mut bodies_by_rva = BodyOwners::with_capacity(method_count);
     let mut captured_sigs = std::collections::BTreeMap::new();
-    for index in 0..module.methods.len() {
+    for index in 0..method_count {
+        if preserve_existing && module.methods[index].body.is_some() {
+            continue;
+        }
         // Arena order == MethodDef table row order; the RVA is read straight
         // from the metadata row (column 0), the object model does not keep it.
         let rid = (index + 1) as u32;

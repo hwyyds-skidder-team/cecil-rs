@@ -19,8 +19,8 @@
 //! ```
 //!
 //! The `MethodDebugInformation` table is kept rid-aligned with the module's
-//! `MethodDef` table: registering a method without sequence points emits an
-//! empty row so later methods keep their rid.
+//! `MethodDef` table, including methods without sequence points. Associated
+//! type-system row counts live in `#Pdb`; only debug tables live in `#~`.
 
 use std::collections::HashMap;
 
@@ -32,11 +32,14 @@ use cecil_metadata::MetadataBuilder;
 
 use super::portable_reader::SequencePoint;
 
+const TYPE_SYSTEM_TABLE_COUNT: usize = TableIndex::PORTABLE_PDB_FIRST as usize;
+
 /// Handle to a row in the `Document` table (1-based rid).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DocumentHandle(pub u32);
 
-/// Handle to a row in the `LocalScope` table (1-based rid).
+/// Handle to a registered `LocalScope` row (1-based source rid). Debug
+/// references using this handle are relocated when finalization sorts scopes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScopeHandle(pub u32);
 
@@ -110,8 +113,9 @@ struct LocalScopeRow {
 /// Builder accumulating a module's portable-PDB debug information and
 /// serializing it into standalone `.pdb` bytes.
 ///
-/// Rows are buffered in insertion order and flushed deterministically at
-/// [`PortablePdbBuilder::finalize`]; heap entries are interned eagerly so
+/// Rows are buffered and flushed deterministically at
+/// [`PortablePdbBuilder::finalize`], including required scope/CDI sorting.
+/// Heap entries are interned eagerly so
 /// duplicate names, hashes, and GUIDs fold like in Mono.Cecil.
 #[derive(Debug)]
 pub struct PortablePdbBuilder {
@@ -129,7 +133,7 @@ pub struct PortablePdbBuilder {
     method_debug: HashMap<u32, MethodDebugEntry>,
     entry_point: Token,
     pdb_id: [u8; 20],
-    module_guid: Option<[u8; 16]>,
+    type_system_counts: Option<[u32; TYPE_SYSTEM_TABLE_COUNT]>,
 }
 
 impl Default for PortablePdbBuilder {
@@ -160,7 +164,7 @@ impl PortablePdbBuilder {
             method_debug: HashMap::new(),
             entry_point: Token::NIL,
             pdb_id: [0; 20],
-            module_guid: None,
+            type_system_counts: None,
         }
     }
 
@@ -291,6 +295,32 @@ impl PortablePdbBuilder {
         self.method_debug.entry(rid).or_default().local_sig_rid = stand_alone_sig_rid;
     }
 
+    /// Reserves a method's debug-information row even when it has no points.
+    /// Earlier missing rows are also emitted empty, preserving MethodDef RIDs.
+    pub fn register_method(&mut self, method: Token) -> Result<()> {
+        self.method_debug.entry(method_rid(method)?).or_default();
+        Ok(())
+    }
+
+    /// Sets all row counts from the associated PE's type-system metadata.
+    /// Omitted tables have zero rows; debug tables and counts exceeding the
+    /// metadata token limit are rejected. Repeated table entries use the last
+    /// count. Finalization rejects references outside these associated tables.
+    ///
+    /// Without this information, standalone builders infer minimum counts
+    /// from registered methods, local signatures, scopes and debug parents.
+    pub fn set_type_system_row_counts(&mut self, counts: &[(TableIndex, u32)]) -> Result<()> {
+        let mut rows = [0; TYPE_SYSTEM_TABLE_COUNT];
+        for &(table, count) in counts {
+            if table as usize >= TYPE_SYSTEM_TABLE_COUNT || count > 0x00ff_ffff {
+                return Err(Error::argument("invalid portable pdb type-system row count"));
+            }
+            rows[table as usize] = count;
+        }
+        self.type_system_counts = Some(rows);
+        Ok(())
+    }
+
     /// Adds an `ImportScope` row, returning its 1-based rid for use in
     /// [`Self::add_local_scope`]. `imports` is the raw imports blob
     /// (compressed count followed by alias/GUID packages); `parent` is a rid
@@ -310,6 +340,8 @@ impl PortablePdbBuilder {
     /// `(name, raw constant-signature blob)` pairs (element-type byte plus
     /// value). Each call appends its variable and constant rows directly
     /// before the scope row so the table's list-range columns stay contiguous.
+    /// Finalization sorts scopes by method and range, reorders their owned
+    /// locals/constants, and remaps debug parents using these source handles.
     ///
     /// `kind` is accepted for parity with the Cecil scope model; the
     /// Cecil-compatible six-column `LocalScope` layout carries no Kind
@@ -374,10 +406,10 @@ impl PortablePdbBuilder {
         self.pdb_id = id;
     }
 
-    /// Sets the module GUID (`Mvid`) written into the mandatory single
-    /// `Module` row. Defaults to the all-zero GUID.
+    /// Retains the associated module's GUID in `#GUID`. Portable PDBs have no
+    /// physical `Module` row; their identity is set by [`Self::set_pdb_id`].
     pub fn set_module_guid(&mut self, guid: [u8; 16]) {
-        self.module_guid = Some(guid);
+        self.metadata.insert_guid(&guid);
     }
 
     /// Adds one `CustomDebugInformation` row (Source Link, embedded source,
@@ -408,29 +440,113 @@ impl PortablePdbBuilder {
         Ok(())
     }
 
+    fn sort_scopes(&mut self) -> Result<()> {
+        let mut order: Vec<_> = (0..self.scope_rows.len()).collect();
+        order.sort_by_key(|&i| {
+            let row = self.scope_rows[i];
+            (row.method_rid, row.start_offset, std::cmp::Reverse(row.length))
+        });
+        if order.iter().enumerate().all(|(i, &old)| i == old) {
+            return Ok(());
+        }
+        let scopes = std::mem::take(&mut self.scope_rows);
+        let mut variables: Vec<_> =
+            std::mem::take(&mut self.variable_rows).into_iter().map(Some).collect();
+        let constants = std::mem::take(&mut self.constant_rows);
+        let mut scope_rids = vec![0; scopes.len()];
+        let mut variable_rids = vec![0; variables.len()];
+        let mut constant_rids = vec![0; constants.len()];
+        self.scope_rows.reserve(scopes.len());
+        self.variable_rows.reserve(variables.len());
+        self.constant_rows.reserve(constants.len());
+        for old in order {
+            let mut row = scopes[old];
+            let variable_start = row.variable_list_start as usize - 1;
+            let variable_end = scopes
+                .get(old + 1)
+                .map_or(variables.len(), |next| next.variable_list_start as usize - 1);
+            let constant_start = row.constant_list_start as usize - 1;
+            let constant_end = scopes
+                .get(old + 1)
+                .map_or(constants.len(), |next| next.constant_list_start as usize - 1);
+            row.variable_list_start = self.variable_rows.len() as u32 + 1;
+            row.constant_list_start = self.constant_rows.len() as u32 + 1;
+            for i in variable_start..variable_end {
+                variable_rids[i] = self.variable_rows.len() as u32 + 1;
+                self.variable_rows
+                    .push(variables[i].take().expect("scope local lists are disjoint"));
+            }
+            for i in constant_start..constant_end {
+                constant_rids[i] = self.constant_rows.len() as u32 + 1;
+                self.constant_rows.push(constants[i]);
+            }
+            scope_rids[old] = self.scope_rows.len() as u32 + 1;
+            self.scope_rows.push(row);
+        }
+        for row in &mut self.cdi_rows {
+            let Some((table, rid)) = cecil_metadata::decode_coded(
+                &coded::HAS_CUSTOM_DEBUG_INFORMATION,
+                row.parent_cell as u64,
+            ) else {
+                continue;
+            };
+            let rows = match table {
+                TableIndex::LocalScope => &scope_rids,
+                TableIndex::LocalVariable => &variable_rids,
+                TableIndex::LocalConstant => &constant_rids,
+                _ => continue,
+            };
+            let rid = rows
+                .get(rid as usize - 1)
+                .copied()
+                .ok_or_else(|| Error::argument("portable pdb debug parent is outside its table"))?;
+            row.parent_cell =
+                cecil_metadata::encode_coded(&coded::HAS_CUSTOM_DEBUG_INFORMATION, table, rid)?
+                    as u32;
+        }
+        Ok(())
+    }
+
     /// Serializes the complete standalone portable PDB image: a BSJB root
-    /// with `#~`, `#Strings`, `#GUID`, `#Blob`, and `#Pdb` streams, the
-    /// classic tables unpopulated except the mandatory single `Module` row.
+    /// with debug tables in `#~` and associated type-system counts in `#Pdb`.
     pub fn finalize(mut self) -> Result<Vec<u8>> {
-        // Mandatory Module row (PP spec: exactly one row per standalone PDB).
-        if self.metadata.row_count(TableIndex::Module) == 0 {
-            let mvid = self.module_guid.unwrap_or([0; 16]);
-            let name = self.metadata.insert_string("") as u64;
-            let guid = self.metadata.insert_guid(&mvid) as u64;
-            self.metadata.add_row(
-                TableIndex::Module,
-                &[
-                    0,    // Generation
-                    name, // Name
-                    guid, // Mvid
-                    0,    // EncId
-                    0,    // EncBaseId
-                ],
-            )?;
+        self.sort_scopes()?;
+        self.cdi_rows.sort_by_key(|row| row.parent_cell);
+        let mut required = [0; TYPE_SYSTEM_TABLE_COUNT];
+        let mut reference = |table: TableIndex, rid: u32| {
+            if (table as usize) < TYPE_SYSTEM_TABLE_COUNT {
+                required[table as usize] = required[table as usize].max(rid);
+            }
+        };
+        for (&rid, entry) in &self.method_debug {
+            reference(TableIndex::MethodDef, rid);
+            reference(TableIndex::StandAloneSig, entry.local_sig_rid);
+        }
+        for scope in &self.scope_rows {
+            reference(TableIndex::MethodDef, scope.method_rid);
+        }
+        for row in &self.cdi_rows {
+            if let Some((table, rid)) = cecil_metadata::decode_coded(
+                &coded::HAS_CUSTOM_DEBUG_INFORMATION,
+                row.parent_cell as u64,
+            ) {
+                reference(table, rid);
+            }
+        }
+        if !self.entry_point.is_nil() {
+            reference(TableIndex::MethodDef, method_rid(self.entry_point)?);
+        }
+        let counts = self.type_system_counts.unwrap_or(required);
+        for (&needed, &count) in required.iter().zip(&counts) {
+            if needed > count || count > 0x00ff_ffff {
+                return Err(Error::argument(
+                    "portable pdb reference exceeds associated table rows",
+                ));
+            }
         }
 
         // MethodDebugInformation rows, rid-aligned with MethodDef.
-        let max_rid = self.method_debug.keys().copied().max().unwrap_or(0);
+        let max_rid = counts[TableIndex::MethodDef as usize];
         for rid in 1..=max_rid {
             match self.method_debug.get(&rid) {
                 Some(entry) => {
@@ -513,18 +629,13 @@ impl PortablePdbBuilder {
             )?;
         }
 
-        // `#Pdb` heap: id + entry point + row counts of every populated
-        // table, ascending by table number (`PortablePdbWriter.WritePdbHeap`).
-        let mut counts = Vec::new();
-        for i in 0..=0x37u8 {
-            let Some(table) = TableIndex::from_u8(i) else {
-                continue;
-            };
-            let count = self.metadata.row_count(table);
-            if count > 0 {
-                counts.push((i, count));
-            }
-        }
+        // Debug tables are physical rows here. #Pdb references only the
+        // associated PE's type-system tables, in ascending table order.
+        let counts: Vec<_> = counts
+            .into_iter()
+            .enumerate()
+            .filter_map(|(table, count)| (count > 0).then_some((table as u8, count)))
+            .collect();
         let (pdb_id, entry_point) = (self.pdb_id, self.entry_point);
         self.metadata.set_pdb_heap(pdb_id, entry_point, &counts);
         Ok(self.metadata.finalize())
@@ -1073,9 +1184,10 @@ mod tests {
         assert_eq!(consts[0].name, "PI");
         assert_eq!(consts[0].signature, vec![0x0C, 0x18, 0x2D, 0x44, 0x54, 0xFB, 0x21, 0x09, 0x40]);
 
-        // Mandatory Module row + #Pdb heap bookkeeping.
+        // Only debug tables are physical; type-system counts are external.
         let md = reader.metadata();
-        assert_eq!(md.row_count(TableIndex::Module), 1);
+        assert!(!md.tables().is_present(TableIndex::Module));
+        assert_eq!(md.heaps().pdb.as_ref().unwrap().row_count(TableIndex::MethodDef), 3);
         assert!(md.heaps().pdb.is_some());
         assert_eq!(md.version_string(), "v4.0.30319");
     }
@@ -1125,6 +1237,161 @@ mod tests {
         assert_eq!(reader.entry_point(), Token::NIL);
         assert_eq!(reader.pdb_id(), [0; 20]);
         assert!(reader.documents().unwrap().is_empty());
-        assert_eq!(reader.metadata().row_count(TableIndex::Module), 1);
+        assert_eq!(reader.metadata().tables().valid_mask(), 0);
+    }
+
+    #[test]
+    fn associated_counts_include_trailing_methods_without_points() {
+        let mut builder = PortablePdbBuilder::new();
+        builder
+            .set_type_system_row_counts(&[
+                (TableIndex::Module, 1),
+                (TableIndex::TypeDef, 2),
+                (TableIndex::MethodDef, 4),
+            ])
+            .unwrap();
+        let document = builder.add_document("a.cs", [0; 16], &[], [0; 16]);
+        builder
+            .set_method_sequence_points(
+                Token::new(TableIndex::MethodDef, 1),
+                document,
+                &[SequencePoint {
+                    offset: 0,
+                    start_line: 1,
+                    end_line: 1,
+                    start_column: 1,
+                    end_column: 2,
+                }],
+            )
+            .unwrap();
+        let bytes = builder.finalize().unwrap();
+        let reader = PortablePdbReader::parse(&bytes).unwrap();
+        let metadata = reader.metadata();
+        assert_eq!(metadata.row_count(TableIndex::MethodDebugInformation), 4);
+        assert_eq!(metadata.heaps().pdb.as_ref().unwrap().row_count(TableIndex::MethodDef), 4);
+        assert!(!metadata.tables().is_present(TableIndex::Module));
+        assert!(!metadata.tables().is_present(TableIndex::MethodDef));
+        assert!(!metadata.heaps().pdb.as_ref().unwrap().has_table(TableIndex::Document));
+        assert!(reader.sequence_points(4).unwrap().is_none());
+    }
+
+    #[test]
+    fn external_counts_widen_simple_and_coded_debug_indexes() {
+        let mut builder = PortablePdbBuilder::new();
+        builder
+            .set_type_system_row_counts(&[
+                (TableIndex::MethodDef, 65_536),
+                (TableIndex::Field, 2_048),
+            ])
+            .unwrap();
+        builder.add_local_scope(
+            Token::new(TableIndex::MethodDef, 65_536),
+            0,
+            &[(0, "last".into(), 0)],
+            &[],
+            0,
+            7,
+            1,
+        );
+        builder
+            .add_custom_debug_information(
+                Token::new(TableIndex::Field, 2_048),
+                [1; 16],
+                b"wide-parent",
+            )
+            .unwrap();
+        let bytes = builder.finalize().unwrap();
+        let reader = PortablePdbReader::parse(&bytes).unwrap();
+        assert_eq!(reader.metadata().tables().row_size(TableIndex::LocalScope), Some(18));
+        assert_eq!(
+            reader.metadata().tables().row_size(TableIndex::CustomDebugInformation),
+            Some(8)
+        );
+        assert_eq!(reader.metadata().row_count(TableIndex::MethodDebugInformation), 65_536);
+        let scopes = reader.local_scopes(65_536).unwrap();
+        assert_eq!(scopes[0].try_start, 7);
+        assert_eq!(reader.local_variables(&scopes[0]).unwrap()[0].name, "last");
+        assert_eq!(
+            reader.custom_debug_informations().unwrap()[0].parent,
+            Token::new(TableIndex::Field, 2_048)
+        );
+    }
+
+    #[test]
+    fn associated_counts_reject_invalid_tables_and_outside_references() {
+        let mut builder = PortablePdbBuilder::new();
+        assert!(builder.set_type_system_row_counts(&[(TableIndex::Document, 1)]).is_err());
+        assert!(builder
+            .set_type_system_row_counts(&[(TableIndex::MethodDef, 0x0100_0000)])
+            .is_err());
+        builder.set_type_system_row_counts(&[(TableIndex::MethodDef, 1)]).unwrap();
+        builder.register_method(Token::new(TableIndex::MethodDef, 2)).unwrap();
+        assert!(builder.finalize().is_err());
+    }
+
+    #[test]
+    fn sorted_scopes_keep_locals_constants_and_debug_parents() {
+        let mut builder = PortablePdbBuilder::new();
+        let second = builder.add_local_scope(
+            Token::new(TableIndex::MethodDef, 2),
+            0,
+            &[(2, "second".into(), 0)],
+            &[("Second", &[0x08, 2, 0, 0, 0])],
+            0,
+            0,
+            10,
+        );
+        builder.add_local_scope(
+            Token::new(TableIndex::MethodDef, 1),
+            0,
+            &[(1, "inner".into(), 0)],
+            &[("Inner", &[0x08, 1, 0, 0, 0])],
+            0,
+            3,
+            2,
+        );
+        builder.add_local_scope(
+            Token::new(TableIndex::MethodDef, 1),
+            0,
+            &[(0, "outer".into(), 0)],
+            &[("Outer", &[0x08, 0, 0, 0, 0])],
+            0,
+            0,
+            10,
+        );
+        for (parent, value) in [
+            (Token::new(TableIndex::MethodDef, 2), "method2"),
+            (Token::new(TableIndex::MethodDef, 1), "method1"),
+            (Token::new(TableIndex::LocalScope, second.0), "second-scope"),
+            (Token::new(TableIndex::LocalVariable, 1), "second-variable"),
+            (Token::new(TableIndex::LocalConstant, 3), "outer-constant"),
+        ] {
+            builder.add_custom_debug_information(parent, [1; 16], value.as_bytes()).unwrap();
+        }
+        let bytes = builder.finalize().unwrap();
+        let reader = PortablePdbReader::parse(&bytes).unwrap();
+        let first = reader.local_scopes(1).unwrap();
+        assert_eq!(first.iter().map(|scope| scope.try_start).collect::<Vec<_>>(), [0, 3]);
+        assert_eq!(reader.local_variables(&first[0]).unwrap()[0].name, "outer");
+        assert_eq!(reader.local_constants(&first[0]).unwrap()[0].name, "Outer");
+        assert_eq!(reader.local_variables(&first[1]).unwrap()[0].name, "inner");
+        let second = reader.local_scopes(2).unwrap();
+        assert_eq!(reader.local_variables(&second[0]).unwrap()[0].name, "second");
+        assert_eq!(reader.local_constants(&second[0]).unwrap()[0].name, "Second");
+        let information = reader.custom_debug_informations().unwrap();
+        for (value, table, rid) in [
+            ("second-scope", TableIndex::LocalScope, 3),
+            ("second-variable", TableIndex::LocalVariable, 3),
+            ("outer-constant", TableIndex::LocalConstant, 1),
+        ] {
+            let entry = information.iter().find(|entry| entry.value == value.as_bytes()).unwrap();
+            assert_eq!(entry.parent, Token::new(table, rid));
+        }
+        let parent_cells: Vec<_> = (1..=information.len() as u32)
+            .map(|rid| {
+                reader.metadata().column(TableIndex::CustomDebugInformation, rid, 0).unwrap()
+            })
+            .collect();
+        assert!(parent_cells.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 }

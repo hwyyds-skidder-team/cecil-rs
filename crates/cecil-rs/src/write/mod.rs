@@ -1,5 +1,6 @@
 // writer modules
 pub mod classifier;
+pub(crate) mod definition_rows;
 pub mod emit_il;
 pub mod emit_metadata;
 pub mod resources;

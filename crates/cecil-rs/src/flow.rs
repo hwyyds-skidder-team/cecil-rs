@@ -343,6 +343,9 @@ impl Cfg {
                 let mut body = BTreeSet::from([header, tail]);
                 let mut stack = vec![tail];
                 while let Some(b) = stack.pop() {
+                    if b == header {
+                        continue;
+                    }
                     for &p in &self.preds[b] {
                         if body.insert(p) {
                             stack.push(p);
@@ -807,6 +810,24 @@ mod tests {
             ins(9, opcodes::RET, ROperand::None),
         ]);
         assert!(recompute_max_stack(&Module::default(), &b).is_err(), "depth 2 vs 1 at the join");
+    }
+
+    #[test]
+    fn self_loop_excludes_its_preheader() {
+        let b = body(vec![
+            ins(0, opcodes::NOP, ROperand::None),
+            ins(1, opcodes::BR, ROperand::Branch(6)),
+            ins(6, opcodes::BR, ROperand::Branch(6)),
+        ]);
+        let cfg = Cfg::build(&b).unwrap();
+        let loops = cfg.natural_loops();
+        assert_eq!(loops, vec![Loop { header: 1, tail: 1, body: BTreeSet::from([1]) }]);
+
+        let entry_loop = body(vec![ins(0, opcodes::BR, ROperand::Branch(0))]);
+        assert_eq!(
+            Cfg::build(&entry_loop).unwrap().natural_loops(),
+            vec![Loop { header: 0, tail: 0, body: BTreeSet::from([0]) }]
+        );
     }
 
     #[test]

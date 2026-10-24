@@ -79,22 +79,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cecil-rs"
-version = "0.1.0"
-dependencies = [
- "cecil-cil",
- "cecil-core",
- "cecil-mdb",
- "cecil-metadata",
- "cecil-pdb",
- "cecil-pe",
- "criterion",
- "mimalloc",
- "rsa",
- "sha2",
-]
-
-[[package]]
 name = "cecil-cil"
 version = "0.1.0"
 dependencies = [
@@ -105,9 +89,9 @@ dependencies = [
 name = "cecil-cli"
 version = "0.1.0"
 dependencies = [
- "cecil-rs",
  "cecil-cil",
  "cecil-core",
+ "cecil-rs",
 ]
 
 [[package]]
@@ -155,9 +139,25 @@ dependencies = [
 name = "cecil-rocks"
 version = "0.1.0"
 dependencies = [
- "cecil-rs",
  "cecil-cil",
  "cecil-core",
+ "cecil-rs",
+]
+
+[[package]]
+name = "cecil-rs"
+version = "0.1.0"
+dependencies = [
+ "cecil-cil",
+ "cecil-core",
+ "cecil-mdb",
+ "cecil-metadata",
+ "cecil-pdb",
+ "cecil-pe",
+ "criterion",
+ "mimalloc",
+ "rsa",
+ "sha2",
 ]
 
 [[package]]

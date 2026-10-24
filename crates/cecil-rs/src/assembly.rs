@@ -279,10 +279,19 @@ impl AssemblyDefinition {
     /// Cecil's lazy reading decodes bodies per method on first access; this
     /// value-semantics model defers (and loads) them as one unit — the
     /// dominant memory cost of a method body lives in the model either way.
+    /// Existing authored bodies and appended definitions are preserved. Load
+    /// bodies before removing or reordering the original definition arenas.
+    /// A loading failure leaves both the model and deferred state unchanged.
     pub fn load_bodies(&mut self) -> Result<()> {
-        let Some(lazy) = self.lazy.take() else {
+        let Some(lazy) = self.lazy.as_ref() else {
             return Ok(());
         };
+        if self.main.methods.len() < lazy.ctx.method_defs.len()
+            || self.main.types.len() < lazy.ctx.type_defs.len()
+            || self.main.fields.len() < lazy.ctx.field_defs.len()
+        {
+            return Err(Error::invalid_op("load deferred bodies before removing definitions"));
+        }
         let image = cecil_pe::Image::parse(&lazy.raw)?;
         let (md_rva, md_size) = image.metadata_rva()?;
         let md_slice = image.rva(md_rva)?;
@@ -290,15 +299,20 @@ impl AssemblyDefinition {
             &md_slice[..md_size.min(md_slice.len())],
             lazy.ctx.tolerate_malformed,
         )?;
-        let mut ctx = lazy.ctx;
-        crate::read::instructions::resolve_bodies_opts(
-            &mut self.main,
-            &mut ctx,
-            &md,
-            &image,
-            true,
-        )?;
-        crate::mixed_mode::capture(&mut self.main, &image, &md, Some(&self.name))?;
+        let mut ctx = lazy.ctx.clone();
+        let mut module = self.main.clone();
+        let explicit_values = module.external_value_types.clone();
+        let explicit_signatures = module.sas_blobs.clone();
+        crate::read::instructions::resolve_deferred_bodies(&mut module, &mut ctx, &md, &image)?;
+        module.sas_blobs.extend(explicit_signatures);
+        for value in explicit_values {
+            if !module.external_value_types.contains(&value) {
+                module.external_value_types.push(value);
+            }
+        }
+        crate::mixed_mode::capture(&mut module, &image, &md, Some(&self.name))?;
+        self.main = module;
+        self.lazy = None;
         Ok(())
     }
 
@@ -1087,8 +1101,8 @@ impl AssemblyDefinition {
     /// [`WriteParameters::deterministic_mvid`] set, the Module row's MVID is
     /// replaced by a GUID derived from the emitted metadata (see
     /// `make_mvid_deterministic` for the algorithm) before the image is
-    /// assembled; the PDB sidecar from [`Self::write_file_with`] keeps the
-    /// model's original MVID.
+    /// assembled. Portable PDB indexes and local signatures are derived from
+    /// the emitted metadata.
     pub fn write_with(&self, opts: &WriteParameters) -> Result<Vec<u8>> {
         self.write_with_pdb_name(opts, None).map(|(image, _)| image)
     }
@@ -1098,6 +1112,11 @@ impl AssemblyDefinition {
         opts: &WriteParameters,
         pdb_name: Option<&str>,
     ) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
+        if self.lazy.is_some() {
+            let mut loaded = self.clone();
+            loaded.load_bodies()?;
+            return loaded.write_with_pdb_name(opts, pdb_name);
+        }
         let module = &self.main;
         if module.native_image.is_some() {
             return write_native_module_image(
@@ -1215,7 +1234,7 @@ impl AssemblyDefinition {
                     }
                 }
                 SymbolOutput::Mdb => {
-                    let mdb_bytes = build_mdb(&self.main, debug);
+                    let mdb_bytes = build_mdb(&self.main, debug)?;
                     let name = path
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
@@ -1301,7 +1320,7 @@ fn write_module_image(
     let native_pdb_output = opts.effective_symbol_output() == SymbolOutput::NativePdb;
     let mut native_local_signatures = std::collections::BTreeMap::new();
     let mut emitted = {
-        let mut tmap = crate::write::token_map::TokenMap::for_module(&mut builder, module);
+        let mut tmap = crate::write::token_map::TokenMap::for_module(&mut builder, module)?;
 
         // Value-type classification of external types: with reference
         // images, classify by resolving each external type in them
@@ -1413,7 +1432,12 @@ fn write_module_image(
     if let Some(debug) = module.debug.as_ref() {
         match opts.effective_symbol_output() {
             SymbolOutput::EmbeddedPortablePdb => {
-                let pdb = build_portable_pdb(module)?;
+                let pdb = build_portable_pdb_for_output(
+                    module,
+                    Some(emitted.entry_point_token),
+                    Some(&emitted.root),
+                    &emitted.local_var_sig_tokens,
+                )?;
                 let payload = cecil_pdb::embedded::wrap_embedded(&pdb)?;
                 let checksum = cecil_pdb::embedded::pdb_checksum_payload(&pdb);
                 debug_entries.retain(|e| {
@@ -1449,7 +1473,12 @@ fn write_module_image(
                 // The sidecar bytes are written by `write_file_with` (it
                 // knows the output path); the image gets a fresh
                 // PdbChecksum pointing at the same content.
-                let pdb = build_portable_pdb(module)?;
+                let pdb = build_portable_pdb_for_output(
+                    module,
+                    Some(emitted.entry_point_token),
+                    Some(&emitted.root),
+                    &emitted.local_var_sig_tokens,
+                )?;
                 let checksum = cecil_pdb::embedded::pdb_checksum_payload(&pdb);
                 debug_entries.retain(|e| {
                     !matches!(
@@ -1565,7 +1594,14 @@ fn write_native_module_image(
         let parsed = cecil_pe::Image::parse(&image)?;
         crate::native_symbols::build_native_pdb_for_image(module, Some(&parsed))?
     } else {
-        build_portable_pdb(module)?
+        let parsed = cecil_pe::Image::parse(&image)?;
+        let (rva, size) = parsed.metadata_rva()?;
+        build_portable_pdb_for_output(
+            module,
+            Some(parsed.entry_point_token()),
+            Some(parsed.rva_bytes(rva, size)?),
+            &[],
+        )?
     };
     let default_name = std::path::Path::new(&module.name).with_extension("pdb");
     let default_name = default_name.to_string_lossy();
@@ -1604,21 +1640,61 @@ fn write_native_module_image(
 ///
 /// Port of the emission half of `Mono.Cecil.Cil/PortablePdb.cs`
 /// (`PortablePdbWriter`): documents, per-method sequence points, and local
-/// scopes rebuild into the debug metadata tables plus the `#Pdb` heap. The
-/// module's MVID and entry-point token travel through unchanged so readers
-/// can match the PDB against its assembly.
+/// scopes rebuild into the debug metadata tables plus the `#Pdb` heap.
+/// The source entry-point token is remapped along with sequence points,
+/// local scopes and definition-parented custom debug information.
+/// Standalone symbol models infer external counts from registered methods and
+/// debug references; assembly writes use all counts from the emitted metadata.
 ///
 /// Deviation: local scopes are emitted with their IL ranges but without
 /// imports or variable/constant detail — the facade model keeps
 /// only [`cecil_pdb::portable_reader::LocalScope`] rows, which reference
 /// variable/constant rows by rid rather than owning their data.
 pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
+    build_portable_pdb_for_output(module, None, None, &[])
+}
+
+fn build_portable_pdb_for_output(
+    module: &Module,
+    emitted_entry: Option<cecil_core::Token>,
+    emitted_metadata: Option<&[u8]>,
+    local_signatures: &[(MethodId, cecil_core::Token)],
+) -> Result<Vec<u8>> {
+    let definitions = crate::write::definition_rows::DefinitionRows::for_symbols(module)?;
+    let remap = |token| match &definitions {
+        Some(rows) => rows.token(token),
+        None => Ok(token),
+    };
     const FALLBACK_VERSION: &str = "v4.0.30319";
     let version =
         if module.runtime_version.is_empty() { FALLBACK_VERSION } else { &module.runtime_version };
     let mut builder = cecil_pdb::portable_writer::PortablePdbBuilder::with_version(version);
     builder.set_module_guid(module.guid);
-    builder.set_entry_point(module.entry_point_token);
+    if let Some(metadata) = emitted_metadata {
+        let metadata = cecil_metadata::MetadataReader::parse(metadata)?;
+        let counts: Vec<_> = (0..cecil_core::TableIndex::PORTABLE_PDB_FIRST)
+            .filter_map(cecil_core::TableIndex::from_u8)
+            .map(|table| (table, metadata.row_count(table)))
+            .collect();
+        builder.set_type_system_row_counts(&counts)?;
+    } else if !module.methods.is_empty() {
+        let count = u32::try_from(module.methods.len())
+            .ok()
+            .filter(|&count| count <= 0x00ff_ffff)
+            .ok_or_else(|| Error::argument("MethodDef exceeds metadata token limits"))?;
+        builder
+            .register_method(cecil_core::Token::new(cecil_core::TableIndex::MethodDef, count))?;
+    }
+    builder.set_entry_point(match emitted_entry {
+        Some(token) => token,
+        None => remap(module.entry_point_token)?,
+    });
+    for &(method, signature) in local_signatures {
+        builder.set_local_var_sig(
+            remap(cecil_core::Token::new(cecil_core::TableIndex::MethodDef, method.0 + 1))?,
+            signature.rid(),
+        );
+    }
 
     let Some(debug) = module.debug.as_ref() else {
         return builder.finalize();
@@ -1632,7 +1708,7 @@ pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
     }
 
     for (&method_rid, entries) in &debug.points {
-        let method = cecil_core::Token::new(cecil_core::TableIndex::MethodDef, method_rid);
+        let method = remap(cecil_core::Token::new(cecil_core::TableIndex::MethodDef, method_rid))?;
         let mut all_points = Vec::new();
         for (doc_index, points) in entries {
             let handle = handles.get(*doc_index as usize).copied().ok_or_else(|| {
@@ -1666,7 +1742,7 @@ pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
     }
 
     for (&method_rid, scopes) in &debug.scopes {
-        let method = cecil_core::Token::new(cecil_core::TableIndex::MethodDef, method_rid);
+        let method = remap(cecil_core::Token::new(cecil_core::TableIndex::MethodDef, method_rid))?;
         for scope in scopes {
             builder.add_local_scope(
                 method,
@@ -1681,7 +1757,7 @@ pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
     }
 
     for info in &debug.custom_debug_info {
-        builder.add_custom_debug_information(info.parent, info.kind, &info.value)?;
+        builder.add_custom_debug_information(remap(info.parent)?, info.kind, &info.value)?;
     }
 
     builder.finalize()
@@ -1692,7 +1768,8 @@ pub fn build_portable_pdb(module: &Module) -> Result<Vec<u8>> {
 /// points become per-method line tables (all of a method's points land in
 /// one compile unit — the facade model does not retain per-document split),
 /// and document order fixes compile-unit indices.
-fn build_mdb(module: &Module, debug: &crate::module_def::ModuleDebugInfo) -> Vec<u8> {
+fn build_mdb(module: &Module, debug: &crate::module_def::ModuleDebugInfo) -> Result<Vec<u8>> {
+    let definitions = crate::write::definition_rows::DefinitionRows::for_symbols(module)?;
     let mut writer = cecil_mdb::writer::MdbWriter::new(module.guid);
     // Source ids are 1-based; the facade document index maps directly.
     let mut source_ids = Vec::with_capacity(debug.documents.len());
@@ -1704,7 +1781,11 @@ fn build_mdb(module: &Module, debug: &crate::module_def::ModuleDebugInfo) -> Vec
         (0..debug.documents.len()).map(|i| writer.add_compile_unit(&[source_ids[i]])).collect();
 
     for (&method_rid, entries) in &debug.points {
-        let method = cecil_core::Token::new(cecil_core::TableIndex::MethodDef, method_rid);
+        let source = cecil_core::Token::new(cecil_core::TableIndex::MethodDef, method_rid);
+        let method = match &definitions {
+            Some(rows) => rows.token(source)?,
+            None => source,
+        };
         // Flatten the per-document groups into one line table (the MDB line
         // table carries a single compile unit per method).
         let (first_doc, mut lines) = (entries.first().map(|e| e.0).unwrap_or(0), Vec::new());
@@ -1717,7 +1798,7 @@ fn build_mdb(module: &Module, debug: &crate::module_def::ModuleDebugInfo) -> Vec
         writer.add_method_lines(method, cu, &lines, 0);
     }
 
-    writer.finalize()
+    Ok(writer.finalize())
 }
 
 fn arch_is_pe64(arch: cecil_core::flags::TargetArchitecture) -> bool {
@@ -2229,9 +2310,12 @@ mod tests {
         assert!(lazy_asm.lazy.is_some(), "deferred state stashed");
         assert!(lazy_asm.main.methods.iter().all(|m| m.body.is_none()), "no bodies decoded yet");
 
-        // Writing a body-less model still works (methods without bodies are
-        // emitted as RVA-less rows).
-        lazy_asm.write().expect("body-less model serializes");
+        let before = lazy_asm.main.clone();
+        let written = lazy_asm.write().expect("writing loads deferred bodies privately");
+        let reread = AssemblyDefinition::read(&written).unwrap();
+        assert!(reread.main.methods.iter().any(|m| m.body.is_some()));
+        assert_eq!(lazy_asm.main, before, "writing preserves the caller's deferred model");
+        assert!(lazy_asm.lazy.is_some());
 
         lazy_asm.load_bodies().expect("bodies load on demand");
         assert!(lazy_asm.lazy.is_none(), "deferred state consumed");
@@ -2249,6 +2333,145 @@ mod tests {
 
         // Second load is a no-op.
         lazy_asm.load_bodies().expect("repeat load is a no-op");
+    }
+
+    #[test]
+    fn deferred_writes_preserve_bodies_and_metadata_edits() {
+        use crate::resolver::{ReaderParameters, ReadingMode};
+        let input = std::fs::read(cecil_core::fixtures_dir().join("hello.exe")).unwrap();
+        let eager = AssemblyDefinition::read(&input).unwrap();
+        for mode in [ReadingMode::Lazy, ReadingMode::Deferred] {
+            let mut asm = AssemblyDefinition::read_with(
+                &input,
+                &ReaderParameters { reading_mode: mode, ..Default::default() },
+            )
+            .unwrap();
+            asm.name.name = "RenamedAssembly".into();
+            asm.main.name = "RenamedModule.exe".into();
+            let entry = asm.entry_point.unwrap();
+            asm.main.methods[entry.index()].name = "RenamedMain".into();
+            let before = asm.main.clone();
+            let bytes = asm.write().unwrap();
+            assert_eq!(asm.main, before);
+            assert!(asm.lazy.is_some());
+            assert_eq!(asm.write().unwrap(), bytes);
+            let reread = AssemblyDefinition::read(&bytes).unwrap();
+            assert_eq!(reread.name.name, "RenamedAssembly");
+            assert_eq!(reread.main.name, "RenamedModule.exe");
+            assert_eq!(reread.entry_point_method().unwrap().name, "RenamedMain");
+            for (now, old) in reread.main.methods.iter().zip(&eager.main.methods) {
+                assert_eq!(now.body, old.body);
+            }
+        }
+    }
+
+    #[test]
+    fn deferred_writes_keep_authored_and_appended_bodies() {
+        let input = std::fs::read(cecil_core::fixtures_dir().join("hello.exe")).unwrap();
+        let mut asm = AssemblyDefinition::read_with(
+            &input,
+            &crate::resolver::ReaderParameters {
+                reading_mode: crate::resolver::ReadingMode::Lazy,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let entry = asm.entry_point.unwrap();
+        let owner = asm.main.methods[entry.index()].declaring_type;
+        let authored = ResolvedBody {
+            max_stack: 8,
+            instructions: vec![
+                RInstruction {
+                    offset: 0,
+                    opcode: cecil_cil::opcodes::NOP,
+                    operand: ROperand::None,
+                },
+                RInstruction {
+                    offset: 1,
+                    opcode: cecil_cil::opcodes::RET,
+                    operand: ROperand::None,
+                },
+            ],
+            ..Default::default()
+        };
+        asm.main.methods[entry.index()].body = Some(authored.clone());
+        asm.main.add_method(
+            owner,
+            MethodDefinition {
+                name: "Appended".into(),
+                body: Some(authored.clone()),
+                ..Default::default()
+            },
+        );
+        asm.main.sas_blobs.insert(99, vec![0x00, 0x00, 0x01]); // void ()
+        asm.main.add_method(
+            owner,
+            MethodDefinition {
+                name: "AppendedCalli".into(),
+                body: Some(ResolvedBody {
+                    max_stack: 8,
+                    instructions: vec![
+                        RInstruction {
+                            offset: 0,
+                            opcode: cecil_cil::opcodes::LDFTN,
+                            operand: ROperand::Method(MethodRef::Def(entry)),
+                        },
+                        RInstruction {
+                            offset: 6,
+                            opcode: cecil_cil::opcodes::CALLI,
+                            operand: ROperand::Token(cecil_core::Token::new(
+                                cecil_core::TableIndex::StandAloneSig,
+                                99,
+                            )),
+                        },
+                        RInstruction {
+                            offset: 11,
+                            opcode: cecil_cil::opcodes::RET,
+                            operand: ROperand::None,
+                        },
+                    ],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let before = asm.main.clone();
+        let bytes = asm.write().unwrap();
+        assert_eq!(asm.main, before);
+        assert!(asm.lazy.is_some());
+        let reread = AssemblyDefinition::read(&bytes).unwrap();
+        assert_eq!(reread.entry_point_method().unwrap().body, Some(authored.clone()));
+        assert_eq!(
+            reread.main.methods.iter().find(|m| m.name == "Appended").unwrap().body,
+            Some(authored)
+        );
+        assert!(reread.main.methods.iter().all(|m| m.body.is_some()));
+        let calli = reread.main.methods.iter().find(|m| m.name == "AppendedCalli").unwrap();
+        let ROperand::CallSite(signature) = &calli.body.as_ref().unwrap().instructions[1].operand
+        else {
+            panic!("authored call-site signature was lost during deferred loading");
+        };
+        assert_eq!(signature.return_type, TypeDesc::Internal("void".into()));
+        assert!(signature.parameters.is_empty());
+    }
+
+    #[test]
+    fn deferred_loading_failure_keeps_the_model_and_state() {
+        let input = std::fs::read(cecil_core::fixtures_dir().join("hello.exe")).unwrap();
+        let mut asm = AssemblyDefinition::read_with(
+            &input,
+            &crate::resolver::ReaderParameters {
+                reading_mode: crate::resolver::ReadingMode::Lazy,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        asm.main.methods.pop();
+        let before = asm.main.clone();
+        assert!(asm.load_bodies().is_err());
+        assert_eq!(asm.main, before);
+        assert!(asm.lazy.is_some());
+        assert!(asm.write().is_err());
     }
 
     fn unique_test_dir(tag: &str) -> std::path::PathBuf {
@@ -2846,6 +3069,22 @@ mod tests {
             name: "T".into(),
             ..Default::default()
         });
+        module.add_method(
+            crate::model::types::TypeId(0),
+            MethodDefinition {
+                name: "M".into(),
+                body: Some(ResolvedBody {
+                    max_stack: 8,
+                    instructions: vec![RInstruction {
+                        offset: 0,
+                        opcode: cecil_cil::opcodes::RET,
+                        operand: ROperand::None,
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
         module.debug = Some(crate::module_def::ModuleDebugInfo {
             documents: vec![cecil_pdb::document::Document {
                 name: "/src/a.cs".into(),

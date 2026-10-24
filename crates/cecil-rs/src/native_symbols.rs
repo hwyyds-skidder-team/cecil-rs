@@ -54,6 +54,7 @@ fn build_native_pdb_for_output(
     image: Option<&cecil_pe::Image>,
     signatures: Option<&std::collections::BTreeMap<u32, Token>>,
 ) -> Result<Vec<u8>> {
+    let definitions = crate::write::definition_rows::DefinitionRows::for_symbols(module)?;
     let metadata = image
         .map(|image| {
             let (rva, size) = image.metadata_rva()?;
@@ -258,6 +259,13 @@ fn build_native_pdb_for_output(
                     }
                 }
             }
+        }
+    }
+    // Keep source tokens during all lookups above. Remapping each function
+    // while iterating can make its new token collide with a later source RID.
+    if let Some(rows) = &definitions {
+        for function in &mut functions {
+            function.token = function.token.map(|token| rows.token(token)).transpose()?;
         }
     }
     builder.clear_functions();

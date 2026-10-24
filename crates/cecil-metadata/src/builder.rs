@@ -329,7 +329,18 @@ impl MetadataBuilder {
             | ((self.guids.data.len() > 0xFFFF) as u8) << 1
             | ((self.blobs.data.len() > 0xFFFF) as u8) << 2;
 
-        let set = crate::tables::TableSet::compute(valid, &counts, heap_flags);
+        // Portable PDB tables reference type-system rows in the associated
+        // PE. Those counts determine index widths but never add physical
+        // rows or valid bits to this metadata root.
+        let mut width_counts = counts;
+        if let Some(pdb) = &self.pdb {
+            for &(table, count) in &pdb.table_counts {
+                if table < TableIndex::PORTABLE_PDB_FIRST && valid >> table & 1 == 0 {
+                    width_counts[table as usize] = count;
+                }
+            }
+        }
+        let set = crate::tables::TableSet::compute(valid, &width_counts, heap_flags);
 
         let header_len = 24 + valid.count_ones() as usize * 4;
         let mut tw = ByteWriter::with_capacity(header_len + set.tables_extent() as usize);

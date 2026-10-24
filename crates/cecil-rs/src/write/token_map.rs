@@ -10,9 +10,9 @@
 //! * identical instantiated shapes collapse into a single `TypeSpec` row,
 //! * identical member references collapse into a single `MemberRef` row,
 //! * generic method instantiations get one `MethodSpec` row each,
-//! * `Def` handles always map to the table rid their arena position yields
-//!   (arena order == table row order), whether or not the owning emitter has
-//!   reached that row yet,
+//! * bound `Def` handles map to canonical owner-grouped table RIDs, even
+//!   before the owning emitter reaches their rows; unbound maps retain the
+//!   explicit registration/arena fallback used by low-level callers,
 //! * all buffered rows drain deterministically (first-encounter order) via
 //!   [`TokenMap::into_parts`].
 //!
@@ -52,6 +52,7 @@ use cecil_core::io::ByteWriter;
 use cecil_core::token::coded;
 use cecil_core::{ElementType, Error, Result, TableIndex, Token};
 
+use super::definition_rows::DefinitionRows;
 use crate::model::signature::{put_method_signature, write_type_element, SigContext};
 
 /// Resolution-backed classifier hook: decides the `CLASS`/`VALUETYPE` marker
@@ -185,6 +186,7 @@ struct EncodedElement {
 /// [`SigContext`] view can drive it.
 #[derive(Debug, Default)]
 struct State {
+    definitions: Option<DefinitionRows>,
     type_rows: Vec<u32>,
     field_rows: Vec<u32>,
     method_rows: Vec<u32>,
@@ -302,8 +304,9 @@ impl<'b> TokenMap<'b> {
         }
     }
 
-    pub(crate) fn for_module(builder: &'b mut MetadataBuilder, m: &'b Module) -> Self {
+    pub(crate) fn for_module(builder: &'b mut MetadataBuilder, m: &'b Module) -> Result<Self> {
         let mut map = Self::new(builder);
+        map.bind_definitions(m)?;
         map.bound_module = Some(m);
         // A bounded linear search is cheaper than constructing three indexes
         // for modules with only a handful of scope/value identities.
@@ -311,7 +314,43 @@ impl<'b> TokenMap<'b> {
         {
             map.module_index = Some(ModuleIndex::new(m));
         }
-        map
+        Ok(map)
+    }
+
+    /// Allocates owner-grouped definition RIDs before encoding IL or metadata.
+    /// Low-level callers using [`Self::new`] must bind before their first
+    /// definition reference when owner-list order differs from arena order.
+    /// Binding validates that every member has exactly one declaring owner.
+    pub fn bind_definitions(&mut self, module: &Module) -> Result<()> {
+        let rows = DefinitionRows::new(module)?;
+        self.state.get_mut().definitions = Some(rows);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_definitions(&mut self, module: &Module) -> Result<()> {
+        if self.state.get_mut().definitions.is_none() {
+            self.bind_definitions(module)?;
+        }
+        Ok(())
+    }
+
+    /// Maps a source definition token into this emission's RID space.
+    /// Non-definition tokens and nil tokens pass through unchanged.
+    pub fn definition_token(&self, token: Token) -> Result<Token> {
+        match &self.state.borrow().definitions {
+            Some(rows) => rows.token(token),
+            None => Ok(token),
+        }
+    }
+
+    pub(crate) fn generic_parameter_order(&self) -> Vec<usize> {
+        self.state
+            .borrow()
+            .definitions
+            .as_ref()
+            .expect("metadata emission binds definition rows")
+            .generic_order
+            .clone()
     }
 
     /// Installs a classifier consulted before the built-in heuristic when an
@@ -580,10 +619,16 @@ impl<'b> TokenMap<'b> {
     /// * `Spec` -> deduped `MethodSpec` token over the resolved template.
     pub fn method_ref(&self, r: &MethodRef, m: &Module) -> Result<Token> {
         match r {
-            MethodRef::Def(id) => Ok(Token::new(
-                TableIndex::MethodDef,
-                Self::rid_of(&self.state.borrow().method_rows, id.0),
-            )),
+            MethodRef::Def(id) => {
+                let state = self.state.borrow();
+                match &state.definitions {
+                    Some(rows) => rows.token(Token::new(TableIndex::MethodDef, id.0 + 1)),
+                    None => Ok(Token::new(
+                        TableIndex::MethodDef,
+                        Self::rid_of(&state.method_rows, id.0),
+                    )),
+                }
+            }
             MethodRef::External(ext) => {
                 let parent_cell = self.member_parent_cell_tm(&ext.parent, m)?;
                 let sig = self.encode_signature(|w| {
@@ -630,10 +675,15 @@ impl<'b> TokenMap<'b> {
     /// `External` -> deduped `MemberRef` token.
     pub fn field_ref(&self, r: &FieldRef, m: &Module) -> Result<Token> {
         match r {
-            FieldRef::Def(id) => Ok(Token::new(
-                TableIndex::Field,
-                Self::rid_of(&self.state.borrow().field_rows, id.0),
-            )),
+            FieldRef::Def(id) => {
+                let state = self.state.borrow();
+                match &state.definitions {
+                    Some(rows) => rows.token(Token::new(TableIndex::Field, id.0 + 1)),
+                    None => {
+                        Ok(Token::new(TableIndex::Field, Self::rid_of(&state.field_rows, id.0)))
+                    }
+                }
+            }
             FieldRef::External(ext) => {
                 let parent_cell = self.member_parent_cell_tm(&ext.parent, m)?;
                 let sig = self.encode_signature(|w| {
@@ -1093,7 +1143,7 @@ mod tests {
             (4 << 2) | 2
         );
         let mut small_builder = MetadataBuilder::new("v4.0.30319");
-        let small = TokenMap::for_module(&mut small_builder, &m);
+        let small = TokenMap::for_module(&mut small_builder, &m).unwrap();
         assert!(small.module_index.is_none());
         assert_eq!(
             small.scope_cell(&ScopeRef::Assembly(reference.clone().into()), &m).unwrap(),
@@ -1102,7 +1152,7 @@ mod tests {
         drop(small);
         m.assembly_refs.extend(std::iter::repeat_n(m.assembly_refs[0].clone(), 5));
         let mut builder = MetadataBuilder::new("v4.0.30319");
-        let indexed = TokenMap::for_module(&mut builder, &m);
+        let indexed = TokenMap::for_module(&mut builder, &m).unwrap();
         assert!(indexed.module_index.is_some());
         assert_eq!(
             indexed.scope_cell(&ScopeRef::Assembly(reference.clone().into()), &m).unwrap(),
@@ -1146,7 +1196,7 @@ mod tests {
         let other =
             Module { external_value_types: vec![other_value.clone()], ..Default::default() };
         let mut builder = MetadataBuilder::new("v4.0.30319");
-        let tm = TokenMap::for_module(&mut builder, &m);
+        let tm = TokenMap::for_module(&mut builder, &m).unwrap();
         assert!(tm.module_index.is_some());
         let value = TypeDesc::External(std::sync::Arc::new(value));
         let other_value = TypeDesc::External(std::sync::Arc::new(other_value));
@@ -1165,7 +1215,7 @@ mod tests {
 
         let m = module_with_refs();
         let mut builder = MetadataBuilder::new("v4.0.30319");
-        let tm = Rc::new(TokenMap::for_module(&mut builder, &m));
+        let tm = Rc::new(TokenMap::for_module(&mut builder, &m).unwrap());
         let weak = Rc::downgrade(&tm);
         let calls = Rc::new(Cell::new(0));
         let callback_calls = calls.clone();
@@ -1238,7 +1288,7 @@ mod tests {
         let mut other = module_with_refs();
         other.assembly_refs.insert(0, AssemblyNameReference::new("Other"));
         let mut builder = MetadataBuilder::new("v4.0.30319");
-        let tm = TokenMap::for_module(&mut builder, &m);
+        let tm = TokenMap::for_module(&mut builder, &m).unwrap();
         let TypeDesc::External(mut external) = ext("Example", "Original") else { unreachable!() };
         let original = tm.tdor_cell(&TypeDesc::External(external.clone()), &m).unwrap();
         assert_eq!(tm.tdor_cell(&TypeDesc::External(external.clone()), &m).unwrap(), original);
@@ -1279,7 +1329,7 @@ mod tests {
         .is_err());
         drop(tm);
 
-        let bound = TokenMap::for_module(&mut builder, &m);
+        let bound = TokenMap::for_module(&mut builder, &m).unwrap();
         crate::model::signature::write_field_signature(&signature, &bound.encoder(&m)).unwrap();
         assert!(
             crate::model::signature::write_field_signature(
@@ -1310,7 +1360,7 @@ mod tests {
 
         let m = module_with_refs();
         let mut builder = MetadataBuilder::new("v4.0.30319");
-        let tm = TokenMap::for_module(&mut builder, &m);
+        let tm = TokenMap::for_module(&mut builder, &m).unwrap();
         let signature = crate::model::types::FieldSignature(TypeDesc::Ptr(Arc::new(
             TypeDesc::SzArray(Arc::new(ext("Example", "Value"))),
         )));

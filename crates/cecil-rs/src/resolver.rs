@@ -306,7 +306,8 @@ fn probe_directory(dir: &Path, stem: &str) -> Option<PathBuf> {
 /// `Deferred` skip method-body decoding at read time and stash the raw
 /// image plus read context on the assembly; call
 /// [`crate::assembly::AssemblyDefinition::load_bodies`] to decode the
-/// bodies later. Documented divergence: bodies defer as one unit (the
+/// bodies later. Writing restores deferred bodies in a private copy and
+/// preserves the caller's model. Documented divergence: bodies defer as one unit (the
 /// value model has no per-member proxies); satellite netmodules always
 /// load eagerly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -2,10 +2,10 @@
 //! half of `Mono.Cecil/AssemblyWriter.cs` (`MetadataBuilder.BuildModule`,
 //! `BuildTypes`, `AddType`, and friends).
 //!
-//! The emitter walks the [`Module`] arenas in index order and appends raw rows
-//! to a [`MetadataBuilder`], which serializes them into a BSJB metadata root.
-//! Row plans are fully deterministic: every table's row order is derived from
-//! arena/index order, never from hashing or run-time state.
+//! The emitter walks types in arena order and members in their owner-list
+//! order, assigning canonical RIDs without changing source handles. Raw rows
+//! go to a [`MetadataBuilder`], which serializes them into a BSJB root.
+//! Row order and required table sorting are deterministic.
 //!
 //! Two entry points:
 //!
@@ -26,6 +26,7 @@ use cecil_core::{ElementType, Error, Result};
 use cecil_metadata::tables::{encode_coded, TableSet, TABLE_COUNT};
 use cecil_metadata::{parse_root, MetadataBuilder};
 
+use super::definition_rows::requires_parameter_row;
 use super::token_map::TokenMap;
 use crate::assembly::AssemblyNameDefinition;
 use crate::model::marshal::write_marshal_spec;
@@ -177,7 +178,7 @@ pub fn emit_metadata(
     entry: Option<MethodId>,
 ) -> Result<EmittedMetadata> {
     let mut builder = MetadataBuilder::new(&runtime_version_string(m));
-    let tmap = TokenMap::for_module(&mut builder, m);
+    let tmap = TokenMap::for_module(&mut builder, m)?;
     let layout = EmitLayout::default();
     emit_metadata_with(m, asm, entry, &layout, tmap)
 }
@@ -195,6 +196,9 @@ pub fn emit_metadata_with(
     layout: &EmitLayout,
     mut tmap: TokenMap<'_>,
 ) -> Result<EmittedMetadata> {
+    tmap.ensure_definitions(m)?;
+    let entry_point_token =
+        entry.map(|id| tmap.method_ref(&MethodRef::Def(id), m)).transpose()?.unwrap_or(Token::NIL);
     let mut next_field_rid: u32 = 1;
     let mut next_method_rid: u32 = 1;
     let mut next_param_rid: u32 = 1;
@@ -378,14 +382,8 @@ pub fn emit_metadata_with(
         // FieldList/MethodList point at this type's first member rid; types
         // without members point at the next rid that will be handed out so the
         // implicit range stays empty.
-        let field_list = match td.fields.first() {
-            Some(f) => f.0 + 1,
-            None => next_field_rid,
-        };
-        let method_list = match td.methods.first() {
-            Some(mi) => mi.0 + 1,
-            None => next_method_rid,
-        };
+        let field_list = next_field_rid;
+        let method_list = next_method_rid;
         let tname = tmap.builder().insert_string(&td.name);
         let tns = tmap.builder().insert_string(&td.namespace);
         tmap.builder().add_row(
@@ -399,12 +397,8 @@ pub fn emit_metadata_with(
                 method_list as u64,
             ],
         )?;
-        if let Some(last) = td.fields.last() {
-            next_field_rid = next_field_rid.max(last.0 + 2);
-        }
-        if let Some(last) = td.methods.last() {
-            next_method_rid = next_method_rid.max(last.0 + 2);
-        }
+        next_field_rid += td.fields.len() as u32;
+        next_method_rid += td.methods.len() as u32;
 
         // InterfaceImpl rows (§22.20) with their parented custom attributes.
         for iface in &td.interfaces {
@@ -437,7 +431,7 @@ pub fn emit_metadata_with(
         // FieldRva, FieldLayout, custom attributes, constant, marshal info.
         for fid in &td.fields {
             let fd = &m.fields[fid.index()];
-            let frid = fid.0 + 1;
+            let frid = tmap.field_ref(&FieldRef::Def(*fid), m)?.rid();
             let sig_blob = {
                 let ctx = tmap.encoder(m);
                 write_field_signature(&fd.signature, &ctx)?
@@ -497,7 +491,7 @@ pub fn emit_metadata_with(
         // overrides, in Cecil's per-method order.
         for mid in &td.methods {
             let md = &m.methods[mid.index()];
-            let mrid = mid.0 + 1;
+            let mrid = tmap.method_ref(&MethodRef::Def(*mid), m)?.rid();
             let msig = tmap.method_signature_blob(&md.signature, m)?;
             let mname = tmap.builder().insert_string(&md.name);
             // Bodies are emitted by the PE pass; without a layout entry the RVA
@@ -746,18 +740,20 @@ pub fn emit_metadata_with(
         }
     }
 
-    // -- GenericParam (§22.21) + GenericParamConstraint (§22.20), in generic
-    // parameter arena order (which mirrors the sorted table order produced by
-    // readers; Mono.Cecil sorts explicitly because it collects during traversal).
-    for (gi, gp) in m.generic_parameters.iter().enumerate() {
-        let grid = gi as u32 + 1;
+    // -- GenericParam and constraints in canonical Owner/Number order.
+    for gi in tmap.generic_parameter_order() {
+        let gp = &m.generic_parameters[gi];
+        let grid =
+            tmap.definition_token(Token::new(TableIndex::GenericParam, gi as u32 + 1))?.rid();
         let owner_cell = match gp.owner {
             GenericOwner::Type(t) => {
                 encode_coded(&coded::TYPE_OR_METHOD_DEF, TableIndex::TypeDef, t.0 + 1)?
             }
-            GenericOwner::Method(mi) => {
-                encode_coded(&coded::TYPE_OR_METHOD_DEF, TableIndex::MethodDef, mi.0 + 1)?
-            }
+            GenericOwner::Method(mi) => encode_coded(
+                &coded::TYPE_OR_METHOD_DEF,
+                TableIndex::MethodDef,
+                tmap.method_ref(&MethodRef::Def(mi), m)?.rid(),
+            )?,
         };
         let gname = tmap.builder().insert_string(&gp.name);
         tmap.builder().add_row(
@@ -846,9 +842,6 @@ pub fn emit_metadata_with(
     // -- Emit sorted tables using their ECMA-335 key columns.
     sorted.flush(builder, &mut rva_patches)?;
 
-    let entry_point_token =
-        entry.map(|id| Token::new(TableIndex::MethodDef, id.0 + 1)).unwrap_or(Token::NIL);
-
     // -- Finalize and locate the placeholder cells that still need patching.
     let owned = mem::replace(builder, MetadataBuilder::new(DEFAULT_RUNTIME_VERSION));
     let root = owned.finalize();
@@ -899,17 +892,6 @@ pub fn runtime_version_string(m: &Module) -> String {
     } else {
         m.runtime_version.clone()
     }
-}
-
-/// Mono.Cecil's `RequiresParameterRow`: a Param row exists only when the
-/// parameter carries a name, non-default attributes, marshal info, a constant
-/// or custom attributes.
-fn requires_parameter_row(p: &Parameter) -> bool {
-    !p.name.is_empty()
-        || p.attributes != cecil_core::flags::ParameterAttributes::empty()
-        || p.marshal_info.is_some()
-        || p.constant.is_some()
-        || !p.custom_attributes.is_empty()
 }
 
 /// Emits one Param row plus its satellite rows (custom attributes, constant,
@@ -1015,7 +997,7 @@ fn add_decl_security(
 
 /// One MethodSemantics row wiring `method` to its owning property/event.
 fn add_semantic(
-    _tmap: &mut TokenMap<'_>,
+    tmap: &mut TokenMap<'_>,
     semantics: MethodSemanticsAttributes,
     method: MethodId,
     group: &'static CodedIndexGroup,
@@ -1024,7 +1006,8 @@ fn add_semantic(
     sorted: &mut SortedTables,
 ) -> Result<()> {
     let owner = encode_coded(group, table, rid)?;
-    sorted.method_semantics.push([semantics.bits() as u64, method.0 as u64 + 1, owner]);
+    let method = tmap.definition_token(Token::new(TableIndex::MethodDef, method.0 + 1))?;
+    sorted.method_semantics.push([semantics.bits() as u64, method.rid() as u64, owner]);
     Ok(())
 }
 
