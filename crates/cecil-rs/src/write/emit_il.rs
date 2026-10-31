@@ -6,7 +6,8 @@
 //! branch fixups, and the trailing exception-handling sections (§25.4.6).
 //! Metadata operands (types, methods, fields, strings, local signatures)
 //! are registered through the caller's [`TokenMap`]; raw definition tokens
-//! use the same canonical RID mapping.
+//! use the same canonical RID mapping when their target exists. Unresolved
+//! raw tokens are preserved unchanged.
 //!
 //! Like Cecil, instruction offsets are recomputed sequentially before
 //! encoding (two passes: layout, then emission), so stale input offsets are
@@ -221,8 +222,7 @@ fn write_operand(
         (ROperand::UserString(index), OperandType::InlineString) => {
             out.u32(STRING_TOKEN_TYPE | index);
         }
-        // Metadata-bearing opcodes resolve through the token map; raw tokens
-        // (kept when resolution was impossible) pass through unchanged.
+        // Typed metadata operands resolve through the token map.
         (ROperand::Type(ty), OperandType::InlineType | OperandType::InlineTok) => {
             out.u32(tmap.type_token(ty, m)?.0);
         }
@@ -261,7 +261,10 @@ fn write_operand(
             | OperandType::InlineMethod
             | OperandType::InlineField,
         ) => {
-            out.u32(tmap.definition_token(*token)?.0);
+            // The reader also keeps out-of-range definition RIDs as raw
+            // operands. Remap existing definitions, but preserve an opaque
+            // token when no source row exists, just like unknown table bytes.
+            out.u32(tmap.definition_token(*token).unwrap_or(*token).0);
         }
         (operand, operand_type) => {
             return Err(Error::invalid_op(format!(
